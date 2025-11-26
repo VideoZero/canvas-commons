@@ -151,7 +151,7 @@ function logGlslError(logger: Logger, log: string | null, source: string) {
   SOURCE_URL_REGEX.lastIndex = 0;
   const sourceMatch = SOURCE_URL_REGEX.exec(source);
   if (sourceMatch) {
-    const url = new URL(sourceMatch[1], window.location.origin);
+    const url = window.origin && window.origin !== "null" ? new URL(sourceMatch[1], window.origin) : new URL(sourceMatch[1]);
     url.searchParams.set('t', Date.now().toString());
     sourceUrl = url.toString();
   }
