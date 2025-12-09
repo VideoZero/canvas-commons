@@ -1,0 +1,29 @@
+{
+  "name": "@motion-canvas/shiki",
+  "version": "0.1.0",
+  "description": "A Shiki code highlighter for Motion Canvas",
+  "main": "lib/index.js",
+  "types": "./lib/index.d.ts",
+  "author": "motion-canvas",
+  "homepage": "https://motioncanvas.io/",
+  "bugs": "https://github.com/motion-canvas/motion-canvas/issues",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsc -w",
+    "build": "tsc"
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/motion-canvas/motion-canvas.git"
+  },
+  "files": [
+    "lib",
+    "src"
+  ],
+  "dependencies": {
+    "@motion-canvas/2d": "^3.18.0-alpha.0",
+    "@motion-canvas/core": "^3.18.0-alpha.0",
+    "shiki": "^1.0"
+  }
+}
