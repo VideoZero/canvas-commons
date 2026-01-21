@@ -481,7 +481,28 @@ export class SVG extends Shape {
     }
 
     if (!hasViewBox && !hasSize) {
-      viewBox = new BBox(svgRoot.getBBox());
+      try {
+        viewBox = new BBox(svgRoot.getBBox());
+      } catch {
+        // getBBox() can fail on iOS Safari - try attaching to document.body
+        const tempContainer = document.createElement('div');
+        tempContainer.style.position = 'absolute';
+        tempContainer.style.visibility = 'hidden';
+        tempContainer.style.pointerEvents = 'none';
+        tempContainer.appendChild(svgRoot.cloneNode(true));
+        document.body.appendChild(tempContainer);
+        try {
+          const tempSvg = tempContainer.querySelector('svg')!;
+          viewBox = new BBox(tempSvg.getBBox());
+        } catch {
+          useLogger().warn(
+            'SVG getBBox() failed. Add explicit viewBox or width/height attributes to your SVG.',
+          );
+          viewBox = new BBox(0, 0, 100, 100);
+        } finally {
+          document.body.removeChild(tempContainer);
+        }
+      }
       size = viewBox.size;
     }
 

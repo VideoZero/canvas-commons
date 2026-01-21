@@ -84,7 +84,29 @@ export class ArcSegment extends Segment {
     );
     this.length = ArcSegment.el.getTotalLength();
 
-    const bbox = new BBox(ArcSegment.el.getBBox());
+    let bbox: BBox;
+    try {
+      bbox = new BBox(ArcSegment.el.getBBox());
+    } catch {
+      // getBBox() can fail on iOS Safari - try attaching to document.body
+      const tempSvg = document.createElementNS(
+        'http://www.w3.org/2000/svg',
+        'svg',
+      );
+      tempSvg.style.position = 'absolute';
+      tempSvg.style.visibility = 'hidden';
+      const tempPath = ArcSegment.el.cloneNode(true) as SVGPathElement;
+      tempSvg.appendChild(tempPath);
+      document.body.appendChild(tempSvg);
+      try {
+        bbox = new BBox(tempPath.getBBox());
+      } catch {
+        // Final fallback to start/end points
+        bbox = BBox.fromPoints(this.startPoint, this.endPoint);
+      } finally {
+        document.body.removeChild(tempSvg);
+      }
+    }
     this.points = [bbox.topLeft, bbox.bottomRight];
   }
 
