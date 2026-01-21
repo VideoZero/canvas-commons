@@ -24,6 +24,9 @@
   "dependencies": {
     "@motion-canvas/2d": "^3.18.0-alpha.0",
     "@motion-canvas/core": "^3.18.0-alpha.0",
-    "shiki": "^1.0"
+    "@shikijs/core": "^3.0",
+    "@shikijs/engine-javascript": "^3.0",
+    "@shikijs/langs": "^3.0",
+    "@shikijs/themes": "^3.0"
   }
 }

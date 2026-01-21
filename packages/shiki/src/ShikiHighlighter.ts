@@ -1,45 +1,52 @@
 import {CodeHighlighter, HighlightResult} from '@motion-canvas/2d';
 import {DependencyContext, PromiseHandle} from '@motion-canvas/core';
 import {
-  BundledHighlighterOptions,
-  CodeToTokensOptions,
-  HighlighterGeneric,
+  HighlighterCore,
+  LanguageRegistration,
+  ThemeRegistration,
   ThemedToken,
-  createHighlighter,
-} from 'shiki';
-import {BundledLanguage} from 'shiki/langs';
-import {BundledTheme} from 'shiki/themes';
+  createHighlighterCore,
+} from '@shikijs/core';
+import {createJavaScriptRegexEngine} from '@shikijs/engine-javascript';
 
 /**
  * Options for configuring the ShikiHighlighter.
  */
 export type ShikiOptions = {
   /**
-   * Highlighter configuration with a single language and theme.
+   * The language to use for syntax highlighting.
+   *
+   * @remarks
+   * Import your language from `@shikijs/langs-precompiled/[lang]` or `@shikijs/langs/[lang]`.
+   *
+   * @example
+   * ```ts
+   * import typescript from '@shikijs/langs-precompiled/typescript';
+   *
+   * const highlighter = new ShikiHighlighter({
+   *   lang: typescript,
+   *   theme: nord,
+   * });
+   * ```
    */
-  highlighter: Omit<
-    BundledHighlighterOptions<BundledLanguage, BundledTheme>,
-    'langs' | 'themes'
-  > & {
-    /**
-     * The language to use for syntax highlighting.
-     */
-    lang: BundledHighlighterOptions<
-      BundledLanguage,
-      BundledTheme
-    >['langs'][number];
-    /**
-     * The theme to use for syntax highlighting.
-     */
-    theme: BundledHighlighterOptions<
-      BundledLanguage,
-      BundledTheme
-    >['themes'][number];
-  };
+  lang: LanguageRegistration | LanguageRegistration[];
   /**
-   * Optional configuration for code tokenization.
+   * The theme to use for syntax highlighting.
+   *
+   * @remarks
+   * Import your theme from `@shikijs/themes/[theme]`.
+   *
+   * @example
+   * ```ts
+   * import nord from '@shikijs/themes/nord';
+   *
+   * const highlighter = new ShikiHighlighter({
+   *   lang: typescript,
+   *   theme: nord,
+   * });
+   * ```
    */
-  codeToTokens?: CodeToTokensOptions<BundledLanguage, BundledTheme>;
+  theme: ThemeRegistration;
 };
 
 /**
@@ -47,16 +54,18 @@ export type ShikiOptions = {
  *
  * @remarks
  * Shiki provides accurate syntax highlighting using TextMate grammars,
- * the same engine used by VS Code. This highlighter supports all languages
- * and themes bundled with Shiki.
+ * the same engine used by VS Code. Unlike the full shiki bundle, this
+ * highlighter requires you to explicitly import only the languages and
+ * themes you need, keeping bundle size minimal.
  *
  * @example
  * ```ts
+ * import typescript from '@shikijs/langs-precompiled/typescript';
+ * import nord from '@shikijs/themes/nord';
+ *
  * const highlighter = new ShikiHighlighter({
- *   highlighter: {
- *     lang: 'typescript',
- *     theme: 'github-dark',
- *   },
+ *   lang: typescript,
+ *   theme: nord,
  * });
  *
  * yield view.add(
@@ -66,10 +75,7 @@ export type ShikiOptions = {
  */
 export class ShikiHighlighter implements CodeHighlighter<ThemedToken[]> {
   private shikiOptions: ShikiOptions;
-  private handle: PromiseHandle<HighlighterGeneric<
-    BundledLanguage,
-    BundledTheme
-  > | null> | null;
+  private handle: PromiseHandle<HighlighterCore | null> | null;
 
   /**
    * Creates a new ShikiHighlighter instance.
@@ -93,15 +99,29 @@ export class ShikiHighlighter implements CodeHighlighter<ThemedToken[]> {
     if (this.handle?.value !== undefined) {
       return true;
     } else {
+      const langs = Array.isArray(this.shikiOptions.lang)
+        ? this.shikiOptions.lang
+        : [this.shikiOptions.lang];
       this.handle = DependencyContext.collectPromise(
-        createHighlighter({
-          ...this.shikiOptions.highlighter,
-          langs: [this.shikiOptions.highlighter.lang],
-          themes: [this.shikiOptions.highlighter.theme],
+        createHighlighterCore({
+          langs,
+          themes: [this.shikiOptions.theme],
+          engine: createJavaScriptRegexEngine(),
         }),
       );
       return false;
     }
+  }
+
+  private getLangName(): string {
+    const lang = Array.isArray(this.shikiOptions.lang)
+      ? this.shikiOptions.lang[0]
+      : this.shikiOptions.lang;
+    return lang.name;
+  }
+
+  private getThemeName(): string {
+    return this.shikiOptions.theme.name!;
   }
 
   /**
@@ -111,10 +131,10 @@ export class ShikiHighlighter implements CodeHighlighter<ThemedToken[]> {
    * @returns An array of themed tokens.
    */
   public prepare(code: string): ThemedToken[] {
-    const result = this.handle?.value?.codeToTokens(
-      code,
-      this.codeToTokensOptions(),
-    );
+    const result = this.handle?.value?.codeToTokens(code, {
+      lang: this.getLangName(),
+      theme: this.getThemeName(),
+    });
     return result?.tokens.flat() ?? [];
   }
 
@@ -151,23 +171,14 @@ export class ShikiHighlighter implements CodeHighlighter<ThemedToken[]> {
    */
   public tokenize(code: string): string[] {
     const lineTokens = this.handle?.value
-      ?.codeToTokens(code, this.codeToTokensOptions())
+      ?.codeToTokens(code, {
+        lang: this.getLangName(),
+        theme: this.getThemeName(),
+      })
       .tokens.map(line => line.map(({content}) => content));
     const tokens = lineTokens?.flatMap((line, i) =>
       i === lineTokens.length - 1 ? line : [...line, '\n'],
     );
     return tokens ?? [];
-  }
-
-  private codeToTokensOptions(): CodeToTokensOptions<
-    BundledLanguage,
-    BundledTheme
-  > {
-    return this.shikiOptions.codeToTokens !== undefined
-      ? this.shikiOptions.codeToTokens
-      : {
-          lang: this.shikiOptions.highlighter.lang as BundledLanguage,
-          theme: this.shikiOptions.highlighter.theme as BundledTheme,
-        };
   }
 }
