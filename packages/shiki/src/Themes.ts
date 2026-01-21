@@ -1,0 +1,12 @@
+export {default as catppuccinLatte} from '@shikijs/themes/catppuccin-latte';
+export {default as catppuccinMocha} from '@shikijs/themes/catppuccin-mocha';
+export {default as dracula} from '@shikijs/themes/dracula';
+export {default as githubDark} from '@shikijs/themes/github-dark';
+export {default as githubLight} from '@shikijs/themes/github-light';
+export {default as nord} from '@shikijs/themes/nord';
+export {default as oneDarkPro} from '@shikijs/themes/one-dark-pro';
+export {default as solarizedDark} from '@shikijs/themes/solarized-dark';
+export {default as solarizedLight} from '@shikijs/themes/solarized-light';
+export {default as tokyoNight} from '@shikijs/themes/tokyo-night';
+export {default as vitesseDark} from '@shikijs/themes/vitesse-dark';
+export {default as vitesseLight} from '@shikijs/themes/vitesse-light';

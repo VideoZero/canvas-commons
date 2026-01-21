@@ -4,7 +4,7 @@
     "outDir": "lib",
     "inlineSourceMap": true,
     "esModuleInterop": true,
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "skipLibCheck": true,
     "strict": true,
     "module": "ESNext",
