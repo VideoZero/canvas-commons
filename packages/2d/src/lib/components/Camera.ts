@@ -85,7 +85,15 @@ export class Camera extends Node {
     super(props);
 
     if (!this.scene()) {
-      this.scene(new Node({}));
+      const view = this.view();
+      const width = view?.width() ?? 1920;
+      const height = view?.height() ?? 1080;
+      this.scene(
+        new Node({
+          position: new Vector2(width / 2, height / 2),
+          cachePadding: [width, height, width, height],
+        }),
+      );
     }
 
     if (children) {
