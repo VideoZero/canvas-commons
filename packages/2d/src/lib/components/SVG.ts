@@ -460,24 +460,36 @@ export class SVG extends Shape {
     let viewBox = new BBox();
     let size = new Vector2();
 
-    const hasViewBox = svgRoot.hasAttribute('viewBox');
-    const hasSize =
+    let hasViewBox = svgRoot.hasAttribute('viewBox');
+    let hasSize =
       svgRoot.hasAttribute('width') || svgRoot.hasAttribute('height');
 
     if (hasViewBox) {
-      const {x, y, width, height} = svgRoot.viewBox.baseVal;
-      viewBox = new BBox(x, y, width, height);
+      try {
+        const {x, y, width, height} = svgRoot.viewBox.baseVal;
+        viewBox = new BBox(x, y, width, height);
 
-      if (!hasSize) size = viewBox.size;
+        if (!hasSize) size = viewBox.size;
+      } catch {
+        hasViewBox = false;
+        useLogger().warn('Unable to extract size from svgRoot.viewBox.baseVal');
+      }
     }
 
     if (hasSize) {
-      size = new Vector2(
-        svgRoot.width.baseVal.value,
-        svgRoot.height.baseVal.value,
-      );
+      try {
+        size = new Vector2(
+          svgRoot.width.baseVal.value,
+          svgRoot.height.baseVal.value,
+        );
 
-      if (!hasViewBox) viewBox = new BBox(0, 0, size.width, size.height);
+        if (!hasViewBox) viewBox = new BBox(0, 0, size.width, size.height);
+      } catch {
+        hasSize = false;
+        useLogger().warn(
+          'Unable to extract size from (svgRoot.width.baseVal.value, svgRoot.height.baseVal.value)',
+        );
+      }
     }
 
     if (!hasViewBox && !hasSize) {
