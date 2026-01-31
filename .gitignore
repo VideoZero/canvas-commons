@@ -10,3 +10,4 @@ node_modules
 .idea
 .nx/cache
 .nx/workspace-data
+.DS_Store
