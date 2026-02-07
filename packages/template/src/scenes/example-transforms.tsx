@@ -1,5 +1,5 @@
-import {Rect, makeScene2D} from '@canvas-commons/2d';
-import {all, createRef, waitFor} from '@canvas-commons/core';
+import {Rect, makeScene2D} from '@motion-canvas/2d';
+import {all, createRef, waitFor} from '@motion-canvas/core';
 
 export default makeScene2D(function* (view) {
   const parentRect = createRef<Rect>();

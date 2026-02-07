@@ -15,7 +15,7 @@ import {
   Vector2SignalContext,
   deepLerp,
   unwrap,
-} from '@canvas-commons/core';
+} from '@motion-canvas/core';
 import {Node} from '../components/Node';
 import {makeSignalExtensions} from '../utils/makeSignalExtensions';
 import {compound} from './compound';
