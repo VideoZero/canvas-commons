@@ -18,6 +18,7 @@ export * from './QuadBezier';
 export * from './Ray';
 export * from './Rect';
 export * from './SVG';
+export * from './ScenePlayback';
 export * from './Shape';
 export * from './Spline';
 export * from './Stack';

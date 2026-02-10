@@ -1,0 +1,269 @@
+---
+sidebar_position: 7
+slug: /scene-playback
+---
+
+# ScenePlayback
+
+```tsx editor mode=preview
+import {Circle, Rect, ScenePlayback, makeScene2D} from '@motion-canvas/2d';
+import {all, createRef, easeInOutCubic, waitFor} from '@motion-canvas/core';
+
+const innerScene = makeScene2D(function* (view) {
+  const rect = createRef<Rect>();
+  const circle = createRef<Circle>();
+  view.add(
+    <>
+      <Rect ref={rect} size={200} radius={20} fill={'#e13238'} />
+      <Circle ref={circle} size={120} fill={'#e8a631'} x={250} />
+    </>,
+  );
+  yield* all(
+    rect().rotation(360, 2, easeInOutCubic),
+    circle().position.y(-150, 1, easeInOutCubic).to(150, 1, easeInOutCubic),
+  );
+  yield* all(
+    rect().scale(1.5, 1, easeInOutCubic).to(1, 1, easeInOutCubic),
+    circle().position.x(-250, 2, easeInOutCubic),
+  );
+  yield* waitFor(0.5);
+});
+
+export default makeScene2D(function* (view) {
+  view.add(
+    <ScenePlayback
+      src={innerScene}
+      renderWidth={800}
+      renderHeight={800}
+      width={400}
+      height={400}
+      fill={'#242424'}
+      radius={20}
+      play
+      loop
+    />,
+  );
+  yield* waitFor(10);
+});
+```
+
+The [`ScenePlayback`][scene-playback] component lets you embed a complete Motion
+Canvas scene as a node inside another scene. The inner scene runs its own
+playback independently, and its output is projected onto the component's display
+area.
+
+:::tip
+
+`ScenePlayback` extends [`Rect`][rect], so it inherits all layout, fill, stroke,
+clip, and radius properties.
+
+:::
+
+## Defining an inner scene
+
+Pass a scene description (the return value of `makeScene2D()`) to the `src`
+property. The scene can be defined inline or imported from another file:
+
+```tsx editor
+import {Circle, Rect, ScenePlayback, makeScene2D} from '@motion-canvas/2d';
+import {createRef, waitFor} from '@motion-canvas/core';
+
+const myScene = makeScene2D(function* (view) {
+  view.add(<Rect size={200} radius={20} fill={'#e13238'} />);
+  yield* waitFor(2);
+});
+
+export default makeScene2D(function* (view) {
+  view.add(
+    <ScenePlayback
+      src={myScene}
+      width={400}
+      height={300}
+      fill={'#242424'}
+      radius={12}
+      play
+    />,
+  );
+  yield* waitFor(5);
+});
+```
+
+## Render size
+
+By default the inner scene renders at 1920x1080. You can change this with
+`renderWidth` and `renderHeight`. The render size determines the resolution of
+the offscreen canvas — it does not affect the display size of the component
+(use `width`/`height` for that).
+
+```tsx
+<ScenePlayback
+  src={myScene}
+  renderWidth={800}
+  renderHeight={800}
+  width={400}
+  height={300}
+/>
+```
+
+## Object fit
+
+The `objectFit` property controls how the rendered scene is projected onto the
+component's display area, similar to the CSS `object-fit` property:
+
+- **`fill`** (default): Stretch to fill the component bounds. May distort the
+  aspect ratio.
+- **`fit`**: Scale to fit inside bounds while maintaining aspect ratio.
+  Letterboxed if needed.
+- **`cover`**: Scale to cover bounds while maintaining aspect ratio. May crop.
+- **`clip`**: Render at natural 1:1 scale, centered, clipped to component
+  bounds.
+
+```tsx editor
+import {Circle, Layout, Rect, ScenePlayback, Txt, makeScene2D} from '@motion-canvas/2d';
+import {all, createRef, easeInOutCubic, waitFor} from '@motion-canvas/core';
+
+const innerScene = makeScene2D(function* (view) {
+  const rect = createRef<Rect>();
+  view.add(<Rect ref={rect} size={200} radius={20} fill={'#e13238'} />);
+  yield* rect().rotation(360, 2, easeInOutCubic);
+  yield* waitFor(0.5);
+});
+
+export default makeScene2D(function* (view) {
+  const fits = ['fill', 'fit', 'cover', 'clip'] as const;
+  view.add(
+    <Layout layout direction={'row'} gap={30} alignItems={'center'}>
+      {fits.map(fit => (
+        <Layout layout direction={'column'} alignItems={'center'} gap={8}>
+          <Txt text={fit} fill={'#fff'} fontSize={24} fontFamily={'monospace'} />
+          <ScenePlayback
+            src={innerScene}
+            renderWidth={400}
+            renderHeight={400}
+            width={200}
+            height={130}
+            fill={'#242424'}
+            radius={8}
+            objectFit={fit}
+            play
+            loop
+          />
+        </Layout>
+      ))}
+    </Layout>,
+  );
+  yield* waitFor(10);
+});
+```
+
+## Playback controls
+
+### Autoplay and looping
+
+Use the `play` prop to start playback immediately and `loop` to repeat:
+
+```tsx
+<ScenePlayback src={myScene} play loop />
+```
+
+### Play, pause, and seek
+
+You can control playback imperatively using a ref:
+
+```tsx editor
+import {Rect, ScenePlayback, makeScene2D} from '@motion-canvas/2d';
+import {createRef, waitFor} from '@motion-canvas/core';
+
+const innerScene = makeScene2D(function* (view) {
+  const rect = createRef<Rect>();
+  view.add(<Rect ref={rect} size={200} radius={20} fill={'#e13238'} />);
+  yield* rect().rotation(360, 3);
+  yield* waitFor(0.5);
+});
+
+export default makeScene2D(function* (view) {
+  const rendered = createRef<ScenePlayback>();
+  view.add(
+    <ScenePlayback
+      ref={rendered}
+      src={innerScene}
+      width={400}
+      height={300}
+      fill={'#242424'}
+      radius={12}
+      play
+    />,
+  );
+
+  // Let it play for 1 second, then pause
+  yield* waitFor(1);
+  rendered().pause();
+
+  // Wait, then seek to the beginning and resume
+  yield* waitFor(1);
+  rendered().seek(0);
+  rendered().play();
+
+  yield* waitFor(5);
+});
+```
+
+### Playback rate and FPS
+
+Control the playback speed with `playbackRate` and the inner scene's frame rate
+with `fps`:
+
+```tsx
+<ScenePlayback
+  src={myScene}
+  playbackRate={2}   // 2x speed
+  fps={30}           // 30 FPS inner scene
+  play
+/>
+```
+
+## Trimming with start and end
+
+The `start` and `end` properties define a playback range within the inner scene.
+Time is clamped and looped within this range:
+
+```tsx editor
+import {Rect, ScenePlayback, makeScene2D} from '@motion-canvas/2d';
+import {createRef, waitFor} from '@motion-canvas/core';
+
+const innerScene = makeScene2D(function* (view) {
+  const rect = createRef<Rect>();
+  view.add(<Rect ref={rect} size={200} radius={20} fill={'#e13238'} />);
+  yield* rect().rotation(360, 3);
+  yield* waitFor(0.5);
+});
+
+export default makeScene2D(function* (view) {
+  view.add(
+    <ScenePlayback
+      src={innerScene}
+      width={400}
+      height={300}
+      fill={'#242424'}
+      radius={12}
+      start={0.5}
+      end={2}
+      play
+      loop
+    />,
+  );
+  yield* waitFor(10);
+});
+```
+
+## Alpha
+
+The `alpha` property controls the opacity of the rendered scene content without
+affecting the component's fill, stroke, or children:
+
+```tsx
+<ScenePlayback src={myScene} alpha={0.5} fill={'#242424'} play />
+```
+
+[scene-playback]: /api/2d/components/ScenePlayback
+[rect]: /api/2d/components/Rect
