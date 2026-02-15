@@ -18,6 +18,7 @@ import {
   all,
   boolLerp,
   deepLerp,
+  easeInOutCubic,
   modify,
   originToOffset,
   threadable,
@@ -57,6 +58,15 @@ import {
 import {drawLine, drawPivot, is} from '../utils';
 import {Node, NodeProps} from './Node';
 import type {ComponentChildren} from './types';
+
+export type FlipState = Map<
+  Layout,
+  {
+    computedPosition: Vector2;
+    computedSize: Vector2;
+    desiredSize: SerializedVector2<DesiredLength>;
+  }
+>;
 
 export interface LayoutProps extends NodeProps {
   layout?: LayoutMode;
@@ -513,6 +523,88 @@ export class Layout extends Node {
     this.size(value);
   }
 
+  public recordFlipState(recursive = true): FlipState {
+    const root = recursive ? this.layoutRoot() : this;
+
+    const flipState: FlipState = new Map();
+    const descendants = root.findAll<Layout>(
+      (n): n is Layout => n instanceof Layout,
+    );
+
+    for (const node of [root, ...descendants]) {
+      flipState.set(node, {
+        computedPosition: node.computedPosition(),
+        computedSize: node.computedSize(),
+        desiredSize: node.desiredSize(),
+      });
+    }
+
+    return flipState;
+  }
+
+  @threadable()
+  public *tweenFlip(
+    from: FlipState,
+    time: number,
+    timingFunction: TimingFunction = easeInOutCubic,
+  ): ThreadGenerator {
+    const to = this.recordFlipState();
+
+    const nodes: Layout[] = [];
+    const fromPositions: Vector2[] = [];
+    const toPositions: Vector2[] = [];
+    const fromSizes: Vector2[] = [];
+    const toSizes: Vector2[] = [];
+    const origTranslates: Vector2[] = [];
+
+    for (const [node, toState] of to) {
+      const fromState = from.get(node);
+      if (!fromState) continue;
+      nodes.push(node);
+      fromPositions.push(fromState.computedPosition);
+      toPositions.push(toState.computedPosition);
+      fromSizes.push(fromState.computedSize);
+      toSizes.push(toState.computedSize);
+      origTranslates.push(node.translate());
+    }
+
+    // Lock sizes so explicit values override flex-grow/shrink
+    for (let i = 0; i < nodes.length; i++) {
+      nodes[i].lockSize();
+      nodes[i].size(fromSizes[i]);
+    }
+
+    // INVERT — set positions to the "from" state
+    for (let i = 0; i < nodes.length; i++) {
+      const actualPos = nodes[i].computedPosition();
+      nodes[i].translate(
+        origTranslates[i].add(fromPositions[i]).sub(actualPos),
+      );
+    }
+
+    // PLAY — interpolate size and position each frame
+    yield* tween(time, raw => {
+      const t = timingFunction(raw);
+      for (let i = 0; i < nodes.length; i++) {
+        nodes[i].size(Vector2.lerp(fromSizes[i], toSizes[i], t));
+      }
+      for (let i = 0; i < nodes.length; i++) {
+        const desiredPos = Vector2.lerp(fromPositions[i], toPositions[i], t);
+        const actualPos = nodes[i].computedPosition();
+        nodes[i].translate(origTranslates[i].add(desiredPos).sub(actualPos));
+      }
+    });
+
+    // Restore: unlock sizes, restore desiredSize so flex takes over
+    for (let i = 0; i < nodes.length; i++) {
+      const toState = to.get(nodes[i])!;
+      nodes[i].releaseSize();
+      nodes[i].width(toState.desiredSize.x as SignalValue<Length>);
+      nodes[i].height(toState.desiredSize.y as SignalValue<Length>);
+      nodes[i].translate(origTranslates[i]);
+    }
+  }
+
   /**
    * Represents the offset of this node's origin.
    *
@@ -745,6 +837,14 @@ export class Layout extends Node {
   @computed()
   public isLayoutRoot(): boolean {
     return !this.layoutEnabled() || !this.parentTransform()?.layoutEnabled();
+  }
+
+  public layoutRoot(): Layout {
+    const parent = this.parentTransform();
+    if (this.isLayoutRoot() || !(parent instanceof Layout)) {
+      return this;
+    }
+    return parent.layoutRoot();
   }
 
   public override localToParent(): DOMMatrix {
@@ -1061,80 +1161,68 @@ export class Layout extends Node {
    * Add a node to this container with an animation.
    *
    * @remarks
-   * By default, the node's size is tweened from `0` to its target size.
-   * A custom animation callback can be provided to override this behavior.
+   * Uses the FLIP technique to smoothly animate existing siblings to their new
+   * positions. The new node is inserted with layout disabled, then layout is
+   * enabled to compute final positions. By default, the new node scales from 0
+   * to 1. A custom animation callback can be provided to override this.
    *
    * @param node - The node(s) to add.
    * @param duration - The duration of the animation in seconds.
-   * @param animate - An optional custom animation callback.
+   * @param timingFunction - An optional timing function for the animation.
    */
   @threadable()
   public *addAnimated(
     node: ComponentChildren,
     duration: number,
-    animate?: LayoutAnimateCallback,
+    timingFunction: TimingFunction = easeInOutCubic,
   ): ThreadGenerator {
-    yield* this.insertAnimated(node, Infinity, duration, animate);
+    yield* this.insertAnimated(node, Infinity, duration, timingFunction);
   }
 
   /**
    * Insert a node at a specific index with an animation.
    *
    * @remarks
-   * By default, the node's size is tweened from `0` to its target size.
-   * A custom animation callback can be provided to override this behavior.
+   * Uses the FLIP technique to smoothly animate existing siblings to their new
+   * positions. The new node is inserted with layout disabled, then layout is
+   * enabled to compute final positions. By default, the new node scales from 0
+   * to 1. A custom animation callback can be provided to override this.
    *
    * @param node - The node(s) to insert.
    * @param index - The index at which to insert the node(s).
    * @param duration - The duration of the animation in seconds.
-   * @param animate - An optional custom animation callback.
+   * @param timingFunction - An optional timing function for the animation.
    */
   @threadable()
   public *insertAnimated(
     node: ComponentChildren,
     index: number,
     duration: number,
-    animate?: LayoutAnimateCallback,
+    timingFunction: TimingFunction = easeInOutCubic,
   ): ThreadGenerator {
     const nodes = Array.isArray(node) ? node : [node];
     const layoutNodes = nodes.filter((n): n is Layout => n instanceof Layout);
 
-    const targetSizes = new Map<Layout, SerializedVector2<DesiredLength>>();
+    const flipBefore = this.recordFlipState();
+
     for (const n of layoutNodes) {
-      targetSizes.set(n, n.desiredSize());
-      n.size.x(0);
-      n.size.y(0);
-      n.lockSize();
+      n.scale(0);
     }
 
     this.insert(node, index);
 
-    const tasks: ThreadGenerator[] = [];
-    for (const n of layoutNodes) {
-      if (animate) {
-        tasks.push(animate(n, duration));
-      } else {
-        const target = targetSizes.get(n)!;
-        tasks.push(
-          all(
-            n.size.x(target.x as Length, duration),
-            n.size.y(target.y as Length, duration),
-          ),
-        );
-      }
-    }
-
-    if (tasks.length > 0) {
-      yield* all(...tasks);
-    }
+    yield* all(
+      this.tweenFlip(flipBefore, duration, timingFunction),
+      tween(duration, raw => {
+        const t = timingFunction(raw);
+        for (const n of layoutNodes) {
+          n.scale(Vector2.lerp(Vector2.zero, Vector2.one, t));
+        }
+      }),
+    );
 
     for (const n of layoutNodes) {
-      if (!animate) {
-        const target = targetSizes.get(n)!;
-        n.size.x(target.x as Length);
-        n.size.y(target.y as Length);
-      }
-      n.releaseSize();
+      n.scale(1);
     }
   }
 
@@ -1142,34 +1230,87 @@ export class Layout extends Node {
    * Remove a node from this container with an animation.
    *
    * @remarks
-   * By default, the node's size is tweened to `0` before removal.
-   * A custom animation callback can be provided to override this behavior.
-   * After removal, the node's size is restored to its original value so it can
-   * be reused.
+   * Uses the FLIP technique to smoothly animate remaining siblings to their
+   * new positions. The removed node is reparented to the view (taking it out
+   * of flex flow while keeping it visible) and animated out. By default, the
+   * node scales to 0. A custom animation callback can be provided to override
+   * this.
    *
    * @param node - The node to remove.
    * @param duration - The duration of the animation in seconds.
-   * @param animate - An optional custom animation callback.
+   * @param timingFunction - An optional timing function for the animation.
    */
   @threadable()
   public *removeAnimated(
     node: Layout,
     duration: number,
-    animate?: LayoutAnimateCallback,
+    timingFunction: TimingFunction = easeInOutCubic,
   ): ThreadGenerator {
-    const originalSize = node.desiredSize();
+    const flipBefore = this.recordFlipState();
+    const nodeTranslate = node.translate();
+    const nodeSize = node.computedSize();
+    const nodeDesiredSize = node.desiredSize();
 
-    node.lockSize();
-    if (animate) {
-      yield* animate(node, duration);
-    } else {
-      yield* node.size(0, duration);
-    }
+    // Capture world-space position, then move node to view (behind other content).
+    // After insertion into view, node becomes a layout root so position uses
+    // raw signal values (not computedPosition). Position is applied before
+    // scale in the transform chain, so the node stays put as it scales down.
+    const worldPos = Vector2.zero.transformAsPoint(node.localToWorld());
+    node.size(nodeSize);
+    node.remove();
+    this.view().insert(node, 0);
+    node.translate(Vector2.zero);
+    node.position.abs(worldPos);
+
+    yield* all(
+      this.tweenFlip(flipBefore, duration, timingFunction),
+      tween(duration, raw => {
+        const t = timingFunction(raw);
+        node.scale(Vector2.lerp(Vector2.one, Vector2.zero, t));
+      }),
+    );
 
     node.remove();
-    node.releaseSize();
-    node.size.x(originalSize.x as Length);
-    node.size.y(originalSize.y as Length);
+    node.scale(1);
+    node.translate(nodeTranslate);
+    node.width(nodeDesiredSize.x as SignalValue<Length>);
+    node.height(nodeDesiredSize.y as SignalValue<Length>);
+  }
+
+  /**
+   * Reorder the children of this container with a FLIP animation.
+   *
+   * @remarks
+   * Uses the FLIP technique: snapshots each child's position before and after
+   * reordering, then animates the `translate` signal from the delta back to
+   * zero. Since no nodes are added or removed, sizes stay constant and the
+   * animation is perfectly smooth.
+   *
+   * @param newOrder - The new order of children. Must contain the same nodes.
+   * @param duration - The duration of the animation in seconds.
+   * @param timingFunction - An optional timing function for the animation.
+   */
+  @threadable()
+  public *reorderAnimated(
+    newOrder: Node[],
+    duration: number,
+    timingFunction: TimingFunction = easeInOutCubic,
+  ): ThreadGenerator {
+    const children = this.children();
+
+    if (
+      newOrder.length !== children.length ||
+      !children.every(child => newOrder.includes(child))
+    ) {
+      throw new Error(
+        'reorderAnimated: newOrder must contain exactly the same children.',
+      );
+    }
+
+    const flipBefore = this.recordFlipState();
+    this.setParsedChildren(newOrder);
+
+    yield* this.tweenFlip(flipBefore, duration, timingFunction);
   }
 
   public override dispose() {
