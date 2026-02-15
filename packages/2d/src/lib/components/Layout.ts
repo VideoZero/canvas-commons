@@ -55,7 +55,7 @@ import {
   LengthLimit,
   TextWrap,
 } from '../partials';
-import {drawLine, drawPivot, is} from '../utils';
+import {drawLine, drawPivot, is, roundPx} from '../utils';
 import {Node, NodeProps} from './Node';
 import type {ComponentChildren} from './types';
 
@@ -892,7 +892,13 @@ export class Layout extends Node {
   }
 
   protected getComputedLayout(): BBox {
-    return new BBox(this.element.getBoundingClientRect());
+    const rect = this.element.getBoundingClientRect();
+    return new BBox(
+      roundPx(rect.x),
+      roundPx(rect.y),
+      roundPx(rect.width),
+      roundPx(rect.height),
+    );
   }
 
   @computed()
@@ -1076,7 +1082,7 @@ export class Layout extends Node {
   }
 
   protected parsePixels(value: number | null): string {
-    return value === null ? '' : `${value}px`;
+    return value === null ? '' : `${roundPx(value)}px`;
   }
 
   protected parseLength(value: number | string | null): string {
@@ -1086,7 +1092,7 @@ export class Layout extends Node {
     if (typeof value === 'string') {
       return value;
     }
-    return `${value}px`;
+    return `${roundPx(value)}px`;
   }
 
   @computed()

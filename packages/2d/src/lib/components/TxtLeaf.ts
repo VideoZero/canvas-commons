@@ -13,6 +13,7 @@ import {
   nodeName,
   signal,
 } from '../decorators';
+import {roundPx} from '../utils';
 import {Shape, ShapeProps} from './Shape';
 import {Txt} from './Txt';
 import {View2D} from './View2D';
@@ -84,8 +85,10 @@ export class TxtLeaf extends Shape {
       range.selectNodeContents(childNode);
       const rangeRect = range.getBoundingClientRect();
 
-      const x = width / -2 + rangeRect.left - parentRect.left;
-      const y = height / -2 + rangeRect.top - parentRect.top + fontOffset;
+      const x = roundPx(width / -2 + rangeRect.left - parentRect.left);
+      const y = roundPx(
+        height / -2 + rangeRect.top - parentRect.top + fontOffset,
+      );
 
       if (!lineRect) {
         lineRect = new BBox(x, y, rangeRect.width, rangeRect.height);
@@ -142,7 +145,12 @@ export class TxtLeaf extends Shape {
     // We take the default value of the miterLimit as 10.
     const miterLimitCoefficient = this.lineJoin() === 'miter' ? 0.5 * 10 : 0.5;
 
-    return new BBox(-size.width / 2, -size.height / 2, bbox.width, bbox.height)
+    return new BBox(
+      -size.width / 2,
+      -size.height / 2,
+      roundPx(bbox.width),
+      roundPx(bbox.height),
+    )
       .expand([0, this.fontSize() * 0.5])
       .expand(lineWidth * miterLimitCoefficient);
   }
