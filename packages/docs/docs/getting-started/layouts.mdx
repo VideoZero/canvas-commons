@@ -182,4 +182,155 @@ From the layout's perspective, all `<Rect>`s in the example below are siblings:
 
 <AnimationPlayer name="layout-group" small />
 
+## Animated layouts
+
+<AnimationPlayer name="layout-animated" small />
+
+Layout containers support smooth FLIP-based animations for adding, removing,
+and reordering children. Instead of elements snapping to their new positions,
+they glide there smoothly.
+
+### Adding and removing children
+
+Use [`addAnimated`](/api/2d/components/Layout#addAnimated) and
+[`removeAnimated`](/api/2d/components/Layout#removeAnimated) to animate
+children entering and leaving the layout:
+
+```tsx editor
+import {Layout, Rect, Txt, makeScene2D} from '@motion-canvas/2d';
+import {createRef, waitFor} from '@motion-canvas/core';
+
+function card(text: string, color: string) {
+  return (
+    <Rect
+      size={100}
+      radius={12}
+      fill={color}
+      layout
+      alignItems={'center'}
+      justifyContent={'center'}
+    >
+      <Txt text={text} fill={'#fff'} fontSize={36} fontWeight={700} fontFamily={'monospace'} />
+    </Rect>
+  );
+}
+
+export default makeScene2D(function* (view) {
+  const row = createRef<Layout>();
+  view.add(
+    <Layout ref={row} layout direction={'row'} gap={20}>
+      {card('A', '#e13238')}
+      {card('B', '#e8a631')}
+    </Layout>,
+  );
+
+  yield* waitFor(0.5);
+
+  // New element scales in while siblings slide over
+  yield* row().addAnimated(card('C', '#41a663'), 0.5);
+  yield* waitFor(0.5);
+
+  // Element scales out while siblings close the gap
+  yield* row().removeAnimated(row().children()[1] as Layout, 0.5);
+  yield* waitFor(0.5);
+});
+```
+
+You can also insert at a specific index with
+[`insertAnimated`](/api/2d/components/Layout#insertAnimated):
+
+```tsx
+yield* row().insertAnimated(card('X', '#3b82f6'), 0, 0.5);
+```
+
+### Reordering children
+
+Use [`reorderAnimated`](/api/2d/components/Layout#reorderAnimated) to
+smoothly rearrange existing children:
+
+```tsx editor
+import {Layout, Rect, Txt, makeScene2D} from '@motion-canvas/2d';
+import {createRef, easeInOutCubic, waitFor} from '@motion-canvas/core';
+
+export default makeScene2D(function* (view) {
+  const row = createRef<Layout>();
+  const colors = ['#e13238', '#e8a631', '#41a663', '#3b82f6'];
+  view.add(
+    <Layout ref={row} layout direction={'row'} gap={20}>
+      {colors.map((c, i) => (
+        <Rect size={100} radius={12} fill={c} layout alignItems={'center'} justifyContent={'center'}>
+          <Txt text={`${i + 1}`} fill={'#fff'} fontSize={36} fontWeight={700} fontFamily={'monospace'} />
+        </Rect>
+      ))}
+    </Layout>,
+  );
+
+  yield* waitFor(0.5);
+
+  // Reverse the order
+  const children = row().children();
+  yield* row().reorderAnimated([...children].reverse(), 0.6, easeInOutCubic);
+
+  // Swap first and last
+  yield* waitFor(0.5);
+  const items = row().children();
+  const swapped = [...items];
+  swapped[0] = items[items.length - 1];
+  swapped[items.length - 1] = items[0];
+  yield* row().reorderAnimated(swapped, 0.6, easeInOutCubic);
+
+  yield* waitFor(0.5);
+});
+```
+
+### Animating layout changes with FLIP
+
+For arbitrary layout property changes — like switching direction, toggling wrap,
+or enabling flex-grow — use
+[`recordFlipState`](/api/2d/components/Layout#recordFlipState) and
+[`tweenFlip`](/api/2d/components/Layout#tweenFlip):
+
+```tsx editor
+import {Layout, Rect, makeScene2D} from '@motion-canvas/2d';
+import {createRef, waitFor} from '@motion-canvas/core';
+
+export default makeScene2D(function* (view) {
+  const container = createRef<Layout>();
+  const colors = ['#e13238', '#e8a631', '#41a663', '#3b82f6'];
+  view.add(
+    <Layout ref={container} layout direction={'row'} gap={16}>
+      {colors.map(c => <Rect size={80} radius={12} fill={c} />)}
+    </Layout>,
+  );
+
+  yield* waitFor(0.5);
+
+  // Snapshot positions, change layout, animate the transition
+  const before = container().recordFlipState();
+  container().direction('column');
+  yield* container().tweenFlip(before, 0.8);
+
+  yield* waitFor(0.5);
+
+  // Switch back to row with wrap
+  const before2 = container().recordFlipState();
+  container().direction('row');
+  container().wrap('wrap');
+  container().width(200);
+  yield* container().tweenFlip(before2, 0.8);
+
+  yield* waitFor(0.5);
+});
+```
+
+The FLIP (First, Last, Invert, Play) technique works by:
+
+1. **`recordFlipState()`** — snapshot each node's position and size
+2. Apply your layout changes (direction, wrap, grow, etc.)
+3. **`tweenFlip()`** — snapshot the new state, then animate from old to new
+
+By default, `recordFlipState()` walks up to the layout root and captures the
+entire layout tree. Pass `false` to only capture the container and its
+descendants.
+
 [flexbox]: https://css-tricks.com/snippets/css/a-guide-to-flexbox/
