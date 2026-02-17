@@ -1,0 +1,30 @@
+{
+  "name": "@motion-canvas/echarts",
+  "version": "0.1.0",
+  "description": "Apache ECharts integration for Motion Canvas",
+  "main": "lib/index.js",
+  "types": "./lib/index.d.ts",
+  "author": "motion-canvas",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsc -w",
+    "build": "tsc"
+  },
+  "exports": {
+    ".": {"types": "./lib/index.d.ts", "import": "./lib/index.js"},
+    "./vite": "./src/vite.ts"
+  },
+  "sideEffects": false,
+  "files": [
+    "lib",
+    "src"
+  ],
+  "dependencies": {
+    "@motion-canvas/2d": "^3.18.0-alpha.0",
+    "@motion-canvas/core": "^3.18.0-alpha.0"
+  },
+  "peerDependencies": {
+    "echarts": "*",
+    "zrender": "*"
+  }
+}

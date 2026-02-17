@@ -15,6 +15,7 @@ module.exports = {
         'ffmpeg',
         'legacy',
         'player',
+        'echarts',
         'shiki',
         'ui',
         'vite-plugin',
