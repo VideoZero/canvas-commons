@@ -108,6 +108,7 @@ export class EChart extends Rect {
   private lastWidth = 0;
   private lastHeight = 0;
   private lastDpr = 0;
+  private lastTheme: string | object | null = null;
   private lastOptions: EChartsOption | null = null;
   private readonly thread: Thread;
 
@@ -125,7 +126,6 @@ export class EChart extends Rect {
     const w = size.x;
     const h = size.y;
     const dpr = this.devicePixelRatio();
-    const theme = this.theme();
 
     if (this.chart) {
       if (
@@ -153,7 +153,12 @@ export class EChart extends Rect {
     const canvas = document.createElement('canvas');
     this.offscreen = canvas;
 
-    const chart = echarts.init(canvas as unknown as HTMLElement, theme, {
+    const rawTheme = this.theme();
+    const themeId =
+      rawTheme && typeof rawTheme === 'object' && 'theme' in rawTheme
+        ? (rawTheme as any).theme
+        : rawTheme;
+    const chart = echarts.init(canvas as unknown as HTMLElement, themeId, {
       renderer: 'canvas',
       width: w,
       height: h,
@@ -203,6 +208,25 @@ export class EChart extends Rect {
   }
 
   /**
+   * Apply the current theme signal value to the chart if it changed.
+   */
+  @computed()
+  private applyTheme(): void {
+    const chart = this.getChartInstance();
+    const theme = this.theme();
+    if (theme !== this.lastTheme) {
+      this.lastTheme = theme;
+      if (theme != null) {
+        const themeId =
+          typeof theme === 'object' && 'theme' in theme
+            ? (theme as any).theme
+            : theme;
+        (chart as any).setTheme(themeId);
+      }
+    }
+  }
+
+  /**
    * Apply the current options signal value to the chart if it changed.
    */
   @computed()
@@ -220,6 +244,7 @@ export class EChart extends Rect {
     const alpha = this.alpha();
 
     if (alpha > 0) {
+      this.applyTheme();
       this.applyOptions();
       const chart = this.getChartInstance();
 
