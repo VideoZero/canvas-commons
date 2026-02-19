@@ -54,6 +54,15 @@ export interface EChartProps extends RectProps {
   smoothing?: SignalValue<boolean>;
 
   /**
+   * Whether to replace options instead of merging.
+   *
+   * @remarks
+   * When true, `setOption` is called with `notMerge: true`, fully replacing
+   * the previous config. Use this when switching between different chart types.
+   */
+  notMerge?: SignalValue<boolean>;
+
+  /**
    * The device pixel ratio for the chart canvas.
    */
   devicePixelRatio?: SignalValue<number>;
@@ -102,6 +111,15 @@ export class EChart extends Rect {
   @initial(2)
   @signal()
   public declare readonly devicePixelRatio: SimpleSignal<number, this>;
+
+  /**
+   * Whether to replace options instead of merging.
+   *
+   * @defaultValue false
+   */
+  @initial(false)
+  @signal()
+  public declare readonly notMerge: SimpleSignal<boolean, this>;
 
   private chart: EChartsInstance | null = null;
   private offscreen: HTMLCanvasElement | null = null;
@@ -235,7 +253,7 @@ export class EChart extends Rect {
     const opts = this.options();
     if (opts && opts !== this.lastOptions) {
       this.lastOptions = opts;
-      chart.setOption(opts, {lazyUpdate: true});
+      chart.setOption(opts, {notMerge: this.notMerge(), lazyUpdate: true});
     }
   }
 
@@ -342,6 +360,9 @@ export class EChart extends Rect {
    * `setOption({lazyUpdate: true})`) and steps all active animation clips.
    */
   private flushUpdate() {
+    // Ensure pending signal changes are applied before flushing.
+    this.applyTheme();
+    this.applyOptions();
     if (!this.chart) return;
     this.chart.getZr().animation.update();
   }
