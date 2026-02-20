@@ -20,12 +20,6 @@ import * as echarts from 'echarts';
 type EChartsOption = echarts.EChartsCoreOption;
 type EChartsInstance = echarts.ECharts;
 
-export interface SetChartOptionOpts {
-  notMerge?: boolean;
-  silent?: boolean;
-  replaceMerge?: string | string[];
-}
-
 export interface EChartProps extends RectProps {
   /**
    * The ECharts option configuration for this chart.
@@ -117,9 +111,9 @@ export class EChart extends Rect {
   /**
    * The device pixel ratio for the chart canvas.
    *
-   * @defaultValue 2
+   * @defaultValue 1
    */
-  @initial(2)
+  @initial(1)
   @signal()
   public declare readonly devicePixelRatio: SimpleSignal<number, this>;
 
@@ -342,28 +336,6 @@ export class EChart extends Rect {
   }
 
   /**
-   * Highlight series/data.
-   */
-  public highlight(seriesIndex: number, dataIndex?: number) {
-    this.dispatchAction({
-      type: 'highlight',
-      seriesIndex,
-      dataIndex,
-    });
-  }
-
-  /**
-   * Downplay (un-highlight) series/data.
-   */
-  public downplay(seriesIndex: number, dataIndex?: number) {
-    this.dispatchAction({
-      type: 'downplay',
-      seriesIndex,
-      dataIndex,
-    });
-  }
-
-  /**
    * Dispatch an arbitrary ECharts action.
    *
    * @remarks
@@ -427,6 +399,43 @@ export class EChart extends Rect {
     const size = this.computedSize();
     // ECharts pixel origin is top-left; motion-canvas local origin is center
     return new Vector2(pixel[0] * s - size.x / 2, pixel[1] * s - size.y / 2);
+  }
+
+  /**
+   * Convert a motion-canvas local position to a data-space coordinate.
+   *
+   * @remarks
+   * The inverse of {@link dataToLocal}. Maps a position in this node's
+   * local coordinate system (centered origin) back to ECharts data space
+   * using `convertFromPixel`.
+   *
+   * @param finder - ECharts coordinate system finder, e.g.
+   *   `{seriesIndex: 0}`, `{xAxisIndex: 0, yAxisIndex: 0}`, or `'grid'`.
+   * @param localPos - A position in this node's local space.
+   * @returns The data-space coordinate as `[x, y]`.
+   *
+   * @example
+   * ```ts
+   * // Convert a local position back to data coordinates
+   * const data = chart().localToData({seriesIndex: 0}, circle().position());
+   * ```
+   */
+  public localToData(
+    finder: Parameters<EChartsInstance['convertFromPixel']>[0],
+    localPos: Vector2,
+  ): number[] {
+    const chart = this.getChartInstance();
+    this.applyTheme();
+    this.applyOptions();
+    this.flushUpdate();
+    const s = this.chartScale();
+    const size = this.computedSize();
+    // Reverse the dataToLocal transform: local → ECharts pixel
+    const pixel: [number, number] = [
+      (localPos.x + size.x / 2) / s,
+      (localPos.y + size.y / 2) / s,
+    ];
+    return chart.convertFromPixel(finder, pixel);
   }
 
   /**
