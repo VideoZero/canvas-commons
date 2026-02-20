@@ -66,6 +66,16 @@ export interface EChartProps extends RectProps {
    * The device pixel ratio for the chart canvas.
    */
   devicePixelRatio?: SignalValue<number>;
+
+  /**
+   * Scale factor for the chart rendering.
+   *
+   * @remarks
+   * Scales all chart elements (fonts, lines, symbols, etc.) by rendering at
+   * a smaller logical size while keeping the canvas resolution the same.
+   * For example, `chartScale={1.5}` makes everything 1.5x larger.
+   */
+  chartScale?: SignalValue<number>;
 }
 
 @nodeName('EChart')
@@ -121,6 +131,15 @@ export class EChart extends Rect {
   @signal()
   public declare readonly notMerge: SimpleSignal<boolean, this>;
 
+  /**
+   * Scale factor for chart rendering.
+   *
+   * @defaultValue 1
+   */
+  @initial(1)
+  @signal()
+  public declare readonly chartScale: SimpleSignal<number, this>;
+
   private chart: EChartsInstance | null = null;
   private offscreen: HTMLCanvasElement | null = null;
   private lastWidth = 0;
@@ -141,9 +160,10 @@ export class EChart extends Rect {
   @computed()
   public getChartInstance(): EChartsInstance {
     const size = this.computedSize();
-    const w = size.x;
-    const h = size.y;
-    const dpr = this.devicePixelRatio();
+    const s = this.chartScale();
+    const w = size.x / s;
+    const h = size.y / s;
+    const dpr = this.devicePixelRatio() * s;
 
     if (this.chart) {
       if (
@@ -162,7 +182,7 @@ export class EChart extends Rect {
         return this.chart;
       }
 
-      // DPR changed — must recreate the chart instance.
+      // DPR or scale changed — must recreate the chart instance.
       this.chart.dispose();
       this.chart = null;
       this.offscreen = null;
