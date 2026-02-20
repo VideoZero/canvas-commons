@@ -29,7 +29,7 @@ export interface EChartProps extends RectProps {
   /**
    * The ECharts option configuration for this chart.
    */
-  options?: SignalValue<EChartsOption>;
+  option?: SignalValue<EChartsOption>;
 
   /**
    * The ECharts theme to use.
@@ -74,7 +74,7 @@ export class EChart extends Rect {
    * The ECharts option configuration for this chart.
    */
   @signal()
-  public declare readonly options: SimpleSignal<EChartsOption, this>;
+  public declare readonly option: SimpleSignal<EChartsOption, this>;
 
   /**
    * The ECharts theme to use.
@@ -250,7 +250,7 @@ export class EChart extends Rect {
   @computed()
   private applyOptions(): void {
     const chart = this.getChartInstance();
-    const opts = this.options();
+    const opts = this.option();
     if (opts && opts !== this.lastOptions) {
       this.lastOptions = opts;
       chart.setOption(opts, {notMerge: this.notMerge(), lazyUpdate: true});
@@ -262,9 +262,10 @@ export class EChart extends Rect {
     const alpha = this.alpha();
 
     if (alpha > 0) {
+      const chart = this.getChartInstance();
+
       this.applyTheme();
       this.applyOptions();
-      const chart = this.getChartInstance();
 
       const zr = chart.getZr();
       zr.animation.update();
@@ -305,13 +306,17 @@ export class EChart extends Rect {
    * ```
    */
   public *animationCompleted(): Generator<void, void, void> {
-    const zr = this.getChartInstance().getZr();
-    // Flush pending lazy updates and step clips forward each iteration.
-    // We yield *after* the update so the frame is painted before we wait.
-    while (true) {
-      this.flushUpdate();
-      if (zr.animation.isFinished()) break;
+    // Apply pending signal changes and flush so echarts processes
+    // the lazy update and creates animation clips.
+    this.applyTheme();
+    this.applyOptions();
+
+    yield;
+    this.flushUpdate();
+
+    while (!this.getChartInstance().getZr().animation.isFinished()) {
       yield;
+      this.flushUpdate();
     }
   }
 
@@ -346,6 +351,8 @@ export class EChart extends Rect {
    */
   public dispatchAction(payload: {type: string; [key: string]: unknown}) {
     if (this.chart) {
+      this.applyTheme();
+      this.applyOptions();
       this.flushUpdate();
       this.chart.dispatchAction(payload);
     }
@@ -361,8 +368,6 @@ export class EChart extends Rect {
    */
   private flushUpdate() {
     // Ensure pending signal changes are applied before flushing.
-    this.applyTheme();
-    this.applyOptions();
     if (!this.chart) return;
     this.chart.getZr().animation.update();
   }
