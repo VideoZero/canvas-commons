@@ -12,6 +12,7 @@ import {
   SignalValue,
   SimpleSignal,
   Thread,
+  Vector2,
   useThread,
 } from '@motion-canvas/core';
 import * as echarts from 'echarts';
@@ -390,6 +391,42 @@ export class EChart extends Rect {
     // Ensure pending signal changes are applied before flushing.
     if (!this.chart) return;
     this.chart.getZr().animation.update();
+  }
+
+  /**
+   * Convert a data-space coordinate to a motion-canvas local position.
+   *
+   * @remarks
+   * Uses ECharts' `convertToPixel` internally and then maps the result
+   * from the chart's logical pixel space to the node's local coordinate
+   * system (centered origin, scaled by `chartScale`).
+   *
+   * @param finder - ECharts coordinate system finder, e.g.
+   *   `{seriesIndex: 0}`, `{xAxisIndex: 0, yAxisIndex: 0}`, or `'grid'`.
+   * @param dataCoord - The data-space coordinate, e.g. `[x, y]`.
+   * @returns A {@link Vector2} in this node's local space.
+   *
+   * @example
+   * ```ts
+   * // Get the local position of data point (3.14, 0) on the first series
+   * const pos = chart().dataToLocal({seriesIndex: 0}, [3.14, 0]);
+   * // Use it to position a motion-canvas node
+   * circle().position(pos);
+   * ```
+   */
+  public dataToLocal(
+    finder: Parameters<EChartsInstance['convertToPixel']>[0],
+    dataCoord: number[],
+  ): Vector2 {
+    const chart = this.getChartInstance();
+    this.applyTheme();
+    this.applyOptions();
+    this.flushUpdate();
+    const pixel = chart.convertToPixel(finder, dataCoord);
+    const s = this.chartScale();
+    const size = this.computedSize();
+    // ECharts pixel origin is top-left; motion-canvas local origin is center
+    return new Vector2(pixel[0] * s - size.x / 2, pixel[1] * s - size.y / 2);
   }
 
   /**
