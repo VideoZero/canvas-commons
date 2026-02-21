@@ -408,6 +408,7 @@ export class Latex extends SVGNode {
         time,
         timingFunction,
       ),
+      ...this.tweenTexSize(targetDoc, time, timingFunction),
     );
 
     this.svg.context.setter(newSVG);
@@ -528,10 +529,54 @@ export class Latex extends SVGNode {
       }
     }
 
+    animations.push(...this.tweenTexSize(targetDoc, time, timing));
+
     yield* all(...animations);
 
     this.svg.context.setter(newSVG);
     this.tex.context.setter(parsedValue);
     this.wrapper.children(this.documentNodes);
+  }
+
+  /**
+   * Smoothly interpolate this node's size toward the target document's
+   * dimensions, preventing layout jumps in flex containers.
+   */
+  private tweenTexSize(
+    targetDoc: SVGDocument,
+    time: number,
+    timingFunction: TimingFunction,
+  ): ThreadGenerator[] {
+    const autoWidth = this.width.isInitial();
+    const autoHeight = this.height.isInitial();
+
+    const currentSize = this.getCurrentSize();
+    const targetScale = this.calculateWrapperScale(targetDoc.size, currentSize);
+    const anims: ThreadGenerator[] = [
+      this.wrapper.scale(targetScale, time, timingFunction),
+    ];
+
+    if (autoWidth || autoHeight) {
+      const startSize = this.size();
+      const endSize = targetDoc.size.mul(targetScale);
+      anims.push(
+        tween(
+          time,
+          t => {
+            const p = timingFunction(t);
+            if (autoWidth)
+              this.width(startSize.x + (endSize.x - startSize.x) * p);
+            if (autoHeight)
+              this.height(startSize.y + (endSize.y - startSize.y) * p);
+          },
+          () => {
+            if (autoWidth) this.width.reset();
+            if (autoHeight) this.height.reset();
+          },
+        ),
+      );
+    }
+
+    return anims;
   }
 }
