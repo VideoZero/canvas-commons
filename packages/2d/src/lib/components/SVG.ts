@@ -93,6 +93,17 @@ export class SVG extends Shape {
   private static svgNodesPool: Record<string, SVGDocumentData> = {};
 
   /**
+   * The default {@link PathMorpher} used by all SVG-based components
+   * (Path, Latex, Icon) when no `morpher` prop is provided.
+   *
+   * @example
+   * ```ts
+   * SVG.defaultMorpher = zrenderMorpher();
+   * ```
+   */
+  public static defaultMorpher: PathMorpher = defaultMorpher();
+
+  /**
    * SVG string to be rendered
    */
   @signal()
@@ -111,7 +122,7 @@ export class SVG extends Shape {
   public constructor(props: SVGProps) {
     const {morpher, ...rest} = props;
     super(rest);
-    this.morpher = morpher ?? defaultMorpher();
+    this.morpher = morpher ?? SVG.defaultMorpher;
     this.wrapper = new Node({});
     this.wrapper.children(this.documentNodes);
     this.wrapper.scale(this.wrapperScale);
