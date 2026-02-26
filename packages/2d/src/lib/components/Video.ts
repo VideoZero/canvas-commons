@@ -174,6 +174,7 @@ export class Video extends Rect {
     let video = Video.pool[key];
     if (!video) {
       video = document.createElement('video');
+      video.crossOrigin = 'anonymous';
       video.src = src;
       Video.pool[key] = video;
     }
