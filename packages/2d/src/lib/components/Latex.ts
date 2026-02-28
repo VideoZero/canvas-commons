@@ -74,6 +74,18 @@ export interface LatexProps extends Omit<SVGProps, 'svg'> {
  * ```
  */
 export class Latex extends SVGNode {
+  /**
+   * When enabled, TeX strings are validated eagerly in the constructor
+   * so that MathJax errors surface immediately when the scene loads,
+   * rather than only when the first frame renders.
+   *
+   * @example
+   * ```ts
+   * Latex.eagerValidation = true;
+   * ```
+   */
+  public static eagerValidation = false;
+
   @lazy(() => {
     return parseFloat(
       window.getComputedStyle(SVGNode.containerElement).fontSize,
@@ -108,6 +120,10 @@ export class Latex extends SVGNode {
       svg: '',
     });
     this.svg(this.latexSVG);
+    if (Latex.eagerValidation) {
+      // Force evaluation so MathJax errors surface immediately.
+      this.latexSVG();
+    }
   }
 
   protected override calculateWrapperScale(
