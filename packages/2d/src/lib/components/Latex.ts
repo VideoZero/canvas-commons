@@ -1,4 +1,5 @@
 import {
+  BBox,
   SerializedVector2,
   Signal,
   SignalValue,
@@ -105,13 +106,62 @@ export class Latex extends SVGNode {
     const array = typeof value === 'string' ? [value] : value;
     return array
       .reduce<string[]>((prev, current) => {
-        prev.push(...current.split(/{{(.*?)}}/));
+        prev.push(...Latex.splitFragments(current));
         return prev;
       }, [])
       .filter(sub => sub.trim().length > 0);
   })
   @signal()
   public declare readonly tex: Signal<string[] | string, string[], this>;
+
+  /**
+   * Split a TeX string containing `{{...}}` fragment markers into an array
+   * of alternating plain-text and fragment-content strings.
+   *
+   * Unlike a simple regex split, this handles nested braces correctly.
+   * For example, `{{e^{i\pi}}} + {{1}}` yields `['e^{i\\pi}', ' + ', '1']`.
+   */
+  private static splitFragments(input: string): string[] {
+    const result: string[] = [];
+    let i = 0;
+    while (i < input.length) {
+      const start = input.indexOf('{{', i);
+      if (start === -1) {
+        result.push(input.slice(i));
+        break;
+      }
+      if (start > i) {
+        result.push(input.slice(i, start));
+      }
+      // Skip the opening '{{'
+      let j = start + 2;
+      let depth = 0;
+      while (j < input.length) {
+        if (input[j] === '{') {
+          depth++;
+          j++;
+        } else if (input[j] === '}') {
+          if (depth === 0) {
+            // Check for '}}' closing delimiter
+            if (j + 1 < input.length && input[j + 1] === '}') {
+              result.push(input.slice(start + 2, j));
+              j += 2; // skip '}}'
+              break;
+            }
+            // Single '}' at depth 0 shouldn't happen in valid input
+            j++;
+          } else {
+            depth--;
+            j++;
+          }
+        } else {
+          j++;
+        }
+      }
+      i = j;
+    }
+    return result;
+  }
 
   public constructor(props: LatexProps) {
     super({
@@ -146,6 +196,88 @@ export class Latex extends SVGNode {
     return id.substring(id.lastIndexOf('-') + 1);
   }
 
+  /**
+   * Get all fillable shapes (Path/Rect) for a given fragment id.
+   *
+   * `getChildrenById()` returns Node[], which may include plain Node
+   * wrappers for multi-glyph fragments. This method unwraps those
+   * groups and returns the leaf Curve shapes that support `fill`,
+   * `opacity`, etc.
+   *
+   * @param id - The fragment text (what's inside `\{\{...\}\}`).
+   */
+  /**
+   * Get the leaf shapes for each occurrence of a fragment.
+   *
+   * Returns a nested array: one `Curve[]` per occurrence of the
+   * fragment in the tex string. For example, if `{{x}}` appears
+   * twice, `getShapesById('x')` returns `[Curve[], Curve[]]`.
+   *
+   * @param id - The fragment text (what's inside `\{\{...\}\}`).
+   */
+  public getShapesById(id: string): Curve[][] {
+    return this.getChildrenById(id).map(node => {
+      if (node instanceof Path || node instanceof Rect) return [node];
+      return node
+        .children()
+        .filter((c): c is Curve => c instanceof Path || c instanceof Rect);
+    });
+  }
+
+  /**
+   * Get the bounding box of each occurrence of a fragment in parent
+   * space.
+   *
+   * Returns one {@link BBox} per occurrence, in the parent node's
+   * coordinate space — consistent with {@link Node.position},
+   * {@link Node.top}, {@link Node.bottom}, etc.
+   *
+   * @param id - The fragment text (what's inside `\{\{...\}\}`).
+   * @param padding - Extra padding around the bbox (default 8).
+   */
+  public getFragmentBBox(id: string, padding = 8): BBox[] {
+    const groups = this.getShapesById(id);
+    const toParent = this.parent()?.worldToLocal() ?? new DOMMatrix();
+    return groups.map(shapes => {
+      const points: Vector2[] = [];
+      for (const shape of shapes) {
+        for (const c of shape.cacheBBox().transformCorners(
+          shape.localToWorld(),
+        )) {
+          points.push(c.transformAsPoint(toParent));
+        }
+      }
+      return BBox.fromPoints(...points).expand(padding);
+    });
+  }
+
+  /**
+   * Get the bounding box of each occurrence of a fragment in absolute
+   * (scene) space.
+   *
+   * Returns coordinates compatible with {@link Node.absolutePosition}.
+   * This is the motion-canvas coordinate system (e.g. -960..960 for
+   * a 1920×1080 project).
+   *
+   * @param id - The fragment text (what's inside `\{\{...\}\}`).
+   * @param padding - Extra padding around the bbox (default 8).
+   */
+  public getAbsoluteFragmentBBox(id: string, padding = 8): BBox[] {
+    const groups = this.getShapesById(id);
+    const viewToLocal = this.view().worldToLocal();
+    return groups.map(shapes => {
+      const points: Vector2[] = [];
+      for (const shape of shapes) {
+        for (const c of shape.cacheBBox().transformCorners(
+          shape.localToWorld(),
+        )) {
+          points.push(c.transformAsPoint(viewToLocal));
+        }
+      }
+      return BBox.fromPoints(...points).expand(padding);
+    });
+  }
+
   protected override parseSVG(svg: string): SVGDocument {
     if (!this.svgSubTexMap[svg]) {
       return super.parseSVG(svg);
@@ -169,7 +301,14 @@ export class Latex extends SVGNode {
         continue;
       }
 
-      const firstId = this.getNodeCharacterId(subNodes[0]);
+      // Build a multiset of character IDs we need to match from the
+      // sub-fragment rendering. This is more robust than using a fixed
+      // splice count (subNodes.length), because MathJax can produce a
+      // different number of nodes for the same expression depending on
+      // context (extra spacing, structural nodes, etc.).
+      const neededIds = subNodes.map(n => this.getNodeCharacterId(n));
+
+      const firstId = neededIds[0];
       const spliceIndex = oldNodes.findIndex(
         node => this.getNodeCharacterId(node) === firstId,
       );
@@ -177,7 +316,22 @@ export class Latex extends SVGNode {
         pendingFragments.push({sub, nodeCount: subNodes.length});
         continue;
       }
-      const children = oldNodes.splice(spliceIndex, subNodes.length);
+
+      // Scan forward from spliceIndex, consuming nodes until all needed
+      // character IDs are found. Nodes with unrecognized IDs (structural/
+      // spacing) are included to preserve correct SVG layout.
+      const needed = [...neededIds];
+      let endIdx = spliceIndex;
+      while (needed.length > 0 && endIdx < oldNodes.length) {
+        const charId = this.getNodeCharacterId(oldNodes[endIdx]);
+        const idx = needed.indexOf(charId);
+        if (idx !== -1) {
+          needed.splice(idx, 1);
+        }
+        endIdx++;
+      }
+
+      const children = oldNodes.splice(spliceIndex, endIdx - spliceIndex);
 
       if (children.length === 1) {
         newNodes.push({
@@ -286,7 +440,21 @@ export class Latex extends SVGNode {
     return svg;
   }
 
-  private getShapes(): Curve[] {
+  /**
+   * Returns all rendered shapes (Path and Rect elements) that make up this
+   * equation, in SVG document order (generally left-to-right reading order).
+   *
+   * Useful for highlighting or selecting specific parts of an equation
+   * without using the `{{...}}` fragment syntax.
+   *
+   * @example
+   * ```ts
+   * const shapes = latex().getShapes();
+   * // Highlight all shapes
+   * yield* all(...shapes.map(s => s.fill('red', 0.5)));
+   * ```
+   */
+  public getShapes(): Curve[] {
     return this.wrapper
       .children()
       .flatMap(child =>
@@ -580,10 +748,12 @@ export class Latex extends SVGNode {
           time,
           t => {
             const p = timingFunction(t);
-            if (autoWidth)
+            if (autoWidth) {
               this.width(startSize.x + (endSize.x - startSize.x) * p);
-            if (autoHeight)
+            }
+            if (autoHeight) {
               this.height(startSize.y + (endSize.y - startSize.y) * p);
+            }
           },
           () => {
             if (autoWidth) this.width.reset();
