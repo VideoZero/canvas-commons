@@ -17,6 +17,14 @@ import {Shape, ShapeProps} from './Shape';
 
 export interface CurveProps extends ShapeProps {
   /**
+   * {@inheritDoc Curve.alignChildren}
+   */
+  alignChildren?: SignalValue<boolean>;
+  /**
+   * {@inheritDoc Curve.rotateChildren}
+   */
+  rotateChildren?: SignalValue<boolean>;
+  /**
    * {@inheritDoc Curve.closed}
    */
   closed?: SignalValue<boolean>;
@@ -52,6 +60,33 @@ export interface CurveProps extends ShapeProps {
 
 @nodeName('Curve')
 export abstract class Curve extends Shape {
+  /**
+   * Whether to align children to the curve's midpoint.
+   *
+   * @remarks
+   * When enabled, children are rendered in a coordinate space whose origin is
+   * at the curve's midpoint (50% along its length). By default the x-axis is
+   * also rotated to match the curve's tangent direction; set
+   * {@link rotateChildren} to `false` to keep children upright.
+   */
+  @initial(false)
+  @signal()
+  public declare readonly alignChildren: SimpleSignal<boolean, this>;
+
+  /**
+   * Whether aligned children should be rotated to match the curve's tangent.
+   *
+   * @remarks
+   * Only has an effect when {@link alignChildren} is `true`. When `true`
+   * (the default), children are rotated so their local x-axis matches the
+   * curve's tangent at the midpoint. Set to `false` to keep children in
+   * their default (screen-space) orientation while still centering them on
+   * the curve.
+   */
+  @initial(true)
+  @signal()
+  public declare readonly rotateChildren: SimpleSignal<boolean, this>;
+
   /**
    * Whether the curve should be closed.
    *
@@ -380,6 +415,34 @@ export abstract class Curve extends Shape {
     return profileToSVGPathData(this.profile());
   }
 
+  /**
+   * Counter-rotation that keeps a child label upright.
+   *
+   * @remarks
+   * Returns the negative of the curve's tangent angle at its midpoint,
+   * snapped to the nearest 90°. Apply this as the `rotation` of a child
+   * element (when {@link alignChildren} and {@link rotateChildren} are both
+   * `true`) to keep it readable regardless of curve direction.
+   *
+   * The value is reactive — it updates whenever the curve's geometry changes.
+   *
+   * @example
+   * ```tsx
+   * <Line ref={line} points={pts} alignChildren>
+   *   <Txt text="label" rotation={() => line().uprightRotation()} />
+   * </Line>
+   * ```
+   */
+  @computed()
+  public uprightRotation(): number {
+    if (!this.alignChildren() || !this.rotateChildren()) {
+      return 0;
+    }
+    const {normal} = this.getPointAtPercentage(0.5);
+    const angle = normal.flipped.perpendicular.degrees;
+    return -Math.round(angle / 90) * 90;
+  }
+
   protected override getCacheBBox(): BBox {
     const box = this.childrenBBox();
     const arrowSize =
@@ -412,6 +475,24 @@ export abstract class Curve extends Shape {
       !this.endOffset.isInitial() ||
       !this.endArrow.isInitial()
     );
+  }
+
+  protected override drawChildren(context: CanvasRenderingContext2D) {
+    if (this.alignChildren()) {
+      const {position, normal} = this.getPointAtPercentage(0.5);
+      context.save();
+      context.translate(position.x, position.y);
+      if (this.rotateChildren()) {
+        const angle = normal.flipped.perpendicular.degrees;
+        context.rotate((angle * Math.PI) / 180);
+      }
+      for (const child of this.sortedChildren()) {
+        child.render(context);
+      }
+      context.restore();
+    } else {
+      super.drawChildren(context);
+    }
   }
 
   protected override drawShape(context: CanvasRenderingContext2D) {
