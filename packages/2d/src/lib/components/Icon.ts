@@ -5,11 +5,13 @@ import {
   SignalValue,
   SimpleSignal,
   TimingFunction,
-  isReactive,
+  createSignal,
   threadable,
+  unwrap,
   useLogger,
 } from '@motion-canvas/core';
 import {colorSignal, computed, initial, signal} from '../decorators';
+import {ResourceCache} from '../utils';
 import {SVG, SVGProps} from './SVG';
 
 export interface IconProps extends Omit<SVGProps, 'svg'> {
@@ -32,8 +34,7 @@ const PLACEHOLDER_SVG =
  * See https://icones.js.org/collection/all for all available Icons.
  */
 export class Icon extends SVG {
-  private static iconSvgCache: Map<string, string> = new Map();
-  private static pendingFetches: Map<string, Promise<string>> = new Map();
+  protected static cache = new ResourceCache<string>();
 
   /**
    * The identifier of the icon.
@@ -64,6 +65,13 @@ export class Icon extends SVG {
   @colorSignal()
   public declare readonly color: ColorSignal<this>;
 
+  /**
+   * Bumped when a fetch completes to invalidate the iconSvg computed.
+   */
+  private cacheVersion = createSignal(0);
+
+  private fetchPromise: Promise<string> | null = null;
+
   public constructor(props: IconProps) {
     super({
       ...props,
@@ -73,79 +81,78 @@ export class Icon extends SVG {
 
   protected override collectAsyncResources(): void {
     super.collectAsyncResources();
-    this.iconSvg();
+
+    if (this.fetchPromise) {
+      DependencyContext.collectPromise(this.fetchPromise);
+    }
   }
 
   @computed()
   protected iconSvg(): string {
-    const iconId = this.icon();
-    const color = this.color().hex();
-    const cacheKey = `${iconId}::${color}`;
+    this.cacheVersion();
 
-    const cached = Icon.iconSvgCache.get(cacheKey);
-    if (cached !== undefined) {
-      return cached;
-    }
+    const iconId = this.icon();
 
     if (iconId === null || iconId === undefined) {
       return PLACEHOLDER_SVG;
     }
 
-    const fetchPromise = this.fetchIconSvg(iconId, color);
-    DependencyContext.collectPromise(fetchPromise);
-
-    return PLACEHOLDER_SVG;
-  }
-
-  private async fetchIconSvg(iconId: string, color: string): Promise<string> {
+    const color = this.color().hex();
     const cacheKey = `${iconId}::${color}`;
 
-    const cached = Icon.iconSvgCache.get(cacheKey);
+    const cached = Icon.cache.get(cacheKey);
+
     if (cached !== undefined) {
       return cached;
     }
 
-    const pending = Icon.pendingFetches.get(cacheKey);
-    if (pending !== undefined) {
-      return pending;
+    this.fetchPromise = Icon.fetchIconSvg(iconId, color).then((svg) => {
+      if (this.icon() === iconId && this.color().hex() === color) {
+        this.cacheVersion(this.cacheVersion() + 1);
+      }
+      return svg;
+    });
+
+    return PLACEHOLDER_SVG;
+  }
+
+  private static async fetchIconSvg(
+    iconId: string,
+    color: string,
+  ): Promise<string> {
+    const key = `${iconId}::${color}`;
+
+    if (Icon.cache.has(key)) {
+      return Icon.cache.get(key)!;
     }
 
-    const iconPath = iconId.replace(':', '/');
-    const encodedColor = encodeURIComponent(color);
-    const url = `https://api.iconify.design/${iconPath}.svg?color=${encodedColor}`;
-
-    const fetchPromise = fetch(url)
-      .then(response => {
+    return Icon.cache
+      .request(key, async () => {
+        const iconPath = iconId.replace(':', '/');
+        const encodedColor = encodeURIComponent(color);
+        const url = `https://api.iconify.design/${iconPath}.svg?color=${encodedColor}`;
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Failed to fetch icon: ${iconId}`);
         }
         return response.text();
       })
-      .then(svg => {
-        Icon.iconSvgCache.set(cacheKey, svg);
-        Icon.pendingFetches.delete(cacheKey);
-        return svg;
-      })
       .catch(error => {
-        Icon.pendingFetches.delete(cacheKey);
         useLogger().error(`Error fetching icon ${iconId}: ${error}`);
         return PLACEHOLDER_SVG;
       });
-
-    Icon.pendingFetches.set(cacheKey, fetchPromise);
-    return fetchPromise;
   }
-
+  
   @threadable()
   protected *tweenIcon(
     value: SignalValue<string>,
     time: number,
     timingFunction: TimingFunction,
   ) {
-    const newIconId = isReactive(value) ? value() : value;
+    const newIconId = unwrap(value);
     const color = this.color().hex();
 
-    const newSvg: string = yield this.fetchIconSvg(newIconId, color);
+    const newSvg: string = yield Icon.fetchIconSvg(newIconId, color);
 
     yield* this.svg(newSvg, time, timingFunction);
     this.icon.context.setter(newIconId);
