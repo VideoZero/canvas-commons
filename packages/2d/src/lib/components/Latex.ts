@@ -416,11 +416,22 @@ export class Latex extends SVGNode {
       tex += '}'.repeat(bracesLeft - bracesRight);
     }
 
-    const hasArrayBegin = tex.includes('\\begin{array}');
-    const hasArrayEnd = tex.includes('\\end{array}');
-    if (hasArrayBegin !== hasArrayEnd) tex = '';
+    const beginCount = (tex.match(/\\begin\{/g) ?? []).length;
+    const endCount = (tex.match(/\\end\{/g) ?? []).length;
+    if (beginCount !== endCount) tex = '';
 
-    return this.singleTexToSVG(tex);
+    // `&` and `\\` are only valid inside environments — fragments
+    // containing bare separators are not standalone-renderable.
+    if (beginCount === 0 && (/(?:^|[^\\])&/.test(tex) || /\\\\/.test(tex))) {
+      tex = '';
+    }
+
+    try {
+      return this.singleTexToSVG(tex);
+    } catch (e) {
+      useLogger().warn(`Failed to render sub-fragment: ${subTex}`);
+      return '';
+    }
   }
 
   private singleTexToSVG(tex: string): string {
