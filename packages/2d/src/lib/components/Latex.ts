@@ -183,7 +183,7 @@ export class Latex extends SVGNode {
 
     const childData = curves.map(child => ({
       child,
-      origScale: new Vector2(child.scale()),
+      origScale: child.scale(),
       fillColor: String(child.fill() ?? this.fill() ?? '#ffffff'),
     }));
 
