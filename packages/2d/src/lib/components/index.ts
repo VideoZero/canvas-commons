@@ -23,6 +23,7 @@ export * from './Shape';
 export * from './Spline';
 export * from './Stack';
 export * from './Txt';
+export * from './TxtLeaf';
 export * from './Video';
 export * from './View2D';
 export * from './types';
