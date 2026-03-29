@@ -308,6 +308,20 @@ export abstract class Curve extends Shape {
     }
 
     const distance = end - start;
+
+    // Nothing to draw — return an empty path so no dot appears
+    // (a zero-length segment with lineCap='round' renders as a dot).
+    if (distance <= 0) {
+      return {
+        startPoint: Vector2.zero,
+        startTangent: Vector2.right,
+        endPoint: Vector2.zero,
+        endTangent: Vector2.right,
+        arrowSize: 0,
+        path,
+        startOffset: start,
+      };
+    }
     const arrowSize = Math.min(distance / 2, this.arrowSize());
 
     if (this.startArrow()) {
