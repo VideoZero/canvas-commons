@@ -231,6 +231,10 @@ export class Circle extends Curve {
 
   @computed()
   protected override getPathData(): string {
+    if (this.requiresProfile()) {
+      return super.getPathData();
+    }
+
     const builder = new PathDataBuilder();
     const start = this.startAngle() * DEG2RAD;
     let end = this.endAngle() * DEG2RAD;

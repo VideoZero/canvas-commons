@@ -155,6 +155,12 @@ export class Rect extends Curve {
 
   @computed()
   protected override getPathData(): string {
+    // When build clips the visible portion, use Curve's clipped path
+    // data so rough.js draws only the visible stroke progressively.
+    if (this.requiresProfile()) {
+      return super.getPathData();
+    }
+
     const box = BBox.fromSizeCentered(this.size());
     const radius = this.radius();
     const hasRoundedCorners =

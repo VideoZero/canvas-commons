@@ -360,11 +360,12 @@ export class Txt extends Shape {
 
 
   // ═══════════════════════════════════════════════════════════════════════
-  // Build mode character rects (used by typewriter/charClip/charWipe)
+  // Drawing
   // ═══════════════════════════════════════════════════════════════════════
 
   protected override draw(context: CanvasRenderingContext2D) {
     this.drawChildren(context);
+  }
   // ─── Entrance Animations ──────────────────────────────────────
 
   @threadable()

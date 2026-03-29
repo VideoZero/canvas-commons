@@ -1,5 +1,6 @@
 import {
   BBox,
+  Color,
   Matrix2D,
   PossibleSpacing,
   SerializedVector2,
@@ -10,20 +11,30 @@ import {
   Vector2,
   all,
   clampRemap,
+  createSignal,
   delay,
+  easeInCubic,
+  easeInOutCubic,
   easeInOutSine,
+  easeOutCubic,
+  easeOutSine,
   isReactive,
   lazy,
+  linear,
+  sequence,
   threadable,
   tween,
   useLogger,
+  waitFor,
 } from '@motion-canvas/core';
-import {computed, signal} from '../decorators';
+import {computed, initial, signal} from '../decorators';
 import {PathMorpher, defaultMorpher} from '../morphers';
 import {DesiredLength, PossibleCanvasStyle} from '../partials';
+import {Gradient} from '../partials/Gradient';
 import {applyTransformDiff, getTransformDiff} from '../utils/diff';
 import {resolveSvgPaintServer} from '../utils/svgPaintServer';
 import {Circle, CircleProps} from './Circle';
+import {Curve} from './Curve';
 import {Img, ImgProps} from './Img';
 import {Layout} from './Layout';
 import {Line, LineProps} from './Line';
@@ -134,6 +145,90 @@ export class SVG extends Shape {
     this.wrapper.scale(this.wrapperScale);
     this.add(this.wrapper);
   }
+
+  /**
+   * All Curve descendants in document order.
+   *
+   * @remarks
+   * Used by {@link enter} to determine child sequencing.
+   * Cached via `@computed` and recomputed when the SVG document changes.
+   */
+  @computed()
+  public orderedCurveDescendants(): Curve[] {
+    return this.wrapper.findAll(
+      (node): node is Curve => node instanceof Curve,
+    );
+  }
+
+  /**
+   * Animate the SVG by sequencing child strokes with overlap.
+   *
+   * @remarks
+   * Each child curve draws its stroke progressively. Filled children
+   * get an outline stroke phase followed by a fill crossfade.
+   * Children are staggered with 50% overlap.
+   *
+   * @param duration - Total animation duration in seconds.
+   * @param timingFunction - Easing for each child's stroke.
+   */
+  @threadable()
+  public *build(
+    duration = 4,
+    timingFunction: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
+    const curves = this.orderedCurveDescendants();
+    const n = curves.length;
+    if (n === 0) return;
+
+    const containerFill = this.fill();
+    const containerFillStr = containerFill ? String(containerFill) : '#fff';
+
+    const childData = curves.map(c => ({
+      c,
+      fillColor: String(c.fill() ?? containerFill ?? '#fff'),
+      hasFill: c.fill() !== null || containerFill !== null,
+      hadNoStroke: c.stroke() === null,
+    }));
+
+    curves.forEach(c => {
+      c.end(0);
+      c.fill(null);
+    });
+    const overlap = 0.5;
+    const perChild = duration / (n - overlap * (n - 1));
+    const stagger = perChild * (1 - overlap);
+
+    yield* sequence(
+      stagger,
+      ...childData.map(({c, fillColor, hasFill, hadNoStroke}) => {
+        function* anim(): ThreadGenerator {
+          if (!hasFill) {
+            yield* c.end(1, perChild, timingFunction);
+            return;
+          }
+          if (hadNoStroke) {
+            c.strokeFirst(true);
+            c.stroke(new Color(fillColor));
+            c.lineWidth(1);
+          }
+          const strokeDur = perChild * 0.7;
+          const fillDur = perChild * 0.3;
+          yield c.end(1, strokeDur, linear);
+          yield* waitFor(strokeDur);
+          const parsed = new Color(fillColor);
+          const origAlpha = parsed.alpha();
+          yield* tween(fillDur, t => {
+            const p = easeOutSine(t);
+            c.fill(parsed.alpha(origAlpha * p));
+            if (hadNoStroke) c.lineWidth(Math.max(0, 1 - p));
+          });
+          c.fill(fillColor);
+        }
+        return anim();
+      }),
+    );
+  }
+
 
   /**
    * Get all SVG nodes with the given id.
@@ -438,7 +533,7 @@ export class SVG extends Shape {
     strokeFirst,
     ...rest
   }: ShapeProps): ShapeProps {
-    return {
+    const result: ShapeProps = {
       fill: fill === 'currentColor' ? this.fill : SVG.processSVGColor(fill),
       stroke:
         stroke === undefined || stroke === 'currentColor'
@@ -448,6 +543,8 @@ export class SVG extends Shape {
       strokeFirst: strokeFirst ?? this.strokeFirst,
       ...rest,
     };
+
+    return result;
   }
 
   /**

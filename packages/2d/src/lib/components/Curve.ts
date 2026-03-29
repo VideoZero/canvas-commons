@@ -1,10 +1,21 @@
 import {
   BBox,
+  Color,
   SerializedVector2,
   SignalValue,
   SimpleSignal,
+  ThreadGenerator,
+  TimingFunction,
   Vector2,
+  all,
+  chain,
   clamp,
+  easeOutCubic,
+  easeOutSine,
+  linear,
+  threadable,
+  tween,
+  waitFor,
 } from '@motion-canvas/core';
 import {CurveDrawingInfo} from '../curves/CurveDrawingInfo';
 import {CurvePoint} from '../curves/CurvePoint';
@@ -295,6 +306,61 @@ export abstract class Curve extends Shape {
     // do nothing
   }
 
+  /**
+   * Internal stroke progress multiplier used by {@link build}.
+   * When < 1, clips the visible stroke without affecting the fill path.
+   */
+  @initial(1)
+  @signal()
+  protected declare readonly strokeProgress: SimpleSignal<number, this>;
+
+  /**
+   * The effective end percentage for stroke drawing.
+   * Uses `strokeProgress` during build animation to keep
+   * `end=1` (full path) for fill while clipping the stroke.
+   */
+  @computed()
+  protected drawEnd(): number {
+    return this.end() * this.strokeProgress();
+  }
+
+  /**
+   * Animate the curve's entrance: draw stroke, then crossfade fill.
+   *
+   * @param duration - Animation duration in seconds.
+   * @param timingFunction - Easing for the stroke drawing.
+   */
+  @threadable()
+  public *build(
+    duration = 0.6,
+    timingFunction: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
+    const origFill = this.fill();
+    const hasFill = origFill !== null;
+    if (hasFill) this.fill(null);
+    this.strokeProgress(0);
+
+    if (hasFill) {
+      const parsed = new Color(String(origFill));
+      const origAlpha = parsed.alpha();
+      yield* tween(duration, t => {
+        const p = timingFunction(t);
+        this.strokeProgress(p);
+        if (p > 0.7) {
+          const fillP = easeOutSine((p - 0.7) / 0.3);
+          this.fill(parsed.alpha(origAlpha * fillP));
+        }
+      });
+      this.strokeProgress(1);
+      this.fill(origFill);
+    } else {
+      yield* tween(duration, t => {
+        this.strokeProgress(timingFunction(t));
+      });
+      this.strokeProgress(1);
+    }
+  }
+
   @computed()
   protected curveDrawingInfo(): CurveDrawingInfo {
     const path = new Path2D();
@@ -302,7 +368,7 @@ export abstract class Curve extends Shape {
     const profile = this.profile();
 
     let start = this.percentageToDistance(this.start());
-    let end = this.percentageToDistance(this.end());
+    let end = this.percentageToDistance(this.drawEnd());
     if (start > end) {
       [start, end] = [end, start];
     }
@@ -426,7 +492,48 @@ export abstract class Curve extends Shape {
 
   @computed()
   protected override getPathData(): string {
+    // When build/start/end clip the visible portion, generate truncated
+    // SVG path data so rough.js only renders the visible strokes.
+    // With the same roughSeed, already-drawn segments remain visually
+    // stable as new ones appear — no discontinuity.
+    if (this.drawEnd() < 1 || !this.start.isInitial()) {
+      return this.clippedPathData();
+    }
     return profileToSVGPathData(this.profile());
+  }
+
+  @computed()
+  protected clippedPathData(): string {
+    const profile = this.profile();
+    let startDist = this.percentageToDistance(this.start());
+    let endDist = this.percentageToDistance(this.drawEnd());
+    if (startDist > endDist) {
+      [startDist, endDist] = [endDist, startDist];
+    }
+    if (endDist - startDist <= 0) return '';
+
+    const commands: string[] = [];
+    let length = 0;
+    let isFirst = true;
+    for (const segment of profile.segments) {
+      const prevLength = length;
+      length += segment.arcLength;
+      if (length <= startDist) continue;
+      if (prevLength >= endDist) break;
+
+      const relStart = clamp(
+        0, 1, (startDist - prevLength) / segment.arcLength,
+      );
+      const relEnd = clamp(
+        0, 1, (endDist - prevLength) / segment.arcLength,
+      );
+
+      if (relEnd > relStart) {
+        commands.push(segment.toSVGCommands(relStart, relEnd, isFirst));
+        isFirst = false;
+      }
+    }
+    return commands.join(' ');
   }
 
   /**
@@ -487,7 +594,8 @@ export abstract class Curve extends Shape {
       !this.startArrow.isInitial() ||
       !this.end.isInitial() ||
       !this.endOffset.isInitial() ||
-      !this.endArrow.isInitial()
+      !this.endArrow.isInitial() ||
+      this.strokeProgress() < 1.0
     );
   }
 
@@ -510,7 +618,13 @@ export abstract class Curve extends Shape {
   }
 
   protected override drawShape(context: CanvasRenderingContext2D) {
+    // Nothing to draw — skip entirely.
+    if (this.drawEnd() <= 0) {
+      return;
+    }
+
     super.drawShape(context);
+
     if (this.startArrow() || this.endArrow()) {
       this.drawArrows(context);
     }

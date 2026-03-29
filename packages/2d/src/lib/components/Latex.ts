@@ -9,8 +9,11 @@ import {
   Vector2,
   all,
   delay,
+  easeInCubic,
   easeInOutCubic,
+  easeOutCubic,
   lazy,
+  sequence,
   threadable,
   tween,
   useLogger,
@@ -161,6 +164,46 @@ export class Latex extends SVGNode {
       i = j;
     }
     return result;
+  }
+
+  /**
+   * Animate the Latex entrance with per-glyph scaling.
+   *
+   * @param duration - Total animation duration in seconds.
+   * @param timingFunction - Easing for each glyph's scale animation.
+   */
+  @threadable()
+  public override *build(
+    duration = 4,
+    timingFunction: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
+    const curves = this.orderedCurveDescendants();
+    const n = curves.length;
+    if (n === 0) return;
+
+    const childData = curves.map(child => ({
+      child,
+      origScale: new Vector2(child.scale()),
+      fillColor: String(child.fill() ?? this.fill() ?? '#ffffff'),
+    }));
+
+    curves.forEach(c => {
+      c.scale(0);
+      c.opacity(0);
+    });
+    const overlap = 0.3;
+    const perChild = duration / (n - overlap * (n - 1));
+
+    yield* sequence(
+        perChild * overlap,
+      ...childData.map(({child, origScale, fillColor}) => {
+        child.fill(fillColor);
+        return all(
+          child.opacity(1, perChild * 0.5),
+          child.scale(origScale, perChild, timingFunction),
+        );
+      }),
+    );
   }
 
   public constructor(props: LatexProps) {
