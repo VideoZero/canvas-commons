@@ -67,8 +67,8 @@ export class Txt extends Shape {
   public declare readonly text: SimpleSignal<string, this>;
 
   protected getText(): string {
-    if (this._splitOriginalText !== null) {
-      return this._splitOriginalText;
+    if (this.splitOriginalText !== null) {
+      return this.splitOriginalText;
     }
     return this.innerText();
   }
@@ -197,8 +197,8 @@ export class Txt extends Shape {
   // and provides aggregated access to characters, words, and lines.
   // ═══════════════════════════════════════════════════════════════════════
 
-  protected _isSplit = false;
-  protected _splitOriginalText: string | null = null;
+  protected isSplit = false;
+  protected splitOriginalText: string | null = null;
 
   /**
    * Whether to enable sub-pixel smoothing on split characters.
@@ -243,9 +243,9 @@ export class Txt extends Shape {
    * states for per-character rendering.
    */
   public split(clip = false, clipPadding = 4): this {
-    if (this._isSplit) this.unsplit();
-    this._splitOriginalText = this.innerText();
-    this._forEachLeaf(this, leaf => {
+    if (this.isSplit) this.unsplit();
+    this.splitOriginalText = this.innerText();
+    this.forEachLeaf(this, leaf => {
       leaf.splitIntoChars(clip, clipPadding);
     });
     // Aggregate from all TxtLeaf descendants
@@ -253,14 +253,14 @@ export class Txt extends Shape {
     this.words = [];
     this.maxCharHeight = 0;
     this.lineWidths = [];
-    this._forEachLeaf(this, leaf => {
+    this.forEachLeaf(this, leaf => {
       this.chars.push(...leaf.charStates);
       this.words.push(...leaf.leafWords);
       this.maxCharHeight = Math.max(this.maxCharHeight, leaf.leafMaxCharHeight);
       this.lineWidths.push(...leaf.leafLineWidths);
     });
     if (this.smooth) this.enableSmooth();
-    this._isSplit = true;
+    this.isSplit = true;
     return this;
   }
 
@@ -268,16 +268,16 @@ export class Txt extends Shape {
    * Revert to normal text rendering.
    */
   public unsplit(): this {
-    if (!this._isSplit) return this;
-    this._forEachLeaf(this, leaf => {
+    if (!this.isSplit) return this;
+    this.forEachLeaf(this, leaf => {
       leaf.unsplitChars();
     });
     this.chars = [];
     this.words = [];
     this.maxCharHeight = 0;
     this.lineWidths = [];
-    this._splitOriginalText = null;
-    this._isSplit = false;
+    this.splitOriginalText = null;
+    this.isSplit = false;
     return this;
   }
 
@@ -292,7 +292,7 @@ export class Txt extends Shape {
   public lineChars(lineIndex: number): TxtChar[] {
     let offset = 0;
     const leaves: TxtLeaf[] = [];
-    this._forEachLeaf(this, leaf => leaves.push(leaf));
+    this.forEachLeaf(this, leaf => leaves.push(leaf));
     for (const leaf of leaves) {
       if (lineIndex < offset + leaf.leafLineInfos.length) {
         const localLine = lineIndex - offset;
@@ -309,7 +309,7 @@ export class Txt extends Shape {
     let charOffset = 0;
     let lineOffset = 0;
     const leaves: TxtLeaf[] = [];
-    this._forEachLeaf(this, leaf => leaves.push(leaf));
+    this.forEachLeaf(this, leaf => leaves.push(leaf));
     for (const leaf of leaves) {
       const localIdx = charIdx - charOffset;
       if (localIdx >= 0 && localIdx < leaf.charStates.length) {
@@ -326,34 +326,34 @@ export class Txt extends Shape {
   }
 
   public enableSmooth(): this {
-    this._forEachLeaf(this, leaf => leaf.enableSmooth());
+    this.forEachLeaf(this, leaf => leaf.enableSmooth());
     return this;
   }
 
   public disableSmooth(): this {
-    this._forEachLeaf(this, leaf => leaf.disableSmooth());
+    this.forEachLeaf(this, leaf => leaf.disableSmooth());
     return this;
   }
 
   private prepare() {
-    if (!this._isSplit) this.split();
+    if (!this.isSplit) this.split();
     this.opacity(1);
   }
 
   private prepareClipped() {
-    if (!this._isSplit) this.split(true);
+    if (!this.isSplit) this.split(true);
     this.opacity(1);
   }
 
   // ─── Private helpers ──────────────────────────────────────────
 
-  private _forEachLeaf(node: Node, fn: (leaf: TxtLeaf) => void) {
+  private forEachLeaf(node: Node, fn: (leaf: TxtLeaf) => void) {
     for (const child of node.children()) {
       if (child instanceof TxtLeaf) {
         fn(child);
       } else if (child instanceof Txt) {
         // Nested Txt — recurse into its children
-        this._forEachLeaf(child, fn);
+        this.forEachLeaf(child, fn);
       }
     }
   }
@@ -369,7 +369,7 @@ export class Txt extends Shape {
   // ─── Entrance Animations ──────────────────────────────────────
 
   @threadable()
-  public *typewriter(duration = 1.5, stagger = 0.04): ThreadGenerator {
+  public *typewriter(_duration = 1.5, stagger = 0.04): ThreadGenerator {
     this.prepare();
     this.chars.forEach(c => c.opacity(0));
     yield* sequence(stagger, ...this.chars.map(c => c.opacity(1, 0)));
@@ -609,7 +609,7 @@ export class Txt extends Shape {
   }
 
   @threadable()
-  public *outline(duration = 0.5, stagger = 0.04): ThreadGenerator {
+  public *outline(_duration = 0.5, stagger = 0.04): ThreadGenerator {
     this.prepare();
     const fillColor = String(this.fill() ?? '#ffffff');
     const chars = this.chars;
