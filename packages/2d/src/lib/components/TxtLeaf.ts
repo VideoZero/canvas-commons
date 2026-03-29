@@ -14,13 +14,124 @@ import {
   signal,
 } from '../decorators';
 import {roundPx} from '../utils';
+import {Node, NodeProps} from './Node';
 import {Shape, ShapeProps} from './Shape';
 import {Txt} from './Txt';
 import {View2D} from './View2D';
 
+// ═══════════════════════════════════════════════════════════════════════════
+// TxtChar — per-character state for split text animations.
+//
+// Extends Node for its built-in signals (position, opacity, scale, rotation)
+// which support tweening. Adds text-specific signals (fill, stroke, shadow).
+// Rendering is handled by TxtLeaf — TxtChar is purely a state container.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface TxtCharProps extends NodeProps {
+  text?: SignalValue<string>;
+  fontSize?: SignalValue<number>;
+  fontFamily?: SignalValue<string>;
+  fontWeight?: SignalValue<number | string>;
+  fontStyle?: SignalValue<string>;
+  fill?: SignalValue<string | null>;
+  stroke?: SignalValue<string | null>;
+  charLineWidth?: SignalValue<number>;
+  charShadowColor?: SignalValue<string>;
+  charShadowBlur?: SignalValue<number>;
+}
+
+@nodeName('TxtChar')
+export class TxtChar extends Node {
+  @initial('')
+  @signal()
+  public declare readonly text: SimpleSignal<string, this>;
+
+  @initial(48)
+  @signal()
+  public declare readonly fontSize: SimpleSignal<number, this>;
+
+  @initial('sans-serif')
+  @signal()
+  public declare readonly fontFamily: SimpleSignal<string, this>;
+
+  @initial(400)
+  @signal()
+  public declare readonly fontWeight: SimpleSignal<number | string, this>;
+
+  @initial('normal')
+  @signal()
+  public declare readonly fontStyle: SimpleSignal<string, this>;
+
+  @initial('#ffffff')
+  @signal()
+  public declare readonly fill: SimpleSignal<string | null, this>;
+
+  @initial(null)
+  @signal()
+  public declare readonly stroke: SimpleSignal<string | null, this>;
+
+  @initial(0)
+  @signal()
+  public declare readonly charLineWidth: SimpleSignal<number, this>;
+
+  @initial('')
+  @signal()
+  public declare readonly charShadowColor: SimpleSignal<string, this>;
+
+  @initial(0)
+  @signal()
+  public declare readonly charShadowBlur: SimpleSignal<number, this>;
+
+  public smooth = false;
+
+  public constructor(props: TxtCharProps) {
+    super(props);
+  }
+
+  public enableSmooth() {
+    this.smooth = true;
+  }
+
+  public disableSmooth() {
+    this.smooth = false;
+  }
+
+  public cloneChar(): TxtChar {
+    return new TxtChar({
+      text: this.text(),
+      fontSize: this.fontSize(),
+      fontFamily: this.fontFamily(),
+      fontWeight: this.fontWeight(),
+      fontStyle: this.fontStyle(),
+      fill: this.fill(),
+      stroke: this.stroke(),
+      charLineWidth: this.charLineWidth(),
+      charShadowColor: this.charShadowColor(),
+      charShadowBlur: this.charShadowBlur(),
+      x: this.position.x(),
+      y: this.position.y(),
+      scale: this.scale(),
+      rotation: this.rotation(),
+      opacity: this.opacity(),
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TxtLeaf
+// ═══════════════════════════════════════════════════════════════════════════
+
 export interface TxtLeafProps extends ShapeProps {
   children?: string;
   text?: SignalValue<string>;
+}
+
+export interface LeafLineInfo {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  charIndices: number[];
 }
 
 @nodeName('TxtLeaf')
@@ -48,6 +159,19 @@ export class TxtLeaf extends Shape {
   @signal()
   public declare readonly text: SimpleSignal<string, this>;
 
+  // ─── Split state ──────────────────────────────────────────────
+
+  public charStates: TxtChar[] = [];
+  public leafLineInfos: LeafLineInfo[] = [];
+  public leafLineWidths: number[] = [];
+  public leafMaxCharHeight = 0;
+  public leafCharTexts: string[] = [];
+  public leafWords: TxtChar[][] = [];
+
+  protected _splitMode = false;
+  protected _splitClip = false;
+  protected _splitClipPadding = 4;
+
   public constructor({children, ...rest}: TxtLeafProps) {
     super(rest);
     if (children) {
@@ -61,7 +185,159 @@ export class TxtLeaf extends Shape {
     return parent instanceof Txt ? parent : null;
   }
 
+  // ─── Per-character measurement & split ────────────────────────
+
+  public splitIntoChars(clip = false, clipPadding = 4): this {
+    if (this._splitMode) this.unsplitChars();
+
+    this.requestFontUpdate();
+    const el = this.element;
+    const parentRect = el.getBoundingClientRect();
+    const {width, height} = this.size();
+
+    const fp = {
+      fontSize: this.fontSize(),
+      fontFamily: this.fontFamily(),
+      fontWeight: this.fontWeight(),
+      fontStyle: this.fontStyle(),
+      fill: String(this.fill() ?? '#ffffff'),
+    };
+
+    interface CharInfo {
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      char: string;
+      lineIndex: number;
+    }
+
+    const infos: CharInfo[] = [];
+    const range = document.createRange();
+    let curY = -Infinity;
+    let lineIdx = -1;
+
+    for (const childNode of el.childNodes) {
+      if (!childNode.textContent) continue;
+      const content = childNode.textContent;
+      for (let i = 0; i < content.length; i++) {
+        range.setStart(childNode, i);
+        range.setEnd(childNode, i + 1);
+        const r = range.getBoundingClientRect();
+        const rawY = r.top - parentRect.top;
+        if (Math.abs(rawY - curY) > 2) {
+          lineIdx++;
+          curY = rawY;
+        }
+        infos.push({
+          x: width / -2 + r.left - parentRect.left + r.width / 2,
+          y: height / -2 + rawY + r.height / 2,
+          w: r.width,
+          h: r.height,
+          char: content[i],
+          lineIndex: lineIdx,
+        });
+      }
+    }
+
+    if (infos.length === 0) return this;
+
+    this.leafMaxCharHeight = infos.reduce((m, ci) => Math.max(m, ci.h), 0);
+    this.leafCharTexts = infos.map(ci => ci.char);
+
+    this.charStates = infos.map(
+      ci =>
+        new TxtChar({
+          ...fp,
+          text: ci.char,
+          x: ci.x,
+          y: ci.y,
+        }),
+    );
+
+    // Build line infos
+    const byLine = new Map<number, {ci: CharInfo; idx: number}[]>();
+    for (let i = 0; i < infos.length; i++) {
+      const ci = infos[i];
+      if (!byLine.has(ci.lineIndex)) byLine.set(ci.lineIndex, []);
+      byLine.get(ci.lineIndex)!.push({ci, idx: i});
+    }
+
+    this.leafLineInfos = [];
+    this.leafLineWidths = [];
+    const entries = [...byLine.entries()].sort(([a], [b]) => a - b);
+    for (const [, lcs] of entries) {
+      let x0 = Infinity,
+        y0 = Infinity,
+        x1 = -Infinity,
+        y1 = -Infinity;
+      const charIndices: number[] = [];
+      for (const {ci, idx} of lcs) {
+        x0 = Math.min(x0, ci.x - ci.w / 2);
+        y0 = Math.min(y0, ci.y - ci.h / 2);
+        x1 = Math.max(x1, ci.x + ci.w / 2);
+        y1 = Math.max(y1, ci.y + ci.h / 2);
+        charIndices.push(idx);
+      }
+      this.leafLineWidths.push(x1 - x0);
+      this.leafLineInfos.push({x0, y0, x1, y1, charIndices});
+    }
+
+    // Detect words
+    this.leafWords = [];
+    let curWord: TxtChar[] = [];
+    for (let i = 0; i < infos.length; i++) {
+      const isBreak =
+        infos[i].char === ' ' ||
+        infos[i].char === '\n' ||
+        (i > 0 && infos[i].lineIndex !== infos[i - 1].lineIndex);
+      if (isBreak && curWord.length > 0) {
+        this.leafWords.push([...curWord]);
+        curWord = [];
+      }
+      if (infos[i].char !== ' ' && infos[i].char !== '\n') {
+        curWord.push(this.charStates[i]);
+      }
+    }
+    if (curWord.length > 0) this.leafWords.push(curWord);
+
+    this._splitMode = true;
+    this._splitClip = clip;
+    this._splitClipPadding = clipPadding;
+    return this;
+  }
+
+  public unsplitChars(): this {
+    if (!this._splitMode) return this;
+    this.charStates = [];
+    this.leafLineInfos = [];
+    this.leafLineWidths = [];
+    this.leafMaxCharHeight = 0;
+    this.leafCharTexts = [];
+    this.leafWords = [];
+    this._splitMode = false;
+    this._splitClip = false;
+    return this;
+  }
+
+  public enableSmooth(): this {
+    this.charStates.forEach(c => c.enableSmooth());
+    return this;
+  }
+
+  public disableSmooth(): this {
+    this.charStates.forEach(c => c.disableSmooth());
+    return this;
+  }
+
+  // ─── Drawing ──────────────────────────────────────────────────
+
   protected override draw(context: CanvasRenderingContext2D) {
+    if (this._splitMode) {
+      this.drawSplitChars(context);
+      return;
+    }
+
     this.requestFontUpdate();
     this.applyStyle(context, this.getCacheBBox());
     this.applyText(context);
@@ -111,6 +387,85 @@ export class TxtLeaf extends Shape {
 
     if (lineRect) {
       this.drawText(context, line, lineRect);
+    }
+  }
+
+  /**
+   * Render individual characters with per-char transforms.
+   * All rendering logic lives here — TxtChar is just state.
+   */
+  protected drawSplitChars(context: CanvasRenderingContext2D) {
+    const renderChar = (ch: TxtChar) => {
+      const opacity = ch.opacity();
+      if (opacity <= 0) return;
+
+      const text = ch.text();
+      if (!text) return;
+
+      context.save();
+
+      const pos = ch.position();
+      const scl = ch.scale();
+      const rot = ch.rotation();
+
+      context.translate(pos.x, pos.y);
+      if (rot) {
+        context.rotate((rot * Math.PI) / 180);
+      } else if (ch.smooth) {
+        context.rotate(0.001);
+      }
+      if (scl.x !== 1 || scl.y !== 1) context.scale(scl.x, scl.y);
+      context.globalAlpha *= opacity;
+
+      context.font = `${ch.fontStyle()} ${ch.fontWeight()} ${ch.fontSize()}px ${ch.fontFamily()}`;
+      context.textBaseline = 'middle';
+      context.textAlign = 'center';
+
+      const sc = ch.charShadowColor();
+      const sb = ch.charShadowBlur();
+      if (sc && sb > 0) {
+        context.shadowColor = sc;
+        context.shadowBlur = sb;
+      }
+
+      const stroke = ch.stroke();
+      const lw = ch.charLineWidth();
+      if (stroke && lw > 0) {
+        context.strokeStyle = stroke;
+        context.lineWidth = lw;
+        context.strokeText(text, 0, 0);
+      }
+
+      const fill = ch.fill();
+      if (fill) {
+        context.fillStyle = fill;
+        context.fillText(text, 0, 0);
+      }
+
+      context.restore();
+    };
+
+    if (this._splitClip) {
+      for (const line of this.leafLineInfos) {
+        const pad = this._splitClipPadding;
+        context.save();
+        context.beginPath();
+        context.rect(
+          line.x0 - pad,
+          line.y0 - pad,
+          line.x1 - line.x0 + pad * 2,
+          line.y1 - line.y0 + pad * 2,
+        );
+        context.clip();
+        for (const idx of line.charIndices) {
+          renderChar(this.charStates[idx]);
+        }
+        context.restore();
+      }
+    } else {
+      for (const char of this.charStates) {
+        renderChar(char);
+      }
     }
   }
 
