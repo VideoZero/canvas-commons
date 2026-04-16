@@ -77,7 +77,7 @@ export abstract class Shape extends Layout {
   public declare readonly fill: CanvasStyleSignal<this>;
   @canvasStyleSignal()
   public declare readonly stroke: CanvasStyleSignal<this>;
-  @initial(false)
+  @initial(true)
   @signal()
   public declare readonly strokeFirst: SimpleSignal<boolean, this>;
   @initial(0)
