@@ -19,12 +19,18 @@ import * as echarts from 'echarts';
 
 type EChartsOption = echarts.EChartsCoreOption;
 type EChartsInstance = echarts.ECharts;
+type SetOptionOpts = Parameters<EChartsInstance['setOption']>[1];
 
 export interface EChartProps extends RectProps {
   /**
-   * The ECharts option configuration for this chart.
+   * Initial ECharts option configuration applied when the chart is created.
+   *
+   * @remarks
+   * Read once at construction. To update the chart after creation, call
+   * `chart.setOption(...)` from the scene generator. There is no
+   * signal-based reactivity here; mutations are imperative and synchronous.
    */
-  option?: SignalValue<EChartsOption>;
+  initialOption?: EChartsOption;
 
   /**
    * The ECharts theme to use.
@@ -49,15 +55,6 @@ export interface EChartProps extends RectProps {
   smoothing?: SignalValue<boolean>;
 
   /**
-   * Whether to replace options instead of merging.
-   *
-   * @remarks
-   * When true, `setOption` is called with `notMerge: true`, fully replacing
-   * the previous config. Use this when switching between different chart types.
-   */
-  notMerge?: SignalValue<boolean>;
-
-  /**
    * The device pixel ratio for the chart canvas.
    */
   devicePixelRatio?: SignalValue<number>;
@@ -75,12 +72,6 @@ export interface EChartProps extends RectProps {
 
 @nodeName('EChart')
 export class EChart extends Rect {
-  /**
-   * The ECharts option configuration for this chart.
-   */
-  @signal()
-  public declare readonly option: SimpleSignal<EChartsOption, this>;
-
   /**
    * The ECharts theme to use.
    */
@@ -118,15 +109,6 @@ export class EChart extends Rect {
   public declare readonly devicePixelRatio: SimpleSignal<number, this>;
 
   /**
-   * Whether to replace options instead of merging.
-   *
-   * @defaultValue false
-   */
-  @initial(false)
-  @signal()
-  public declare readonly notMerge: SimpleSignal<boolean, this>;
-
-  /**
    * Scale factor for chart rendering.
    *
    * @defaultValue 1
@@ -135,18 +117,19 @@ export class EChart extends Rect {
   @signal()
   public declare readonly chartScale: SimpleSignal<number, this>;
 
+  private readonly initialOption?: EChartsOption;
   private chart: EChartsInstance | null = null;
   private offscreen: HTMLCanvasElement | null = null;
   private lastWidth = 0;
   private lastHeight = 0;
   private lastDpr = 0;
   private lastTheme: string | object | null = null;
-  private lastOptions: EChartsOption | null = null;
   private readonly thread: Thread;
 
   public constructor(props: EChartProps) {
     super(props);
     this.thread = useThread();
+    this.initialOption = props.initialOption;
   }
 
   /**
@@ -235,7 +218,13 @@ export class EChart extends Rect {
     this.lastWidth = w;
     this.lastHeight = h;
     this.lastDpr = dpr;
-    this.lastOptions = null;
+
+    // Apply the initial option synchronously now that the chart exists, so
+    // the chart starts in a fully-populated state. Subsequent updates go
+    // through `setOption(...)` directly.
+    if (this.initialOption) {
+      chart.setOption(this.initialOption, {lazyUpdate: false});
+    }
 
     return chart;
   }
@@ -260,16 +249,24 @@ export class EChart extends Rect {
   }
 
   /**
-   * Apply the current options signal value to the chart if it changed.
+   * Update the chart's options. Direct passthrough to ECharts' `setOption`.
+   *
+   * @remarks
+   * Synchronous: the chart's internal model is updated immediately, and any
+   * animations declared in the option begin on the next scene tick. Pass
+   * native ECharts options (e.g. `{notMerge: true, replaceMerge: ['series']}`)
+   * via the second argument; defaults to `{lazyUpdate: false}` so each call
+   * is fully applied before returning.
+   *
+   * @example
+   * ```ts
+   * chart().setOption({series: [{data: [45, 65, 55, 90]}]});
+   * yield* chart().waitForAnimation();
+   * ```
    */
-  @computed()
-  private applyOptions(): void {
+  public setOption(option: EChartsOption, opts?: SetOptionOpts): void {
     const chart = this.getChartInstance();
-    const opts = this.option();
-    if (opts && opts !== this.lastOptions) {
-      this.lastOptions = opts;
-      chart.setOption(opts, {notMerge: this.notMerge(), lazyUpdate: true});
-    }
+    chart.setOption(option, opts ?? {lazyUpdate: false});
   }
 
   protected override draw(context: CanvasRenderingContext2D) {
@@ -280,7 +277,6 @@ export class EChart extends Rect {
       const chart = this.getChartInstance();
 
       this.applyTheme();
-      this.applyOptions();
 
       const zr = chart.getZr();
       zr.animation.update();
@@ -307,28 +303,22 @@ export class EChart extends Rect {
   }
 
   /**
-   * Generator that yields until all echarts animations have completed.
+   * Generator that yields until all chart animations have finished.
    *
    * @remarks
-   * Flushes pending lazy updates on the first call so animation clips are
-   * created even when `draw()` hasn't run yet (e.g. during scene
-   * recalculation). On each subsequent yield it steps the animation forward
-   * so clips progress and eventually finish.
+   * Use after a `setOption(...)` call to wait for the resulting animation
+   * to play out before continuing the scene.
    *
    * @example
    * ```ts
-   * yield* chart().animationCompleted();
+   * chart().setOption({series: [{data: [45, 65, 55, 90]}]});
+   * yield* chart().waitForAnimation();
    * ```
    */
-  public *animationCompleted(): Generator<void, void, void> {
-    // Apply pending signal changes and flush so echarts processes
-    // the lazy update and creates animation clips.
+  public *waitForAnimation(): Generator<void, void, void> {
     this.applyTheme();
-    this.applyOptions();
-
     yield;
     this.flushUpdate();
-
     while (!this.getChartInstance().getZr().animation.isFinished()) {
       yield;
       this.flushUpdate();
@@ -345,7 +335,6 @@ export class EChart extends Rect {
   public dispatchAction(payload: {type: string; [key: string]: unknown}) {
     if (this.chart) {
       this.applyTheme();
-      this.applyOptions();
       this.flushUpdate();
       this.chart.dispatchAction(payload);
     }
@@ -392,7 +381,6 @@ export class EChart extends Rect {
   ): Vector2 {
     const chart = this.getChartInstance();
     this.applyTheme();
-    this.applyOptions();
     this.flushUpdate();
     const pixel = chart.convertToPixel(finder, dataCoord);
     const s = this.chartScale();
@@ -426,7 +414,6 @@ export class EChart extends Rect {
   ): number[] {
     const chart = this.getChartInstance();
     this.applyTheme();
-    this.applyOptions();
     this.flushUpdate();
     const s = this.chartScale();
     const size = this.computedSize();
