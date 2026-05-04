@@ -232,6 +232,9 @@ export class Latex extends SVGNode {
    * coordinate space — consistent with {@link Node.position},
    * {@link Node.top}, {@link Node.bottom}, etc.
    *
+   * Use this when placing highlight rects as siblings of the Latex
+   * inside the same parent Layout.
+   *
    * @param id - The fragment text (what's inside `\{\{...\}\}`).
    * @param padding - Extra padding around the bbox (default 8).
    */
@@ -245,6 +248,44 @@ export class Latex extends SVGNode {
           shape.localToWorld(),
         )) {
           points.push(c.transformAsPoint(toParent));
+        }
+      }
+      return BBox.fromPoints(...points).expand(padding);
+    });
+  }
+
+  /**
+   * Get the bounding box of each occurrence of a fragment in this
+   * Latex node's own local space.
+   *
+   * Returns coordinates suitable for child nodes added directly to the
+   * Latex via JSX children or `latex().add(...)`. This is the simplest
+   * pattern for fragment overlays — no sibling-of-Latex coord-space
+   * dance required:
+   *
+   * ```tsx
+   * <Latex ref={latex} tex={'{{a}}x^2'}>
+   *   <Rect
+   *     layout={false}
+   *     position={() => latex().getLocalFragmentBBox('a')[0].center}
+   *     size={() => latex().getLocalFragmentBBox('a')[0].size}
+   *   />
+   * </Latex>
+   * ```
+   *
+   * @param id - The fragment text (what's inside `\{\{...\}\}`).
+   * @param padding - Extra padding around the bbox (default 8).
+   */
+  public getLocalFragmentBBox(id: string, padding = 8): BBox[] {
+    const groups = this.getShapesById(id);
+    const toLocal = this.worldToLocal();
+    return groups.map(shapes => {
+      const points: Vector2[] = [];
+      for (const shape of shapes) {
+        for (const c of shape.cacheBBox().transformCorners(
+          shape.localToWorld(),
+        )) {
+          points.push(c.transformAsPoint(toLocal));
         }
       }
       return BBox.fromPoints(...points).expand(padding);
