@@ -34,6 +34,17 @@ export interface PlayerSettings {
 const MAX_AUDIO_DESYNC = 1 / 50;
 
 /**
+ * Lead-in for HTMLAudioElement seek/play latency.
+ *
+ * When we (re)start audio — on resume, seek, or scrub — the browser does an
+ * async seeking → buffer-fill → seeked cycle before samples actually emit.
+ * Pointing audio this far behind the animation gives it a head start so it
+ * roughly catches up by the time it produces sound, after which the
+ * drift-correction loop keeps them within MAX_AUDIO_DESYNC.
+ */
+const AUDIO_SEEK_LEAD_IN = 0.05;
+
+/**
  * The player logic used by the editor and embeddable player.
  *
  * @remarks
@@ -432,7 +443,7 @@ export class Player {
     const audioPaused =
       state.paused || this.finished || !this.audio.isInRange(this.status.time);
     if (await this.audio.setPaused(audioPaused)) {
-      this.syncAudio(-3);
+      this.syncAudio(-AUDIO_SEEK_LEAD_IN);
     }
     this.audio.setMuted(state.muted);
     this.audio.setVolume(state.volume);
@@ -454,7 +465,7 @@ export class Player {
       this.logger.profile('seek time');
       await this.playback.seek(clampedFrame);
       this.logger.profile('seek time');
-      this.syncAudio(-3);
+      this.syncAudio(-AUDIO_SEEK_LEAD_IN);
     }
     // Do nothing if paused or is ahead of the audio.
     else if (
@@ -539,8 +550,9 @@ export class Player {
     return clamp(this.startFrame, this.endFrame, frame);
   }
 
-  private syncAudio(frameOffset = 0) {
-    const time = this.status.framesToSeconds(this.playback.frame + frameOffset);
+  private syncAudio(secondsOffset = 0) {
+    const time =
+      this.status.framesToSeconds(this.playback.frame) + secondsOffset;
     this.audio.setTime(time);
 
     this.audioPool.prepare(time);
