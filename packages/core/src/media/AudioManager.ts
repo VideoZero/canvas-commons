@@ -124,7 +124,10 @@ export class AudioManager {
     if (this.source && this.audioElement.paused !== isPaused) {
       if (isPaused) {
         this.audioElement.pause();
-      } else if (this.audioElement.currentTime < this.audioElement.duration) {
+      } else if (
+        isNaN(this.audioElement.duration) ||
+        this.audioElement.currentTime < this.audioElement.duration
+      ) {
         try {
           await this.audioElement.play();
           this.error = false;
