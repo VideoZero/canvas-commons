@@ -281,7 +281,7 @@ export class Layout extends Node {
     return this.gap.y;
   }
 
-  @defaultStyle('Roboto')
+  @defaultStyle('Inter, system-ui, sans-serif')
   @signal()
   public declare readonly fontFamily: SimpleSignal<string, this>;
   @defaultStyle(48)
