@@ -630,9 +630,13 @@ export class SVG extends Shape {
 
   private static parseLineDash(value: string | null): number[] | null {
     if (!value) return null;
+    // `getComputedStyle` returns "none" for the initial/default value;
+    // treat that as "no dash" rather than parsing it into [NaN].
+    if (value === 'none') return null;
 
-    const list = value.split(/,|\s+/);
-    if (list.findIndex(str => str.endsWith('%')) > 0) {
+    const list = value.split(/,|\s+/).filter(s => s.length > 0);
+    if (list.length === 0) return null;
+    if (list.some(str => str.endsWith('%'))) {
       useLogger().warn(`SVG: percentage line dash are ignored`);
       return null;
     }
@@ -663,27 +667,43 @@ export class SVG extends Shape {
     element: SVGGraphicsElement,
     inheritedStyle: ShapeProps,
   ): ShapeProps {
+    // Read styles via getComputedStyle so we pick up values declared via
+    // inline `style="..."` attributes, `<style>` blocks (resolved through
+    // classes), and cascaded/inherited rules — not just plain SVG
+    // attributes. The parsed SVG is mounted inside View2D.shadowRoot
+    // (see `containerElement`), so the browser fully resolves the cascade
+    // for us. Falls back to `inheritedStyle` when computed-style returns
+    // a missing/none value so an unset child doesn't override the parent.
+    const cs = window.getComputedStyle(element);
+
+    // SVG paint values that mean "no paint" should not fall through to the
+    // inherited value — the SVG explicitly opted out. We treat them as
+    // null so Motion Canvas's Shape renders them with no fill/stroke.
+    const paint = (val: string | null, inherited: any) => {
+      if (!val) return inherited;
+      if (val === 'none' || val === 'transparent') return null;
+      return val;
+    };
+
+    const numAttr = (raw: string | null, inherited: any) => {
+      if (raw == null || raw === '') return inherited;
+      const n = parseFloat(raw);
+      return Number.isFinite(n) ? n : inherited;
+    };
+
     return {
-      fill: element.getAttribute('fill') ?? inheritedStyle.fill,
-      stroke: element.getAttribute('stroke') ?? inheritedStyle.stroke,
-      lineWidth: element.hasAttribute('stroke-width')
-        ? parseFloat(element.getAttribute('stroke-width')!)
-        : inheritedStyle.lineWidth,
+      fill: paint(cs.fill, inheritedStyle.fill),
+      stroke: paint(cs.stroke, inheritedStyle.stroke),
+      lineWidth: numAttr(cs.strokeWidth, inheritedStyle.lineWidth),
       lineCap:
-        this.parseLineCap(element.getAttribute('stroke-linecap')) ??
-        inheritedStyle.lineCap,
+        this.parseLineCap(cs.strokeLinecap) ?? inheritedStyle.lineCap,
       lineJoin:
-        this.parseLineJoin(element.getAttribute('stroke-linejoin')) ??
-        inheritedStyle.lineJoin,
+        this.parseLineJoin(cs.strokeLinejoin) ?? inheritedStyle.lineJoin,
       lineDash:
-        this.parseLineDash(element.getAttribute('stroke-dasharray')) ??
-        inheritedStyle.lineDash,
+        this.parseLineDash(cs.strokeDasharray) ?? inheritedStyle.lineDash,
       lineDashOffset:
-        this.parseDashOffset(element.getAttribute('stroke-dashoffset')) ??
-        inheritedStyle.lineDashOffset,
-      opacity:
-        this.parseOpacity(element.getAttribute('opacity')) ??
-        inheritedStyle.opacity,
+        this.parseDashOffset(cs.strokeDashoffset) ?? inheritedStyle.lineDashOffset,
+      opacity: this.parseOpacity(cs.opacity) ?? inheritedStyle.opacity,
       layout: false,
     };
   }
