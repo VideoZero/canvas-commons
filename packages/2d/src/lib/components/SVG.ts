@@ -22,6 +22,7 @@ import {computed, signal} from '../decorators';
 import {PathMorpher, defaultMorpher} from '../morphers';
 import {DesiredLength, PossibleCanvasStyle} from '../partials';
 import {applyTransformDiff, getTransformDiff} from '../utils/diff';
+import {resolveSvgPaintServer} from '../utils/svgPaintServer';
 import {Circle, CircleProps} from './Circle';
 import {Img, ImgProps} from './Img';
 import {Layout} from './Layout';
@@ -662,10 +663,13 @@ export class SVG extends Shape {
    * Convert the SVG element's style to a Motion Canvas Shape properties.
    * @param element - An SVG element whose style should be converted.
    * @param inheritedStyle - The parent style that should be inherited.
+   * @param svgRoot - Root SVG element, used to resolve `url(#id)` paint
+   *   references (linear/radial gradients) declared in `<defs>`.
    */
   private static getElementStyle(
     element: SVGGraphicsElement,
     inheritedStyle: ShapeProps,
+    svgRoot: Element,
   ): ShapeProps {
     // Read styles via getComputedStyle so we pick up values declared via
     // inline `style="..."` attributes, `<style>` blocks (resolved through
@@ -679,9 +683,16 @@ export class SVG extends Shape {
     // SVG paint values that mean "no paint" should not fall through to the
     // inherited value — the SVG explicitly opted out. We treat them as
     // null so Motion Canvas's Shape renders them with no fill/stroke.
+    // `url(#id)` paint-server refs get resolved into a real Motion Canvas
+    // `Gradient` instance via `resolvePaintServer`; falls back to the
+    // inherited paint when the referenced element isn't a gradient (or
+    // can't be parsed).
     const paint = (val: string | null, inherited: any) => {
       if (!val) return inherited;
       if (val === 'none' || val === 'transparent') return null;
+      if (val.startsWith('url(')) {
+        return resolveSvgPaintServer(val, svgRoot) ?? inherited;
+      }
       return val;
     };
 
@@ -765,7 +776,7 @@ export class SVG extends Shape {
       child,
       parentTransform,
     );
-    const style = SVG.getElementStyle(child, inheritedStyle);
+    const style = SVG.getElementStyle(child, inheritedStyle, svgRoot);
     const id = child.id ?? '';
     if (child.tagName === 'g') {
       yield* SVG.extractGroupNodes(child, svgRoot, transformMatrix, style);

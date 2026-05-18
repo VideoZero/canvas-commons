@@ -1,5 +1,6 @@
 import {BBox, Color, Spacing, Vector2} from '@motion-canvas/core';
 import {CanvasStyle, Gradient, Pattern, PossibleCanvasStyle} from '../partials';
+import {parseCSSGradient} from './parseCSSGradient';
 
 export function canvasStyleParser(style: PossibleCanvasStyle) {
   if (style === null) {
@@ -12,12 +13,29 @@ export function canvasStyleParser(style: PossibleCanvasStyle) {
     return style;
   }
 
-  return new Color(style);
+  // Translate CSS gradient strings (linear/radial/conic) into Motion
+  // Canvas `Gradient` instances so agent-emitted
+  // `fill="linear-gradient(...)"` renders as a real gradient. The outer
+  // try/catch below handles malformed gradient strings and any other
+  // colour the chroma parser can't understand — never throws.
+  if (typeof style === 'string') {
+    const gradient = parseCSSGradient(style);
+    if (gradient) return gradient;
+  }
+  try {
+    return new Color(style);
+  } catch (err: any) {
+    console.warn(
+      `[canvasStyleParser] Could not parse colour "${String(style).slice(0, 80)}": ${err?.message}. Falling back to transparent black.`,
+    );
+    return new Color('rgba(0,0,0,0)');
+  }
 }
 
 export function resolveCanvasStyle(
   style: CanvasStyle,
   context: CanvasRenderingContext2D,
+  bbox?: BBox,
 ): string | CanvasGradient | CanvasPattern {
   if (style === null) {
     return '';
@@ -26,7 +44,7 @@ export function resolveCanvasStyle(
     return (<Color>style).serialize();
   }
   if (style instanceof Gradient) {
-    return style.canvasGradient(context);
+    return style.canvasGradient(context, bbox);
   }
   if (style instanceof Pattern) {
     return style.canvasPattern(context) ?? '';

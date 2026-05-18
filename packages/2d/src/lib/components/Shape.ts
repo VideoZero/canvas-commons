@@ -185,8 +185,11 @@ export abstract class Shape extends Layout {
   }
 
   protected applyStyle(context: CanvasRenderingContext2D) {
-    context.fillStyle = resolveCanvasStyle(this.fill(), context);
-    context.strokeStyle = resolveCanvasStyle(this.stroke(), context);
+    // Pass the local bbox so CSS-relative gradients (parseCSSGradient,
+    // SVG paint-server refs) can auto-fit the painted shape.
+    const bbox = this.getCacheBBox();
+    context.fillStyle = resolveCanvasStyle(this.fill(), context, bbox);
+    context.strokeStyle = resolveCanvasStyle(this.stroke(), context, bbox);
     context.lineWidth = this.lineWidth();
     context.lineJoin = this.lineJoin();
     context.lineCap = this.lineCap();
