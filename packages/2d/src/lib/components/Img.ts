@@ -230,15 +230,18 @@ about working with images.`,
     this.drawShape(context);
     const alpha = this.alpha();
     if (alpha > 0) {
-      const box = BBox.fromSizeCentered(this.computedSize());
-      context.save();
-      context.clip(this.getPath());
-      if (alpha < 1) {
-        context.globalAlpha *= alpha;
+      const image = this.image();
+      if (image.complete && image.naturalWidth > 0) {
+        const box = BBox.fromSizeCentered(this.computedSize());
+        context.save();
+        context.clip(this.getPath());
+        if (alpha < 1) {
+          context.globalAlpha *= alpha;
+        }
+        context.imageSmoothingEnabled = this.smoothing();
+        drawImage(context, image, box);
+        context.restore();
       }
-      context.imageSmoothingEnabled = this.smoothing();
-      drawImage(context, this.image(), box);
-      context.restore();
     }
 
     if (this.clip()) {
