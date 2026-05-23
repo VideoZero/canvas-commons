@@ -1133,6 +1133,12 @@ export class Layout extends Node {
     if (this.sizeLockCounter() > 0) {
       this.element.style.flexGrow = '0';
       this.element.style.flexShrink = '0';
+      // Force flex-basis to auto while locked so the explicit width/height
+      // we just wrote via size() actually wins in the flex algorithm.
+      // Without this override, basis: 0 children would collapse to 0 width
+      // during a tweenFlip — flex-basis takes precedence over the width
+      // property when both are set and grow/shrink are 0.
+      this.element.style.flexBasis = 'auto';
     } else {
       this.element.style.flexGrow = this.grow().toString();
       this.element.style.flexShrink = this.shrink().toString();
