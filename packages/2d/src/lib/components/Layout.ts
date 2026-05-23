@@ -62,9 +62,15 @@ import type {ComponentChildren} from './types';
 export type FlipState = Map<
   Layout,
   {
-    computedPosition: Vector2;
     computedSize: Vector2;
     desiredSize: SerializedVector2<DesiredLength>;
+    // World-space position. tweenFlip animates between absolutePositions
+    // (not parent-local computedPositions) so nodes that have been
+    // REPARENTED between the recordFlipState() and tweenFlip() calls
+    // animate correctly — parent-local positions in different
+    // containers can't be compared directly, but world positions are
+    // invariant under reparenting.
+    absolutePosition: Vector2;
   }
 >;
 
@@ -533,9 +539,9 @@ export class Layout extends Node {
 
     for (const node of [root, ...descendants]) {
       flipState.set(node, {
-        computedPosition: node.computedPosition(),
         computedSize: node.computedSize(),
         desiredSize: node.desiredSize(),
+        absolutePosition: node.absolutePosition(),
       });
     }
 
@@ -551,8 +557,12 @@ export class Layout extends Node {
     const to = this.recordFlipState();
 
     const nodes: Layout[] = [];
-    const fromPositions: Vector2[] = [];
-    const toPositions: Vector2[] = [];
+    // World-space positions. Used (instead of computedPosition) so
+    // nodes that were REPARENTED between recordFlipState and tweenFlip
+    // animate correctly — parent-local positions in different
+    // containers aren't comparable, world positions are.
+    const fromAbsolute: Vector2[] = [];
+    const toAbsolute: Vector2[] = [];
     const fromSizes: Vector2[] = [];
     const toSizes: Vector2[] = [];
     const origTranslates: Vector2[] = [];
@@ -561,8 +571,8 @@ export class Layout extends Node {
       const fromState = from.get(node);
       if (!fromState) continue;
       nodes.push(node);
-      fromPositions.push(fromState.computedPosition);
-      toPositions.push(toState.computedPosition);
+      fromAbsolute.push(fromState.absolutePosition);
+      toAbsolute.push(toState.absolutePosition);
       fromSizes.push(fromState.computedSize);
       toSizes.push(toState.computedSize);
       origTranslates.push(node.translate());
@@ -574,34 +584,49 @@ export class Layout extends Node {
       nodes[i].size(fromSizes[i]);
     }
 
-    // INVERT — set positions to the "from" state
-    for (let i = 0; i < nodes.length; i++) {
-      const actualPos = nodes[i].computedPosition();
-      nodes[i].translate(
-        origTranslates[i].add(fromPositions[i]).sub(actualPos),
-      );
-    }
-
-    // PLAY — interpolate size and position each frame
-    yield* tween(time, raw => {
-      const t = timingFunction(raw);
-      for (let i = 0; i < nodes.length; i++) {
-        nodes[i].size(Vector2.lerp(fromSizes[i], toSizes[i], t));
+    // Helper: set node i's translate so its WORLD position matches
+    // `desiredWorld`. Converts the world-space delta into the node's
+    // parent-local frame (necessary if any ancestor has rotation/scale).
+    const setToWorldPos = (i: number, desiredWorld: Vector2) => {
+      const node = nodes[i];
+      const actualWorld = node.absolutePosition();
+      const parent = node.parent();
+      if (parent) {
+        const m = parent.worldToLocal();
+        const desiredLocal = desiredWorld.transformAsPoint(m);
+        const actualLocal = actualWorld.transformAsPoint(m);
+        node.translate(origTranslates[i].add(desiredLocal).sub(actualLocal));
+      } else {
+        node.translate(origTranslates[i].add(desiredWorld).sub(actualWorld));
       }
-      for (let i = 0; i < nodes.length; i++) {
-        const desiredPos = Vector2.lerp(fromPositions[i], toPositions[i], t);
-        const actualPos = nodes[i].computedPosition();
-        nodes[i].translate(origTranslates[i].add(desiredPos).sub(actualPos));
-      }
-    });
+    };
 
-    // Restore: unlock sizes, restore desiredSize so flex takes over
-    for (let i = 0; i < nodes.length; i++) {
-      const toState = to.get(nodes[i])!;
-      nodes[i].releaseSize();
-      nodes[i].width(toState.desiredSize.x as SignalValue<Length>);
-      nodes[i].height(toState.desiredSize.y as SignalValue<Length>);
-      nodes[i].translate(origTranslates[i]);
+    try {
+
+      // PLAY — interpolate size and world position each frame
+      yield* tween(time, raw => {
+        const t = timingFunction(raw);
+        for (let i = 0; i < nodes.length; i++) {
+          nodes[i].size(Vector2.lerp(fromSizes[i], toSizes[i], t));
+        }
+        for (let i = 0; i < nodes.length; i++) {
+          const desiredWorld = Vector2.lerp(fromAbsolute[i], toAbsolute[i], t);
+          setToWorldPos(i, desiredWorld);
+        }
+      });
+    } finally {
+      // Restore: unlock sizes, restore desiredSize so flex takes over.
+      // Wrapped in `finally` so an exception or cancellation mid-tween
+      // still releases the size lock — otherwise sizeLockCounter would
+      // stay > 0 permanently, leaving the node stuck with
+      // flex-grow/shrink forced to 0.
+      for (let i = 0; i < nodes.length; i++) {
+        const toState = to.get(nodes[i])!;
+        nodes[i].releaseSize();
+        nodes[i].width(toState.desiredSize.x as SignalValue<Length>);
+        nodes[i].height(toState.desiredSize.y as SignalValue<Length>);
+        nodes[i].translate(origTranslates[i]);
+      }
     }
   }
 
@@ -1200,8 +1225,8 @@ export class Layout extends Node {
    * @remarks
    * Uses the FLIP technique to smoothly animate existing siblings to their new
    * positions. The new node is inserted with layout disabled, then layout is
-   * enabled to compute final positions. By default, the new node scales from 0
-   * to 1. A custom animation callback can be provided to override this.
+   * enabled to compute final positions. The new node scales from 0
+   * to 1.
    *
    * @param node - The node(s) to insert.
    * @param index - The index at which to insert the node(s).
