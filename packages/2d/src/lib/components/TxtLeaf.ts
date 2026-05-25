@@ -186,14 +186,6 @@ export class TxtLeaf extends Shape {
     const parentRect = el.getBoundingClientRect();
     const {width, height} = this.size();
 
-    const fp = {
-      fontSize: this.fontSize(),
-      fontFamily: this.fontFamily(),
-      fontWeight: this.fontWeight(),
-      fontStyle: this.fontStyle(),
-      fill: String(this.fill() ?? '#ffffff'),
-    };
-
     interface CharInfo {
       x: number;
       y: number;
@@ -240,13 +232,22 @@ export class TxtLeaf extends Shape {
     this.leafMaxCharHeight = infos.reduce((m, ci) => Math.max(m, ci.h), 0);
     this.leafCharTexts = infos.map(ci => ci.char);
 
+    // Inheritable font props use reactive getters, not snapshots, so tweens
+    // on the parent's signals (fontWeight, fontSize, fontFamily, fontStyle,
+    // fill) automatically propagate to every char. Writing directly to a
+    // char's signal (e.g. `chars[3].fontWeight(900)`) detaches that char
+    // from the parent — the explicit set replaces the reactive computation.
     this.charStates = infos.map(
       ci =>
         new TxtChar({
-          ...fp,
           text: ci.char,
           x: ci.x,
           y: ci.y,
+          fontSize: () => this.fontSize(),
+          fontFamily: () => this.fontFamily(),
+          fontWeight: () => this.fontWeight(),
+          fontStyle: () => this.fontStyle(),
+          fill: () => String(this.fill() ?? '#ffffff'),
         }),
     );
 
