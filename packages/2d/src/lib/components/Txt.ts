@@ -16,6 +16,7 @@ import {
   tween,
 } from '@motion-canvas/core';
 import {computed, initial, nodeName, signal} from '../decorators';
+import {fontRegistry} from '../text/fontRegistry';
 import {is} from '../utils';
 import {Node} from './Node';
 import {Shape, ShapeProps} from './Shape';
@@ -32,6 +33,32 @@ export interface TxtProps extends ShapeProps {
 
 @nodeName('Txt')
 export class Txt extends Shape {
+  /**
+   * Registry of semantic font names → CSS font-family strings.
+   *
+   * Set or extend this map at app start to give scenes brand-named fonts:
+   *
+   * ```ts
+   * Txt.fonts.warmPlayful = '"Fraunces", serif';
+   * Txt.fonts.body = '"Inter", "Noto Sans", "Noto Sans SC", sans-serif';
+   * // or bulk assign:
+   * Object.assign(Txt.fonts, { warmFormal: '"Lora", serif', mono: '"JetBrains Mono", monospace' });
+   * ```
+   *
+   * Then in a scene:
+   *
+   * ```tsx
+   * <Txt fontFamily="warmPlayful" text="Hello" />
+   * ```
+   *
+   * `fontFamily` resolves in this order: exact registry match, then literal
+   * pass-through for font stacks (containing `,`, `(`, or starting with a
+   * quote), CSS generics (`serif` etc.), and capitalised family names
+   * (`Arial`, `Times New Roman`). Lowercase keys missing from the registry
+   * log a one-time console warning.
+   */
+  public static readonly fonts: Record<string, string> = fontRegistry;
+
   /**
    * Create a bold text node.
    *

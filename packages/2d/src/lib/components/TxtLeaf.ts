@@ -13,6 +13,7 @@ import {
   nodeName,
   signal,
 } from '../decorators';
+import {resolveFontFamily} from '../text/fontRegistry';
 import {segment} from '../text/segmenter';
 import {roundPx} from '../utils';
 import {Node, NodeProps} from './Node';
@@ -411,7 +412,7 @@ export class TxtLeaf extends Shape {
       if (scl.x !== 1 || scl.y !== 1) context.scale(scl.x, scl.y);
       context.globalAlpha *= opacity;
 
-      context.font = `${ch.fontStyle()} ${ch.fontWeight()} ${ch.fontSize()}px ${ch.fontFamily()}`;
+      context.font = `${ch.fontStyle()} ${ch.fontWeight()} ${ch.fontSize()}px ${resolveFontFamily(ch.fontFamily())}`;
       context.textBaseline = 'middle';
       context.textAlign = 'center';
 

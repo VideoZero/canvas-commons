@@ -55,6 +55,7 @@ import {
   LengthLimit,
   TextWrap,
 } from '../partials';
+import {resolveFontFamily} from '../text/fontRegistry';
 import {drawLine, drawPivot, is, roundPx} from '../utils';
 import {Node, NodeProps} from './Node';
 import type {ComponentChildren} from './types';
@@ -1172,7 +1173,7 @@ export class Layout extends Node {
 
   @computed()
   protected applyFont() {
-    this.element.style.fontFamily = this.fontFamily();
+    this.element.style.fontFamily = resolveFontFamily(this.fontFamily());
     this.element.style.fontSize = `${this.fontSize()}px`;
     this.element.style.fontStyle = this.fontStyle();
 
