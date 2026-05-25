@@ -342,7 +342,7 @@ export class CodeBlock extends Shape {
     if (!CodeBlock.initialized()) return;
 
     this.requestFontUpdate();
-    this.applyStyle(context);
+    this.applyStyle(context, this.getCacheBBox());
     context.font = this.styles.font;
     context.textBaseline = 'top';
     const lh = parseFloat(this.styles.lineHeight);

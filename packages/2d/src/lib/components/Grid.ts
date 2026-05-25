@@ -93,7 +93,7 @@ export class Grid extends Shape {
 
   protected override drawShape(context: CanvasRenderingContext2D) {
     context.save();
-    this.applyStyle(context);
+    this.applyStyle(context, this.getCacheBBox());
     this.drawRipple(context);
 
     const spacing = this.spacing();

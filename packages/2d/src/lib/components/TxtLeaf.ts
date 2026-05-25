@@ -63,7 +63,7 @@ export class TxtLeaf extends Shape {
 
   protected override draw(context: CanvasRenderingContext2D) {
     this.requestFontUpdate();
-    this.applyStyle(context);
+    this.applyStyle(context, this.getCacheBBox());
     this.applyText(context);
     context.font = this.styles.font;
     context.textBaseline = 'bottom';

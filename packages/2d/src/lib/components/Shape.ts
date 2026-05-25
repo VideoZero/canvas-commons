@@ -184,10 +184,12 @@ export abstract class Shape extends Layout {
     this.element.dir = this.textDirection();
   }
 
-  protected applyStyle(context: CanvasRenderingContext2D) {
-    // Pass the local bbox so CSS-relative gradients (parseCSSGradient,
-    // SVG paint-server refs) can auto-fit the painted shape.
-    const bbox = this.getCacheBBox();
+  protected applyStyle(context: CanvasRenderingContext2D, bbox?: BBox) {
+    // bbox is supplied by callers in draw paths (where getCacheBBox is
+    // safely computable). Measurement-time callers (e.g. Code.desiredSize)
+    // pass nothing — measurement doesn't need a resolved gradient. Calling
+    // getCacheBBox here unconditionally would cycle with Layout for any
+    // component whose desiredSize() routes through applyStyle.
     context.fillStyle = resolveCanvasStyle(this.fill(), context, bbox);
     context.strokeStyle = resolveCanvasStyle(this.stroke(), context, bbox);
     context.lineWidth = this.lineWidth();
@@ -218,7 +220,7 @@ export abstract class Shape extends Layout {
       const hasStroke = this.lineWidth() > 0 && this.stroke() !== null;
       const hasFill = this.fill() !== null;
       context.save();
-      this.applyStyle(context);
+      this.applyStyle(context, this.getCacheBBox());
       this.drawRipple(context);
       if (this.strokeFirst()) {
         hasStroke && context.stroke(path);

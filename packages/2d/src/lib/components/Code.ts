@@ -492,7 +492,7 @@ export class Code extends Shape {
 
   protected override draw(context: CanvasRenderingContext2D): void {
     this.requestFontUpdate();
-    this.applyStyle(context);
+    this.applyStyle(context, this.getCacheBBox());
     this.applyText(context);
     const size = this.computedSize();
     const drawingInfo = this.drawingInfo();
