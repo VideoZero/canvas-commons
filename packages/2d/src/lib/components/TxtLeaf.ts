@@ -13,6 +13,7 @@ import {
   nodeName,
   signal,
 } from '../decorators';
+import {segment} from '../text/segmenter';
 import {roundPx} from '../utils';
 import {Node, NodeProps} from './Node';
 import {Shape, ShapeProps} from './Shape';
@@ -143,17 +144,6 @@ export class TxtLeaf extends Shape {
   })
   protected static formatter: HTMLDivElement;
 
-  @lazy(() => {
-    try {
-      return new (Intl as any).Segmenter(undefined, {
-        granularity: 'grapheme',
-      });
-    } catch (e) {
-      return null;
-    }
-  })
-  protected static readonly segmenter: any;
-
   @initial('')
   @interpolation(textLerp)
   @signal()
@@ -220,9 +210,13 @@ export class TxtLeaf extends Shape {
     for (const childNode of el.childNodes) {
       if (!childNode.textContent) continue;
       const content = childNode.textContent;
-      for (let i = 0; i < content.length; i++) {
-        range.setStart(childNode, i);
-        range.setEnd(childNode, i + 1);
+      // Iterate by grapheme cluster, not UTF-16 code unit. Complex scripts
+      // (Devanagari, Arabic, Thai) and emoji ZWJ sequences are multi-codepoint
+      // clusters that the shaper renders as a single glyph; splitting them
+      // by code unit destroys shaping.
+      for (const seg of segment(content, 'grapheme')) {
+        range.setStart(childNode, seg.index);
+        range.setEnd(childNode, seg.index + seg.segment.length);
         const r = range.getBoundingClientRect();
         const rawY = r.top - parentRect.top;
         if (Math.abs(rawY - curY) > 2) {
@@ -234,7 +228,7 @@ export class TxtLeaf extends Shape {
           y: height / -2 + rawY + r.height / 2,
           w: r.width,
           h: r.height,
-          char: content[i],
+          char: seg.segment,
           lineIndex: lineIdx,
         });
       }
@@ -531,15 +525,8 @@ export class TxtLeaf extends Shape {
 
     if (wrap) {
       this.element.innerText = '';
-
-      if (TxtLeaf.segmenter) {
-        for (const word of TxtLeaf.segmenter.segment(this.text())) {
-          this.element.appendChild(document.createTextNode(word.segment));
-        }
-      } else {
-        for (const word of this.text().split('')) {
-          this.element.appendChild(document.createTextNode(word));
-        }
+      for (const seg of segment(this.text(), 'grapheme')) {
+        this.element.appendChild(document.createTextNode(seg.segment));
       }
     } else if (this.styles.whiteSpace === 'pre') {
       this.element.innerText = '';
