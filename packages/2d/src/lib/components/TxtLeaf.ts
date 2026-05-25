@@ -136,6 +136,15 @@ export interface LeafLineInfo {
   charIndices: number[];
 }
 
+interface CharInfo {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  char: string;
+  lineIndex: number;
+}
+
 @nodeName('TxtLeaf')
 export class TxtLeaf extends Shape {
   @lazy(() => {
@@ -152,12 +161,11 @@ export class TxtLeaf extends Shape {
 
   // ─── Split state ──────────────────────────────────────────────
 
+  // charStates holds TxtChar instances created at split time. Identity is
+  // stable across font changes; only their x/y/font signals are reactive.
+  // The leaf* getters below derive everything else from charLayout() so a
+  // font tween automatically reflows lines, words, and bbox metrics.
   public charStates: TxtChar[] = [];
-  public leafLineInfos: LeafLineInfo[] = [];
-  public leafLineWidths: number[] = [];
-  public leafMaxCharHeight = 0;
-  public leafCharTexts: string[] = [];
-  public leafWords: TxtChar[][] = [];
 
   protected _splitMode = false;
   protected _splitClip = false;
@@ -178,22 +186,29 @@ export class TxtLeaf extends Shape {
 
   // ─── Per-character measurement & split ────────────────────────
 
-  public splitIntoChars(clip = false, clipPadding = 4): this {
-    if (this._splitMode) this.unsplitChars();
+  /**
+   * Re-measures every grapheme's bbox via DOM ranges. Wrapped in `@computed`
+   * so the result is cached and only re-runs when one of its signal
+   * dependencies changes — primarily text, fontFamily, fontSize, fontWeight,
+   * fontStyle. TxtChar instances created in {@link splitIntoChars} read x/y
+   * out of this array reactively, so a tween on the parent's font signals
+   * automatically repositions every char.
+   */
+  @computed()
+  protected charLayout(): CharInfo[] {
+    // Touch the signals we want to track as dependencies. Reading the values
+    // (instead of just declaring "depends on") is how @computed records its
+    // deps. text() is read implicitly via element.childNodes content.
+    void this.fontFamily();
+    void this.fontSize();
+    void this.fontWeight();
+    void this.fontStyle();
+    void this.text();
 
     this.requestLayoutUpdate();
     const el = this.element;
     const parentRect = el.getBoundingClientRect();
     const {width, height} = this.size();
-
-    interface CharInfo {
-      x: number;
-      y: number;
-      w: number;
-      h: number;
-      char: string;
-      lineIndex: number;
-    }
 
     const infos: CharInfo[] = [];
     const range = document.createRange();
@@ -227,22 +242,40 @@ export class TxtLeaf extends Shape {
       }
     }
 
-    if (infos.length === 0) return this;
+    return infos;
+  }
 
-    this.leafMaxCharHeight = infos.reduce((m, ci) => Math.max(m, ci.h), 0);
-    this.leafCharTexts = infos.map(ci => ci.char);
+  public splitIntoChars(clip = false, clipPadding = 4): this {
+    if (this._splitMode) this.unsplitChars();
 
-    // Inheritable font props use reactive getters, not snapshots, so tweens
-    // on the parent's signals (fontWeight, fontSize, fontFamily, fontStyle,
-    // fill) automatically propagate to every char. Writing directly to a
-    // char's signal (e.g. `chars[3].fontWeight(900)`) detaches that char
-    // from the parent — the explicit set replaces the reactive computation.
+    // Set split mode early so any descendant code (TxtChar getters) sees the
+    // correct state on the first read.
+    this._splitMode = true;
+    this._splitClip = clip;
+    this._splitClipPadding = clipPadding;
+
+    const infos = this.charLayout();
+    if (infos.length === 0) {
+      this._splitMode = false;
+      return this;
+    }
+
+    // Inheritable font props AND x/y positions use reactive getters. Tweens
+    // on the parent's fontWeight/fontSize/fontFamily/fontStyle/fill/text now
+    // re-trigger `charLayout()` which produces fresh per-char positions, and
+    // every TxtChar pulls its current x/y from there. Writing directly to a
+    // char's signal (e.g. `chars[3].x(50)`) replaces the getter with a value
+    // — that char detaches from the parent and stops auto-reflowing.
+    //
+    // Everything else (line groupings, word groupings, max char height,
+    // char-text list) lives in @computed getters that derive from
+    // charLayout() too — see leafLineInfos / leafWords below.
     this.charStates = infos.map(
-      ci =>
+      (ci, idx) =>
         new TxtChar({
           text: ci.char,
-          x: ci.x,
-          y: ci.y,
+          x: () => this.charLayout()[idx]?.x ?? ci.x,
+          y: () => this.charLayout()[idx]?.y ?? ci.y,
           fontSize: () => this.fontSize(),
           fontFamily: () => this.fontFamily(),
           fontWeight: () => this.fontWeight(),
@@ -251,22 +284,39 @@ export class TxtLeaf extends Shape {
         }),
     );
 
-    // Build line infos
+    return this;
+  }
+
+  // ─── Reactive leaf metrics ────────────────────────────────────
+  // All four are derived from charLayout(), so they re-compute on the same
+  // signal changes (fontWeight, fontSize, fontFamily, fontStyle, text).
+
+  @computed()
+  public leafCharTexts(): string[] {
+    if (!this._splitMode) return [];
+    return this.charLayout().map(g => g.char);
+  }
+
+  @computed()
+  public leafMaxCharHeight(): number {
+    if (!this._splitMode) return 0;
+    return this.charLayout().reduce((m, g) => Math.max(m, g.h), 0);
+  }
+
+  @computed()
+  public leafLineInfos(): LeafLineInfo[] {
+    if (!this._splitMode) return [];
+    const infos = this.charLayout();
     const byLine = new Map<number, {ci: CharInfo; idx: number}[]>();
     for (let i = 0; i < infos.length; i++) {
       const ci = infos[i];
       if (!byLine.has(ci.lineIndex)) byLine.set(ci.lineIndex, []);
       byLine.get(ci.lineIndex)!.push({ci, idx: i});
     }
-
-    this.leafLineInfos = [];
-    this.leafLineWidths = [];
+    const result: LeafLineInfo[] = [];
     const entries = [...byLine.entries()].sort(([a], [b]) => a - b);
     for (const [, lcs] of entries) {
-      let x0 = Infinity,
-        y0 = Infinity,
-        x1 = -Infinity,
-        y1 = -Infinity;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       const charIndices: number[] = [];
       for (const {ci, idx} of lcs) {
         x0 = Math.min(x0, ci.x - ci.w / 2);
@@ -275,12 +325,21 @@ export class TxtLeaf extends Shape {
         y1 = Math.max(y1, ci.y + ci.h / 2);
         charIndices.push(idx);
       }
-      this.leafLineWidths.push(x1 - x0);
-      this.leafLineInfos.push({x0, y0, x1, y1, charIndices});
+      result.push({x0, y0, x1, y1, charIndices});
     }
+    return result;
+  }
 
-    // Detect words
-    this.leafWords = [];
+  @computed()
+  public leafLineWidths(): number[] {
+    return this.leafLineInfos().map(l => l.x1 - l.x0);
+  }
+
+  @computed()
+  public leafWords(): TxtChar[][] {
+    if (!this._splitMode) return [];
+    const infos = this.charLayout();
+    const result: TxtChar[][] = [];
     let curWord: TxtChar[] = [];
     for (let i = 0; i < infos.length; i++) {
       const isBreak =
@@ -288,29 +347,22 @@ export class TxtLeaf extends Shape {
         infos[i].char === '\n' ||
         (i > 0 && infos[i].lineIndex !== infos[i - 1].lineIndex);
       if (isBreak && curWord.length > 0) {
-        this.leafWords.push([...curWord]);
+        result.push([...curWord]);
         curWord = [];
       }
       if (infos[i].char !== ' ' && infos[i].char !== '\n') {
         curWord.push(this.charStates[i]);
       }
     }
-    if (curWord.length > 0) this.leafWords.push(curWord);
-
-    this._splitMode = true;
-    this._splitClip = clip;
-    this._splitClipPadding = clipPadding;
-    return this;
+    if (curWord.length > 0) result.push(curWord);
+    return result;
   }
 
   public unsplitChars(): this {
     if (!this._splitMode) return this;
     this.charStates = [];
-    this.leafLineInfos = [];
-    this.leafLineWidths = [];
-    this.leafMaxCharHeight = 0;
-    this.leafCharTexts = [];
-    this.leafWords = [];
+    // leaf* computed getters automatically return [] / 0 while _splitMode
+    // is false, so no explicit reset needed.
     this._splitMode = false;
     this._splitClip = false;
     return this;
@@ -442,7 +494,7 @@ export class TxtLeaf extends Shape {
     };
 
     if (this._splitClip) {
-      for (const line of this.leafLineInfos) {
+      for (const line of this.leafLineInfos()) {
         const pad = this._splitClipPadding;
         context.save();
         context.beginPath();

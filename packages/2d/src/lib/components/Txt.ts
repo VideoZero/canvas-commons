@@ -282,9 +282,9 @@ export class Txt extends Shape {
     this.lineWidths = [];
     this.forEachLeaf(this, leaf => {
       this.chars.push(...leaf.charStates);
-      this.words.push(...leaf.leafWords);
-      this.maxCharHeight = Math.max(this.maxCharHeight, leaf.leafMaxCharHeight);
-      this.lineWidths.push(...leaf.leafLineWidths);
+      this.words.push(...leaf.leafWords());
+      this.maxCharHeight = Math.max(this.maxCharHeight, leaf.leafMaxCharHeight());
+      this.lineWidths.push(...leaf.leafLineWidths());
     });
     if (this.smooth) this.enableSmooth();
     this.isSplit = true;
@@ -321,13 +321,14 @@ export class Txt extends Shape {
     const leaves: TxtLeaf[] = [];
     this.forEachLeaf(this, leaf => leaves.push(leaf));
     for (const leaf of leaves) {
-      if (lineIndex < offset + leaf.leafLineInfos.length) {
+      const lineInfos = leaf.leafLineInfos();
+      if (lineIndex < offset + lineInfos.length) {
         const localLine = lineIndex - offset;
-        return leaf.leafLineInfos[localLine].charIndices.map(
+        return lineInfos[localLine].charIndices.map(
           i => leaf.charStates[i],
         );
       }
-      offset += leaf.leafLineInfos.length;
+      offset += lineInfos.length;
     }
     return [];
   }
@@ -339,15 +340,16 @@ export class Txt extends Shape {
     this.forEachLeaf(this, leaf => leaves.push(leaf));
     for (const leaf of leaves) {
       const localIdx = charIdx - charOffset;
+      const lineInfos = leaf.leafLineInfos();
       if (localIdx >= 0 && localIdx < leaf.charStates.length) {
-        for (let li = 0; li < leaf.leafLineInfos.length; li++) {
-          if (leaf.leafLineInfos[li].charIndices.includes(localIdx)) {
+        for (let li = 0; li < lineInfos.length; li++) {
+          if (lineInfos[li].charIndices.includes(localIdx)) {
             return lineOffset + li;
           }
         }
       }
       charOffset += leaf.charStates.length;
-      lineOffset += leaf.leafLineInfos.length;
+      lineOffset += lineInfos.length;
     }
     return -1;
   }
