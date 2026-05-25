@@ -87,10 +87,15 @@ If you're not interested in animating SVG, you can use {@link Img} instead.
 export class SVG extends Shape {
   @lazy(() => {
     const element = document.createElement('div');
+    // Off-distribution `color` so `getComputedStyle(...).fill === ...color`
+    // in `getElementStyle()` unambiguously means the element used
+    // `currentColor` (i.e. not coincidence).
+    element.style.color = SVG.currentColorSentinel;
     View2D.shadowRoot.appendChild(element);
     return element;
   })
   protected static containerElement: HTMLDivElement;
+  private static readonly currentColorSentinel = '#010203';
   private static svgNodesPool: Record<string, SVGDocumentData> = {};
 
   /**
@@ -687,25 +692,72 @@ export class SVG extends Shape {
     // `Gradient` instance via `resolvePaintServer`; falls back to the
     // inherited paint when the referenced element isn't a gradient (or
     // can't be parsed).
-    const paint = (val: string | null, inherited: any) => {
+    const paint = (
+      val: string | null,
+      rawAttr: string | null,
+      uaDefault: string,
+      inherited: any,
+    ) => {
       if (!val) return inherited;
+      // MathJax (and similar) emit `<defs><path/></defs>` + `<use href>`.
+      // When extracting through `<use>` we recurse into the referenced
+      // `<path>`, but `getComputedStyle` on that path reflects the
+      // def-site cascade (typically UA default), not the use-site
+      // cascade we want. When the element has no explicit paint
+      // attribute and the computed value is just the UA default, prefer
+      // the inheritedStyle passed down from the use site. This must
+      // come before the `none`/`transparent` short-circuit below, since
+      // for stroke the UA default *is* `none`.
+      if (!rawAttr && val === uaDefault) return inherited;
       if (val === 'none' || val === 'transparent') return null;
       if (val.startsWith('url(')) {
         return resolveSvgPaintServer(val, svgRoot) ?? inherited;
       }
+      // `currentColor` resolves to the computed `color`. The container
+      // sets `color` to a sentinel so this match is unambiguous, not
+      // coincidental. Returning the literal string lets per-instance
+      // `processElementStyle()` substitute `this.fill` / `this.stroke`
+      // (parse results are statically cached across instances, so the
+      // substitution has to stay deferred).
+      if (val === cs.color) return 'currentColor';
       return val;
     };
 
-    const numAttr = (raw: string | null, inherited: any) => {
+    const numAttr = (
+      raw: string | null,
+      rawAttr: string | null,
+      uaDefault: number,
+      inherited: any,
+    ) => {
       if (raw == null || raw === '') return inherited;
       const n = parseFloat(raw);
-      return Number.isFinite(n) ? n : inherited;
+      if (!Number.isFinite(n)) return inherited;
+      // Same `<use>` def-site cascade leak as in `paint()`: if the
+      // element has no explicit attribute and the value equals the SVG
+      // UA default, prefer the inherited value from the use site.
+      if (!rawAttr && n === uaDefault) return inherited;
+      return n;
     };
 
     return {
-      fill: paint(cs.fill, inheritedStyle.fill),
-      stroke: paint(cs.stroke, inheritedStyle.stroke),
-      lineWidth: numAttr(cs.strokeWidth, inheritedStyle.lineWidth),
+      fill: paint(
+        cs.fill,
+        element.getAttribute('fill'),
+        'rgb(0, 0, 0)',
+        inheritedStyle.fill,
+      ),
+      stroke: paint(
+        cs.stroke,
+        element.getAttribute('stroke'),
+        'none',
+        inheritedStyle.stroke,
+      ),
+      lineWidth: numAttr(
+        cs.strokeWidth,
+        element.getAttribute('stroke-width'),
+        1,
+        inheritedStyle.lineWidth,
+      ),
       lineCap:
         this.parseLineCap(cs.strokeLinecap) ?? inheritedStyle.lineCap,
       lineJoin:
@@ -806,11 +858,14 @@ export class SVG extends Shape {
         return;
       }
 
+      // Pass the `<use>` element's own resolved style (not the use's
+      // parent's `inheritedStyle`) so the referenced element inherits
+      // from the use site — matching SVG's `<use>` shadow-tree semantics.
       yield* SVG.extractElementNodes(
         hrefElement,
         svgRoot,
         transformMatrix,
-        inheritedStyle,
+        style,
       );
     } else if (child.tagName === 'path') {
       const data = child.getAttribute('d');
