@@ -190,7 +190,7 @@ export class TxtLeaf extends Shape {
   public splitIntoChars(clip = false, clipPadding = 4): this {
     if (this._splitMode) this.unsplitChars();
 
-    this.requestFontUpdate();
+    this.requestLayoutUpdate();
     const el = this.element;
     const parentRect = el.getBoundingClientRect();
     const {width, height} = this.size();
