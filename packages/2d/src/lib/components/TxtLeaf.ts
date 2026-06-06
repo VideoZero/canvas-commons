@@ -574,21 +574,28 @@ export class TxtLeaf extends Shape {
         this.styles.getPropertyValue('text-align');
     }
 
+    // Treat the literal two-character escape "\n" (backslash + n) — commonly
+    // emitted by code generators, LLM agents, and unparsed JSON — as a real
+    // newline. A genuine "\n" newline character is already a newline and is
+    // left untouched by this replace.
+    const text = this.text().replace(/\\n/g, '\n');
+
     const wrap =
       this.styles.whiteSpace !== 'nowrap' && this.styles.whiteSpace !== 'pre';
 
     if (wrap) {
       this.element.innerText = '';
-      for (const seg of segment(this.text(), 'grapheme')) {
+      for (const seg of segment(text, 'grapheme')) {
         this.element.appendChild(document.createTextNode(seg.segment));
       }
     } else if (this.styles.whiteSpace === 'pre') {
       this.element.innerText = '';
-      for (const line of this.text().split('\n')) {
+      for (const line of text.split('\n')) {
         this.element.appendChild(document.createTextNode(line + '\n'));
       }
     } else {
-      this.element.innerText = this.text();
+      // The innerText setter converts "\n" into <br> elements for us.
+      this.element.innerText = text;
     }
   }
 }
