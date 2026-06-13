@@ -16,6 +16,7 @@ module.exports = {
         'legacy',
         'player',
         'echarts',
+        'rig',
         'shiki',
         'ui',
         'vite-plugin',

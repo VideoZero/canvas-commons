@@ -1,0 +1,28 @@
+{
+  "name": "@motion-canvas/rig",
+  "version": "0.1.0",
+  "description": "Composable 2D rigging, IK, and character animation for Motion Canvas",
+  "main": "lib/index.js",
+  "types": "./lib/index.d.ts",
+  "author": "motion-canvas",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsc -w",
+    "build": "tsc"
+  },
+  "exports": {
+    ".": {"types": "./lib/index.d.ts", "import": "./lib/index.js"},
+    "./ik": {"types": "./lib/ik/index.d.ts", "import": "./lib/ik/index.js"},
+    "./svg": {"types": "./lib/svg/index.d.ts", "import": "./lib/svg/index.js"},
+    "./gaits": {"types": "./lib/gaits/index.d.ts", "import": "./lib/gaits/index.js"}
+  },
+  "sideEffects": false,
+  "files": [
+    "lib",
+    "src"
+  ],
+  "dependencies": {
+    "@motion-canvas/2d": "^3.18.0-alpha.0",
+    "@motion-canvas/core": "^3.18.0-alpha.0"
+  }
+}
