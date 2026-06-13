@@ -39,7 +39,7 @@ export {Rig, poseFK, solveChain} from './skeleton';
 export type {RigOptions, BoneDef, ChainDef, SkeletonTemplate} from './skeleton';
 
 // BEHAVIORS — pure, seek-deterministic motion you compose into a pose(t).
-export {bindPose, compose, plantedFoot, walkBody, solveLimb, springChain, wave} from './characters';
+export {bindPose, compose, plantedFoot, walkBody, solveLimb, springChain, wave, nod, lookAt} from './characters';
 export type {
   Pose,
   PoseFn,
@@ -48,7 +48,17 @@ export type {
   WalkBodyOptions,
   SpringChainOptions,
   WaveOptions,
+  NodOptions,
+  LookAtOptions,
 } from './characters';
+
+// SEQUENCING — sequence/cross-fade clips into one timeline (the state machine).
+export {blendPoses, sequence, stateMachine} from './characters';
+export type {Segment, StateMachineBuilder} from './characters';
+
+// LOCOMOTION — a continuous, foot-locked biped controller with an inertial torso.
+export {locomotion} from './characters';
+export type {LocomotionOptions, SpeedKey} from './characters';
 
 // ANIMATION LIBRARIES — generic clips keyed by skeleton (overlay with `compose`).
 export {biped, quadruped} from './characters';
@@ -56,6 +66,7 @@ export type {
   BipedWalkOptions,
   BipedIdleOptions,
   BipedWaveOptions,
+  BipedJumpOptions,
   QuadrupedWalkOptions,
   QuadrupedIdleOptions,
   WagTailOptions,

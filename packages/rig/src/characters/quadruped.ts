@@ -29,6 +29,10 @@ export interface QuadrupedWalkOptions {
   bendBias?: number;
   /** Head bob amplitude in degrees (default 4); 0 to disable. */
   headBob?: number;
+  /** Toe angle (deg) at toe-off, the start of swing (default 22). */
+  toeLift?: number;
+  /** Toe angle (deg) at touch-down, the end of swing (default -14). */
+  toeStrike?: number;
 }
 
 export interface WagTailOptions {
@@ -53,6 +57,59 @@ export interface QuadrupedIdleOptions {
  * Animation library for the {@link QUADRUPED} skeleton. As with {@link biped},
  * these read the rig's own bone lengths, so they retarget across animals.
  */
+/** Resolved numeric parameters shared by the quadruped `walk` and `run`. */
+interface QuadGaitParams {
+  startX: number;
+  groundY: number;
+  period: number;
+  stand: number;
+  speed: number;
+  stride: number;
+  lift: number;
+  bob: number;
+  duty: number;
+  bendBias: number;
+  headBob: number;
+  toeLift: number;
+  toeStrike: number;
+}
+
+/** The shared quadruped locomotion cycle — `walk` and `run` differ only in defaults. */
+function quadGaitCycle(rig: Rig, p: QuadGaitParams): PoseFn {
+  const off = (r: string) => rig.restOffset(r);
+  const {startX, groundY, period, stand, speed, stride, lift, bob, duty, bendBias} = p;
+  const root0 = rig.template.root;
+  return t => {
+    const root = walkBody(t, {startX, speed, groundY, stand, period, bob});
+    const m: Pose = {[root0]: root};
+    for (const r of Object.keys(rig.joints)) m[r] = root.add(off(r)); // rigid base
+    for (const {leg, phase, bend} of LEGS) {
+      if (!rig.joints[`${leg}Hip`]) continue;
+      const tgt = plantedFoot(t, {
+        startX, groundY, stride, period, lift, hipOffsetX: off(`${leg}Hip`).x, phase, duty,
+      });
+      const [, knee, ankle] = solveLimb(
+        rig, [`${leg}Hip`, `${leg}Knee`, `${leg}Ankle`], m[`${leg}Hip`], tgt, bend * bendBias,
+      );
+      m[`${leg}Knee`] = knee;
+      m[`${leg}Ankle`] = ankle;
+      if (rig.joints[`${leg}Toe`]) {
+        const footLen = rig.boneLength(`${leg}Ankle`, `${leg}Toe`);
+        const fp = t / period + phase;
+        const fFrac = fp - Math.floor(fp);
+        const swg = fFrac < duty ? 0 : (fFrac - duty) / (1 - duty);
+        const footAngle = fFrac < duty ? 0 : p.toeLift + (p.toeStrike - p.toeLift) * swg;
+        m[`${leg}Toe`] = ankle.add(rotateDeg(new Vector2(footLen, 0), footAngle));
+      }
+    }
+    if (p.headBob && rig.joints.neck && rig.joints.headCenter) {
+      const hb = Math.sin((2 * Math.PI * t) / period) * p.headBob;
+      m.headCenter = m.neck.add(rotateDeg(off('headCenter').sub(off('neck')), hb));
+    }
+    return m;
+  };
+}
+
 export const quadruped = {
   /**
    * A four-beat lateral-sequence walk: legs solved with FABRIK to world-fixed,
@@ -60,52 +117,54 @@ export const quadruped = {
    * Pair with {@link wagTail} / {@link flickEars} via {@link compose}.
    */
   walk(rig: Rig, opts: QuadrupedWalkOptions = {}): PoseFn {
-    const off = (r: string) => rig.restOffset(r);
     const reach =
       rig.boneLength('frontLeftHip', 'frontLeftKnee') +
       rig.boneLength('frontLeftKnee', 'frontLeftAnkle');
-    const startX = opts.startX ?? 0;
-    const groundY = opts.groundY ?? 0;
     const period = opts.period ?? 1.2;
-    const stand = opts.stand ?? reach * 0.85;
     const speed = opts.speed ?? (reach * 0.9) / period;
-    const stride = speed * period;
-    const lift = opts.lift ?? reach * 0.14;
-    const bob = opts.bob ?? 1.5;
-    const duty = opts.duty ?? 0.7;
-    const bendBias = opts.bendBias ?? 16;
-    const headBobAmt = opts.headBob ?? 4;
-    const root0 = rig.template.root;
+    return quadGaitCycle(rig, {
+      startX: opts.startX ?? 0,
+      groundY: opts.groundY ?? 0,
+      period,
+      stand: opts.stand ?? reach * 0.85,
+      speed,
+      stride: speed * period,
+      lift: opts.lift ?? reach * 0.14,
+      bob: opts.bob ?? 1.5,
+      duty: opts.duty ?? 0.7,
+      bendBias: opts.bendBias ?? 16,
+      headBob: opts.headBob ?? 4,
+      toeLift: opts.toeLift ?? 22,
+      toeStrike: opts.toeStrike ?? -14,
+    });
+  },
 
-    return t => {
-      const root = walkBody(t, {startX, speed, groundY, stand, period, bob});
-      const m: Pose = {[root0]: root};
-      for (const r of Object.keys(rig.joints)) m[r] = root.add(off(r)); // rigid base
-      for (const {leg, phase, bend} of LEGS) {
-        if (!rig.joints[`${leg}Hip`]) continue;
-        const tgt = plantedFoot(t, {
-          startX, groundY, stride, period, lift, hipOffsetX: off(`${leg}Hip`).x, phase, duty,
-        });
-        const [, knee, ankle] = solveLimb(
-          rig, [`${leg}Hip`, `${leg}Knee`, `${leg}Ankle`], m[`${leg}Hip`], tgt, bend * bendBias,
-        );
-        m[`${leg}Knee`] = knee;
-        m[`${leg}Ankle`] = ankle;
-        if (rig.joints[`${leg}Toe`]) {
-          const footLen = rig.boneLength(`${leg}Ankle`, `${leg}Toe`);
-          const fp = t / period + phase;
-          const fFrac = fp - Math.floor(fp);
-          const swg = fFrac < duty ? 0 : (fFrac - duty) / (1 - duty);
-          const footAngle = fFrac < duty ? 0 : 22 - 36 * swg;
-          m[`${leg}Toe`] = ankle.add(rotateDeg(new Vector2(footLen, 0), footAngle));
-        }
-      }
-      if (headBobAmt && rig.joints.neck && rig.joints.headCenter) {
-        const hb = Math.sin((2 * Math.PI * t) / period) * headBobAmt;
-        m.headCenter = m.neck.add(rotateDeg(off('headCenter').sub(off('neck')), hb));
-      }
-      return m;
-    };
+  /**
+   * A run: lower duty (a suspension phase), longer stride, higher lift and more
+   * body bounce. Same four-beat cycle as {@link walk} with hotter defaults — for
+   * a true bounding gallop, phase-group the legs and lower `duty` further.
+   */
+  run(rig: Rig, opts: QuadrupedWalkOptions = {}): PoseFn {
+    const reach =
+      rig.boneLength('frontLeftHip', 'frontLeftKnee') +
+      rig.boneLength('frontLeftKnee', 'frontLeftAnkle');
+    const period = opts.period ?? 0.6;
+    const speed = opts.speed ?? (reach * 2.0) / period;
+    return quadGaitCycle(rig, {
+      startX: opts.startX ?? 0,
+      groundY: opts.groundY ?? 0,
+      period,
+      stand: opts.stand ?? reach * 0.82,
+      speed,
+      stride: speed * period,
+      lift: opts.lift ?? reach * 0.26,
+      bob: opts.bob ?? 4,
+      duty: opts.duty ?? 0.45,
+      bendBias: opts.bendBias ?? 18,
+      headBob: opts.headBob ?? 7,
+      toeLift: opts.toeLift ?? 28,
+      toeStrike: opts.toeStrike ?? -18,
+    });
   },
 
   /** Overlay: wag the tail about the root. */
