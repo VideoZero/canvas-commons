@@ -47,9 +47,22 @@ export interface Transform3DProps extends NodeProps {
    */
   shadowBlur?: SignalValue<number>;
   /**
-   * {@inheritDoc Transform3D.shadowOffset}
+   * {@inheritDoc Transform3D.lightElevation}
    */
-  shadowOffset?: SignalValue<PossibleVector2>;
+  lightElevation?: SignalValue<number>;
+  /**
+   * {@inheritDoc Transform3D.shadowSpread}
+   */
+  shadowSpread?: SignalValue<number>;
+  /**
+   * Extra pixels rendered around the frame, fixed at construction. The default
+   * `0` makes the offscreen target exactly the scene frame — cheapest, and
+   * anything transformed past the frame edge isn't in the output anyway. Raise
+   * it only when content starts OUTSIDE the frame and rotates into view; those
+   * pixels must be captured to appear.
+   * @defaultValue 0
+   */
+  renderMargin?: number;
 }
 
 const vertexSource = `
@@ -226,22 +239,34 @@ export class Transform3D extends Node {
   /**
    * Blur radius of the cast shadow, in pixels. Larger = softer / higher-float.
    */
-  @initial(24)
+  @initial(12)
   @signal()
   public declare readonly shadowBlur: SimpleSignal<number, this>;
 
   /**
-   * Offset of the cast shadow from the element, in pixels.
+   * How far above the frame's top edge the (point) light sits, in pixels.
    *
    * @remarks
-   * The light is treated as coming from straight overhead, so the default
-   * `[0, 40]` drops the shadow directly below the element. (When a configurable
-   * light direction is added later, this is what it will drive.)
+   * The shadow is cast by a single light fired top-down from above the frame —
+   * the silhouette is projected away from this point onto a back-plane, so it
+   * falls BELOW the element and grows with distance instead of sitting flat
+   * behind it. Higher values place the light further up the frame, lengthening
+   * the cast.
    */
-  @initial([0, 40])
-  @vector2Signal('shadowOffset')
-  public declare readonly shadowOffset: Vector2Signal<this>;
+  @initial(250)
+  @signal()
+  public declare readonly lightElevation: SimpleSignal<number, this>;
 
+  /**
+   * How much larger than the element the cast shadow grows (the umbra spread
+   * of the point light). `0` keeps it the element's size; `0.05` (default)
+   * enlarges it ~5%. Works together with {@link lightElevation}.
+   */
+  @initial(0.05)
+  @signal()
+  public declare readonly shadowSpread: SimpleSignal<number, this>;
+
+  private readonly margin: number;
   private bufferCanvas: HTMLCanvasElement | null = null;
   private bufferContext: CanvasRenderingContext2D | null = null;
   private glCanvas: HTMLCanvasElement | null = null;
@@ -255,7 +280,9 @@ export class Transform3D extends Node {
   private texture: WebGLTexture | null = null;
 
   public constructor(props?: Transform3DProps) {
-    super({...props});
+    const {renderMargin, ...rest} = props ?? {};
+    super(rest);
+    this.margin = renderMargin ?? 0;
   }
 
   private initGL(width: number, height: number): void {
@@ -346,8 +373,16 @@ export class Transform3D extends Node {
 
   protected override draw(context: CanvasRenderingContext2D): void {
     const size = this.view().size();
-    const width = Math.max(1, Math.ceil(size.x));
-    const height = Math.max(1, Math.ceil(size.y));
+    const frameW = Math.max(1, Math.ceil(size.x));
+    const frameH = Math.max(1, Math.ceil(size.y));
+
+    // The offscreen target is the frame plus `renderMargin` of headroom on each
+    // side. Margin defaults to 0 — exactly the scene frame — since anything
+    // transformed past the frame edge isn't in the output anyway. Margin only
+    // matters for content that starts off-frame and rotates into view.
+    const m = this.margin;
+    const width = frameW + 2 * m;
+    const height = frameH + 2 * m;
 
     if (!this.gl) {
       this.bufferCanvas = document.createElement('canvas');
@@ -357,7 +392,9 @@ export class Transform3D extends Node {
       this.initGL(width, height);
     }
 
-    // Render the child subtree to the offscreen 2D buffer.
+    // Render the child subtree to the offscreen 2D buffer. The node origin maps
+    // to the buffer centre, so the frame occupies the middle and the margin is
+    // headroom on every side.
     const buffer = this.bufferContext!;
     buffer.clearRect(0, 0, width, height);
     buffer.save();
@@ -426,24 +463,31 @@ export class Transform3D extends Node {
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    // Cast shadow: a dark, blurred, offset copy of the transformed element,
-    // drawn UNDERNEATH it. `brightness(0)` collapses the silhouette to black
-    // while keeping its alpha (and its perspective shape), so the shadow tracks
-    // the tilt for free; the offset drops it below (light from straight above).
+    const halfW = width / 2;
+    const halfH = height / 2;
+
+    // Cast shadow from a single light fired top-down from ABOVE the frame.
+    // We scale the rendered silhouette up about that light point (a point-light
+    // projection onto a back-plane): because the element sits below the light,
+    // scaling pushes the shadow DOWN and makes it larger the further it is from
+    // the light — a real overhead cast, not a flat copy stuck behind the card.
+    // `brightness(0)` keeps the silhouette's alpha + perspective shape, so the
+    // tilt flows through the shadow for free.
     const shadowOpacity = this.shadowOpacity();
     if (shadowOpacity > 0) {
-      const shadowOffset = this.shadowOffset();
+      const k = 1 + this.shadowSpread();
+      const lightX = 0;
+      const lightY = -frameH / 2 - this.lightElevation(); // above the frame's top edge
       context.save();
       context.globalAlpha = shadowOpacity;
       context.filter = `brightness(0) blur(${this.shadowBlur()}px)`;
-      context.drawImage(
-        this.glCanvas!,
-        -width / 2 + shadowOffset.x,
-        -height / 2 + shadowOffset.y,
-      );
+      context.translate(lightX, lightY);
+      context.scale(k, k);
+      context.translate(-lightX, -lightY);
+      context.drawImage(this.glCanvas!, -halfW, -halfH);
       context.restore();
     }
 
-    context.drawImage(this.glCanvas!, -width / 2, -height / 2);
+    context.drawImage(this.glCanvas!, -halfW, -halfH);
   }
 }
