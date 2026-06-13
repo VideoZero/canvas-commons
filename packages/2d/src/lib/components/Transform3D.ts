@@ -1,5 +1,6 @@
 import {
   all,
+  BBox,
   DEFAULT,
   easeInOutCubic,
   PossibleVector2,
@@ -8,12 +9,13 @@ import {
   threadable,
   ThreadGenerator,
   TimingFunction,
+  Vector2,
   Vector2Signal,
 } from '@motion-canvas/core';
-import {initial, nodeName, signal, vector2Signal} from '../decorators';
-import {Layout, LayoutProps} from './Layout';
+import {computed, initial, nodeName, signal, vector2Signal} from '../decorators';
+import {Node, NodeProps} from './Node';
 
-export interface Transform3DProps extends LayoutProps {
+export interface Transform3DProps extends NodeProps {
   /**
    * {@inheritDoc Transform3D.rotationX}
    */
@@ -55,14 +57,18 @@ export interface Transform3DProps extends LayoutProps {
    */
   shadowSpread?: SignalValue<number>;
   /**
-   * Extra pixels of headroom rendered around the element's size, fixed at
-   * construction. The element is sized by its `size`/`width`/`height` (default
-   * `'100%'`); the offscreen target is that size plus this margin. Raise it if
-   * a strong perspective/`translateZ` magnification pushes content past the
-   * element's own bounds, or if content starts outside it and rotates in.
-   * @defaultValue 0
+   * Headroom rendered around the content, fixed at construction.
+   *
+   * @remarks
+   * The offscreen target is sized to the content's bounding box plus this
+   * margin on every side — 3D rotation/perspective magnify the content, and
+   * the margin keeps it from clipping against its own buffer. A number is
+   * pixels per side. The special value `'frame'` expands the target to the
+   * whole scene frame (the view size) — maximum headroom, for transforms that
+   * fling content far — at the cost of a larger texture upload.
+   * @defaultValue 200
    */
-  renderMargin?: number;
+  renderMargin?: number | 'frame';
 }
 
 const vertexSource = `
@@ -163,7 +169,7 @@ function compileShader(
  * ```
  */
 @nodeName('Transform3D')
-export class Transform3D extends Layout {
+export class Transform3D extends Node {
   /**
    * Rotation around the horizontal (X) axis, in degrees. Tips the content
    * forward/back.
@@ -266,7 +272,7 @@ export class Transform3D extends Layout {
   @signal()
   public declare readonly shadowSpread: SimpleSignal<number, this>;
 
-  private readonly headroom: number;
+  private readonly headroom: number | 'frame';
   private bufferCanvas: HTMLCanvasElement | null = null;
   private bufferContext: CanvasRenderingContext2D | null = null;
   private glCanvas: HTMLCanvasElement | null = null;
@@ -285,11 +291,8 @@ export class Transform3D extends Layout {
 
   public constructor(props?: Transform3DProps) {
     const {renderMargin, ...rest} = props ?? {};
-    // Fill the parent by default (so under the view it spans the frame, matching
-    // the old behaviour), and don't flex-arrange children — they keep their own
-    // positions; this node only transforms them. Both are overridable.
-    super({size: '100%', layout: false, ...rest});
-    this.headroom = renderMargin ?? 0;
+    super(rest);
+    this.headroom = renderMargin ?? 200;
   }
 
   private initGL(width: number, height: number): void {
@@ -396,16 +399,59 @@ export class Transform3D extends Layout {
     );
   }
 
+  /**
+   * The raw bounding box of the children (before any 3D transform), in local
+   * space. The offscreen buffer is sized from this.
+   */
+  @computed()
+  protected contentBBox(): BBox {
+    const points: Vector2[] = [];
+    for (const child of this.children()) {
+      const childBox = child.cacheBBox();
+      const matrix = child.localToParent();
+      points.push(...childBox.corners.map(p => p.transformAsPoint(matrix)));
+    }
+    return points.length > 0 ? BBox.fromPoints(...points) : new BBox();
+  }
+
+  /**
+   * The bounds this node actually renders into: the content plus the render
+   * headroom (or the whole frame for `renderMargin: 'frame'`). This must match
+   * what {@link draw} composites — otherwise, when the node is cached, the
+   * transformed output and shadow get clipped to the raw content size.
+   */
+  public override cacheBBox(): BBox {
+    const content = this.contentBBox();
+    if (this.headroom === 'frame') {
+      const view = this.view().size();
+      const w = Math.max(content.width, view.x);
+      const h = Math.max(content.height, view.y);
+      return new BBox(content.center.x - w / 2, content.center.y - h / 2, w, h);
+    }
+    return content.expand(this.headroom);
+  }
+
   protected override draw(context: CanvasRenderingContext2D): void {
-    // The offscreen target follows the ELEMENT's size (`size`/`width`/`height`,
-    // default '100%') plus `renderMargin` of headroom — not the whole frame.
-    const elem = this.computedSize();
-    const m = this.headroom;
-    const width = Math.max(1, Math.ceil(elem.width) + 2 * m);
-    const height = Math.max(1, Math.ceil(elem.height) + 2 * m);
-    // The cast-shadow light is anchored to the top of the scene FRAME, not the
-    // element, so its position is driven by the frame height.
-    const frameH = Math.max(1, Math.ceil(this.view().size().y));
+    // The offscreen target is sized to the CONTENT's bounding box plus the
+    // renderMargin headroom — the node itself stays a plain Node and doesn't
+    // participate in layout. `renderMargin: 'frame'` instead grows the target to
+    // the whole scene frame for transforms that fling content far.
+    const bbox = this.contentBBox();
+    const view = this.view().size();
+    const frameH = Math.max(1, Math.ceil(view.y));
+
+    let width: number;
+    let height: number;
+    if (this.headroom === 'frame') {
+      width = Math.max(1, Math.ceil(bbox.width), Math.ceil(view.x));
+      height = Math.max(1, Math.ceil(bbox.height), Math.ceil(view.y));
+    } else {
+      width = Math.max(1, Math.ceil(bbox.width) + 2 * this.headroom);
+      height = Math.max(1, Math.ceil(bbox.height) + 2 * this.headroom);
+    }
+    // Content centre in the node's local space — the buffer is centred on it so
+    // rotation pivots about the content, wherever the children sit.
+    const center = bbox.center;
 
     if (!this.gl) {
       this.bufferCanvas = document.createElement('canvas');
@@ -416,20 +462,19 @@ export class Transform3D extends Layout {
       this.bufW = width;
       this.bufH = height;
     } else if (width !== this.bufW || height !== this.bufH) {
-      // Element size changed (e.g. a tweened width, or the view resized) —
-      // resize the target, reusing the GL context.
+      // Content size changed (e.g. the children resized) — resize the target,
+      // reusing the GL context.
       this.resize(width, height);
       this.bufW = width;
       this.bufH = height;
     }
 
-    // Render the child subtree to the offscreen 2D buffer. The element origin
-    // maps to the buffer centre, so rotation pivots about the element centre and
-    // the margin is headroom on every side.
+    // Render the child subtree to the offscreen 2D buffer, with the content
+    // centre mapped to the buffer centre.
     const buffer = this.bufferContext!;
     buffer.clearRect(0, 0, width, height);
     buffer.save();
-    buffer.translate(width / 2, height / 2);
+    buffer.translate(width / 2 - center.x, height / 2 - center.y);
     for (const child of this.sortedChildren()) {
       child.render(buffer);
     }
@@ -494,8 +539,9 @@ export class Transform3D extends Layout {
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    const halfW = width / 2;
-    const halfH = height / 2;
+    // Buffer top-left in the node's local space (buffer centre = content centre).
+    const dx = center.x - width / 2;
+    const dy = center.y - height / 2;
 
     // Cast shadow from a single light fired top-down from ABOVE the frame.
     // We scale the rendered silhouette up about that light point (a point-light
@@ -515,10 +561,10 @@ export class Transform3D extends Layout {
       context.translate(lightX, lightY);
       context.scale(k, k);
       context.translate(-lightX, -lightY);
-      context.drawImage(this.glCanvas!, -halfW, -halfH);
+      context.drawImage(this.glCanvas!, dx, dy);
       context.restore();
     }
 
-    context.drawImage(this.glCanvas!, -halfW, -halfH);
+    context.drawImage(this.glCanvas!, dx, dy);
   }
 }
