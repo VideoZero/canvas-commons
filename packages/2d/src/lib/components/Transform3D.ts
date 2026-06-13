@@ -11,9 +11,9 @@ import {
   Vector2Signal,
 } from '@motion-canvas/core';
 import {initial, nodeName, signal, vector2Signal} from '../decorators';
-import {Node, NodeProps} from './Node';
+import {Layout, LayoutProps} from './Layout';
 
-export interface Transform3DProps extends NodeProps {
+export interface Transform3DProps extends LayoutProps {
   /**
    * {@inheritDoc Transform3D.rotationX}
    */
@@ -55,11 +55,11 @@ export interface Transform3DProps extends NodeProps {
    */
   shadowSpread?: SignalValue<number>;
   /**
-   * Extra pixels rendered around the frame, fixed at construction. The default
-   * `0` makes the offscreen target exactly the scene frame — cheapest, and
-   * anything transformed past the frame edge isn't in the output anyway. Raise
-   * it only when content starts OUTSIDE the frame and rotates into view; those
-   * pixels must be captured to appear.
+   * Extra pixels of headroom rendered around the element's size, fixed at
+   * construction. The element is sized by its `size`/`width`/`height` (default
+   * `'100%'`); the offscreen target is that size plus this margin. Raise it if
+   * a strong perspective/`translateZ` magnification pushes content past the
+   * element's own bounds, or if content starts outside it and rotates in.
    * @defaultValue 0
    */
   renderMargin?: number;
@@ -163,7 +163,7 @@ function compileShader(
  * ```
  */
 @nodeName('Transform3D')
-export class Transform3D extends Node {
+export class Transform3D extends Layout {
   /**
    * Rotation around the horizontal (X) axis, in degrees. Tips the content
    * forward/back.
@@ -217,11 +217,11 @@ export class Transform3D extends Node {
    * 740px-wide card, `[-370, 0]` swings `rotationY` open like a door from the
    * left edge, and `[0, -240]` flips `rotationX` from the top edge like a lid.
    *
-   * It's a pixel offset (not a CSS-style percentage) because the component
-   * composites its children to a frame-sized buffer and does not measure the
-   * child's bounding box — pass half the content's width/height to reach an
-   * edge. Perspective is applied outside the pivot, so the camera stays fixed
-   * and only the content swings.
+   * The pivot is relative to the element's centre. It's a pixel offset (not a
+   * CSS-style percentage) so it's independent of how the element is sized —
+   * pass half the content's width/height to reach an edge. Perspective is
+   * applied outside the pivot, so the camera stays fixed and only the content
+   * swings.
    */
   @initial(0)
   @vector2Signal('transformOrigin')
@@ -266,7 +266,7 @@ export class Transform3D extends Node {
   @signal()
   public declare readonly shadowSpread: SimpleSignal<number, this>;
 
-  private readonly margin: number;
+  private readonly headroom: number;
   private bufferCanvas: HTMLCanvasElement | null = null;
   private bufferContext: CanvasRenderingContext2D | null = null;
   private glCanvas: HTMLCanvasElement | null = null;
@@ -278,11 +278,18 @@ export class Transform3D extends Node {
   private positionBuffer: WebGLBuffer | null = null;
   private texCoordBuffer: WebGLBuffer | null = null;
   private texture: WebGLTexture | null = null;
+  // Current offscreen target size; the canvases are resized (context reused)
+  // when the element's size changes.
+  private bufW = 0;
+  private bufH = 0;
 
   public constructor(props?: Transform3DProps) {
     const {renderMargin, ...rest} = props ?? {};
-    super(rest);
-    this.margin = renderMargin ?? 0;
+    // Fill the parent by default (so under the view it spans the frame, matching
+    // the old behaviour), and don't flex-arrange children — they keep their own
+    // positions; this node only transforms them. Both are overridable.
+    super({size: '100%', layout: false, ...rest});
+    this.headroom = renderMargin ?? 0;
   }
 
   private initGL(width: number, height: number): void {
@@ -316,14 +323,9 @@ export class Transform3D extends Node {
       uTexture: gl.getUniformLocation(program, 'uTexture'),
     };
 
-    // Full-screen quad in pixel coordinates — geometry never changes.
+    // Full-screen quad in pixel coordinates — refilled if the size changes.
     this.positionBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
-    // prettier-ignore
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      0, 0,      width, 0,    0, height,
-      0, height, width, 0,    width, height,
-    ]), gl.STATIC_DRAW);
+    this.uploadQuad(width, height);
 
     this.texCoordBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer);
@@ -343,6 +345,29 @@ export class Transform3D extends Node {
     // upload so it matches the premultipliedAlpha context and the premultiplied
     // blend below — otherwise edges fringe dark over the background.
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+  }
+
+  private uploadQuad(width: number, height: number): void {
+    const gl = this.gl!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+    // prettier-ignore
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      0, 0,      width, 0,    0, height,
+      0, height, width, 0,    width, height,
+    ]), gl.STATIC_DRAW);
+  }
+
+  // Resize the offscreen target when the element's size changes. The GL context
+  // is REUSED (browsers cap the number of live contexts) — only the canvases
+  // and the size-dependent quad geometry are updated.
+  private resize(width: number, height: number): void {
+    this.bufferCanvas!.width = width;
+    this.bufferCanvas!.height = height;
+    this.glCanvas!.width = width;
+    this.glCanvas!.height = height;
+    this.uploadQuad(width, height);
+    // Resizing a canvas can reset some context state; re-assert the unpack flag.
+    this.gl!.pixelStorei(this.gl!.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
   }
 
   /**
@@ -372,17 +397,15 @@ export class Transform3D extends Node {
   }
 
   protected override draw(context: CanvasRenderingContext2D): void {
-    const size = this.view().size();
-    const frameW = Math.max(1, Math.ceil(size.x));
-    const frameH = Math.max(1, Math.ceil(size.y));
-
-    // The offscreen target is the frame plus `renderMargin` of headroom on each
-    // side. Margin defaults to 0 — exactly the scene frame — since anything
-    // transformed past the frame edge isn't in the output anyway. Margin only
-    // matters for content that starts off-frame and rotates into view.
-    const m = this.margin;
-    const width = frameW + 2 * m;
-    const height = frameH + 2 * m;
+    // The offscreen target follows the ELEMENT's size (`size`/`width`/`height`,
+    // default '100%') plus `renderMargin` of headroom — not the whole frame.
+    const elem = this.computedSize();
+    const m = this.headroom;
+    const width = Math.max(1, Math.ceil(elem.width) + 2 * m);
+    const height = Math.max(1, Math.ceil(elem.height) + 2 * m);
+    // The cast-shadow light is anchored to the top of the scene FRAME, not the
+    // element, so its position is driven by the frame height.
+    const frameH = Math.max(1, Math.ceil(this.view().size().y));
 
     if (!this.gl) {
       this.bufferCanvas = document.createElement('canvas');
@@ -390,11 +413,19 @@ export class Transform3D extends Node {
       this.bufferCanvas.height = height;
       this.bufferContext = this.bufferCanvas.getContext('2d')!;
       this.initGL(width, height);
+      this.bufW = width;
+      this.bufH = height;
+    } else if (width !== this.bufW || height !== this.bufH) {
+      // Element size changed (e.g. a tweened width, or the view resized) —
+      // resize the target, reusing the GL context.
+      this.resize(width, height);
+      this.bufW = width;
+      this.bufH = height;
     }
 
-    // Render the child subtree to the offscreen 2D buffer. The node origin maps
-    // to the buffer centre, so the frame occupies the middle and the margin is
-    // headroom on every side.
+    // Render the child subtree to the offscreen 2D buffer. The element origin
+    // maps to the buffer centre, so rotation pivots about the element centre and
+    // the margin is headroom on every side.
     const buffer = this.bufferContext!;
     buffer.clearRect(0, 0, width, height);
     buffer.save();
