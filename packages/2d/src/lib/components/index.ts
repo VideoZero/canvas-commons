@@ -22,6 +22,7 @@ export * from './ScenePlayback';
 export * from './Shape';
 export * from './Spline';
 export * from './Stack';
+export * from './Transform3D';
 export * from './Txt';
 export * from './TxtLeaf';
 export * from './Video';
