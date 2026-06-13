@@ -57,6 +57,14 @@ export interface Transform3DProps extends NodeProps {
    */
   shadowSpread?: SignalValue<number>;
   /**
+   * {@inheritDoc Transform3D.depth}
+   */
+  depth?: SignalValue<number>;
+  /**
+   * {@inheritDoc Transform3D.depthShade}
+   */
+  depthShade?: SignalValue<number>;
+  /**
    * Headroom rendered around the content, fixed at construction.
    *
    * @remarks
@@ -99,10 +107,14 @@ const vertexSource = `
 const fragmentSource = `
   precision mediump float;
   uniform sampler2D uTexture;
+  uniform float uDarken;
   varying vec2 vTexCoord;
 
   void main() {
-    gl_FragColor = texture2D(uTexture, vTexCoord);
+    vec4 color = texture2D(uTexture, vTexCoord);
+    // Multiply RGB only (alpha is premultiplied) so the extruded depth layers
+    // can be shaded darker than the front face.
+    gl_FragColor = vec4(color.rgb * uDarken, color.a);
   }
 `;
 
@@ -112,6 +124,7 @@ interface Transform3DLocations {
   uTransform: WebGLUniformLocation | null;
   uResolution: WebGLUniformLocation | null;
   uTexture: WebGLUniformLocation | null;
+  uDarken: WebGLUniformLocation | null;
 }
 
 function compileShader(
@@ -272,6 +285,29 @@ export class Transform3D extends Node {
   @signal()
   public declare readonly shadowSpread: SimpleSignal<number, this>;
 
+  /**
+   * Extruded thickness in pixels — turns the flat card into a solid slab.
+   *
+   * @remarks
+   * `0` (the default) is a flat sheet. With `depth > 0` the content is drawn as
+   * a stack of copies stepping back along the card's own normal, so a tilt
+   * reveals a shaded edge — the "card has thickness" look. It's cheap: the
+   * single texture upload is reused for every layer. Best with opaque content
+   * (transparent content shows the stacked layers).
+   */
+  @initial(0)
+  @signal()
+  public declare readonly depth: SimpleSignal<number, this>;
+
+  /**
+   * How dark the back of the extruded slab gets, 0–1. `0` leaves the sides the
+   * same brightness as the face; `0.5` (default) fades the far edge to half,
+   * giving the slab its sense of volume.
+   */
+  @initial(0.5)
+  @signal()
+  public declare readonly depthShade: SimpleSignal<number, this>;
+
   private readonly headroom: number | 'frame';
   private bufferCanvas: HTMLCanvasElement | null = null;
   private bufferContext: CanvasRenderingContext2D | null = null;
@@ -324,6 +360,7 @@ export class Transform3D extends Node {
       uTransform: gl.getUniformLocation(program, 'uTransform'),
       uResolution: gl.getUniformLocation(program, 'uResolution'),
       uTexture: gl.getUniformLocation(program, 'uTexture'),
+      uDarken: gl.getUniformLocation(program, 'uDarken'),
     };
 
     // Full-screen quad in pixel coordinates — refilled if the size changes.
@@ -480,26 +517,32 @@ export class Transform3D extends Node {
     }
     buffer.restore();
 
-    // Compose the 3D transform. Rotation + depth are pivoted about the
-    // transform origin via the standard T(+P) · R · T(-P) sandwich, with
-    // perspective applied OUTSIDE so the camera stays fixed and only the
-    // content swings:
-    //   perspective → T(+origin) → rotX → rotY → rotZ → translateZ → T(-origin)
+    // Build the 3D transform for a given depth offset `z` (the slab is drawn as
+    // the same quad at stepped z values). Rotation + depth pivot about the
+    // transform origin via the T(+P) · R · Tz · T(-P) sandwich, with perspective
+    // applied OUTSIDE so the camera stays fixed and only the content swings:
+    //   perspective → T(+origin) → rotX → rotY → rotZ → z → T(-origin)
     const MatrixCtor =
       (globalThis as any).DOMMatrix || (globalThis as any).WebKitCSSMatrix;
-    const matrix = new MatrixCtor();
     const perspective = this.perspective();
-    if (perspective > 0) {
-      matrix.m34 = -1 / perspective;
-    }
     const origin = this.transformOrigin();
-    matrix.translateSelf(origin.x, origin.y, 0); // T(+P)
-    matrix.rotateSelf(this.rotationX(), this.rotationY(), this.rotationZ());
+    const rotX = this.rotationX();
+    const rotY = this.rotationY();
+    const rotZ = this.rotationZ();
+    const buildMatrix = (z: number) => {
+      const m = new MatrixCtor();
+      if (perspective > 0) {
+        m.m34 = -1 / perspective;
+      }
+      m.translateSelf(origin.x, origin.y, 0); // T(+P)
+      m.rotateSelf(rotX, rotY, rotZ);
+      if (z !== 0) {
+        m.translateSelf(0, 0, z);
+      }
+      m.translateSelf(-origin.x, -origin.y, 0); // T(-P)
+      return m;
+    };
     const tz = this.translateZ();
-    if (tz !== 0) {
-      matrix.translateSelf(0, 0, tz);
-    }
-    matrix.translateSelf(-origin.x, -origin.y, 0); // T(-P)
 
     const gl = this.gl!;
     const loc = this.locations!;
@@ -526,18 +569,35 @@ export class Transform3D extends Node {
       this.bufferCanvas!,
     );
 
-    // prettier-ignore
-    gl.uniformMatrix4fv(loc.uTransform, false, new Float32Array([
-      matrix.m11, matrix.m12, matrix.m13, matrix.m14,
-      matrix.m21, matrix.m22, matrix.m23, matrix.m24,
-      matrix.m31, matrix.m32, matrix.m33, matrix.m34,
-      matrix.m41, matrix.m42, matrix.m43, matrix.m44,
-    ]));
     gl.uniform2f(loc.uResolution, width, height);
-
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    const drawLayer = (m: any, darken: number) => {
+      // prettier-ignore
+      gl.uniformMatrix4fv(loc.uTransform, false, new Float32Array([
+        m.m11, m.m12, m.m13, m.m14,
+        m.m21, m.m22, m.m23, m.m24,
+        m.m31, m.m32, m.m33, m.m34,
+        m.m41, m.m42, m.m43, m.m44,
+      ]));
+      gl.uniform1f(loc.uDarken, darken);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    };
+
+    // Extruded depth: draw the slab back-to-front, far layers darker, then the
+    // front face at full brightness on top. ~1 layer per 2px of depth (capped),
+    // all reusing the single texture upload above.
+    const depth = this.depth();
+    if (depth > 0) {
+      const steps = Math.min(64, Math.max(2, Math.round(depth / 2)));
+      const shade = this.depthShade();
+      for (let i = steps; i >= 1; i--) {
+        const f = i / steps;
+        drawLayer(buildMatrix(tz - depth * f), 1 - shade * f);
+      }
+    }
+    drawLayer(buildMatrix(tz), 1);
 
     // Buffer top-left in the node's local space (buffer centre = content centre).
     const dx = center.x - width / 2;
