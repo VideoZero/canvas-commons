@@ -24,9 +24,11 @@
  * IK targets — like a planted foot — are expressed directly and never slide.
  */
 
-// 1. PARSE
-export {parseCharacterSvg, parseSvgRig} from './svg';
+// 1. PARSE / EXTRACT
+export {parseCharacterSvg, parseSvgRig, syntheticChar} from './svg';
 export type {ReferencePoint, PartDef, ParsedCharacter} from './svg';
+export {rigFromSvg, detectTemplate} from './extract';
+export type {RigFromSvgOptions} from './extract';
 
 // 2. SOLVE
 export {Fabrik, fabrik} from './ik';
@@ -35,3 +37,30 @@ export {BIPED, QUADRUPED, curveTemplate} from './gaits';
 // 3. BIND
 export {Rig, poseFK, solveChain} from './skeleton';
 export type {RigOptions, BoneDef, ChainDef, SkeletonTemplate} from './skeleton';
+
+// BEHAVIORS — pure, seek-deterministic motion you compose into a pose(t).
+export {bindPose, compose, plantedFoot, walkBody, solveLimb, springChain, wave} from './characters';
+export type {
+  Pose,
+  PoseFn,
+  PoseLayer,
+  PlantedFootOptions,
+  WalkBodyOptions,
+  SpringChainOptions,
+  WaveOptions,
+} from './characters';
+
+// ANIMATION LIBRARIES — generic clips keyed by skeleton (overlay with `compose`).
+export {biped, quadruped} from './characters';
+export type {
+  BipedWalkOptions,
+  BipedIdleOptions,
+  BipedWaveOptions,
+  QuadrupedWalkOptions,
+  QuadrupedIdleOptions,
+  WagTailOptions,
+  FlickEarsOptions,
+} from './characters';
+
+// UTIL
+export {rotateDeg, smoothstep} from './util';

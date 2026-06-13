@@ -22,6 +22,11 @@ export const QUADRUPED: SkeletonTemplate = {
     backRightHip: 'hipCenter',
     backRightKnee: 'backRightHip',
     backRightAnkle: 'backRightKnee',
+    // Optional flat feet — present only if the character defines toe points.
+    frontLeftToe: 'frontLeftAnkle',
+    frontRightToe: 'frontRightAnkle',
+    backLeftToe: 'backLeftAnkle',
+    backRightToe: 'backRightAnkle',
     // Optional decorations — present only if the character defines them.
     leftEarBase: 'headCenter',
     leftEarTip: 'leftEarBase',
@@ -43,6 +48,10 @@ export const QUADRUPED: SkeletonTemplate = {
     {name: 'blLower', pivot: 'backLeftKnee', end: 'backLeftAnkle', kind: 'line', width: 7},
     {name: 'brUpper', pivot: 'backRightHip', end: 'backRightKnee', kind: 'line', width: 7},
     {name: 'brLower', pivot: 'backRightKnee', end: 'backRightAnkle', kind: 'line', width: 7},
+    {name: 'flFoot', pivot: 'frontLeftAnkle', end: 'frontLeftToe', kind: 'line', width: 7},
+    {name: 'frFoot', pivot: 'frontRightAnkle', end: 'frontRightToe', kind: 'line', width: 7},
+    {name: 'blFoot', pivot: 'backLeftAnkle', end: 'backLeftToe', kind: 'line', width: 7},
+    {name: 'brFoot', pivot: 'backRightAnkle', end: 'backRightToe', kind: 'line', width: 7},
   ],
   chains: [
     {name: 'legFL', joints: ['frontLeftHip', 'frontLeftKnee', 'frontLeftAnkle']},

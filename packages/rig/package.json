@@ -14,7 +14,8 @@
     ".": {"types": "./lib/index.d.ts", "import": "./lib/index.js"},
     "./ik": {"types": "./lib/ik/index.d.ts", "import": "./lib/ik/index.js"},
     "./svg": {"types": "./lib/svg/index.d.ts", "import": "./lib/svg/index.js"},
-    "./gaits": {"types": "./lib/gaits/index.d.ts", "import": "./lib/gaits/index.js"}
+    "./gaits": {"types": "./lib/gaits/index.d.ts", "import": "./lib/gaits/index.js"},
+    "./characters": {"types": "./lib/characters/index.d.ts", "import": "./lib/characters/index.js"}
   },
   "sideEffects": false,
   "files": [

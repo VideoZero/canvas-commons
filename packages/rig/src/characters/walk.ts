@@ -1,0 +1,122 @@
+import {Vector2} from '@motion-canvas/core';
+import {fabrik} from '../ik';
+import type {Rig} from '../skeleton';
+import {smoothstep} from '../util/vec';
+
+export interface PlantedFootOptions {
+  /** World x where the walk begins (matches the body's `startX`). */
+  startX: number;
+  /** Ground level — the world y the foot is planted on. */
+  groundY: number;
+  /** Forward distance travelled per full stride (= speed × period). */
+  stride: number;
+  /** Seconds per stride. */
+  period: number;
+  /** Peak foot clearance during the swing phase. */
+  lift: number;
+  /** This leg's hip x-offset from the body root (so feet plant under hips). */
+  hipOffsetX?: number;
+  /** Gait phase offset in [0,1) — e.g. 0.5 for the opposite leg. */
+  phase?: number;
+  /**
+   * Stance **duty factor**: the fraction of the cycle the foot is planted
+   * (default 0.5). This sets the gait's character — a bipedal walk/run sits
+   * around 0.5, while a quadruped *walk* needs > 0.5 (≈0.7) so at least three
+   * feet stay grounded and the body doesn't hop. Lower → more airborne (a run).
+   */
+  duty?: number;
+  /** Fraction of a stride the contact point leads the hip (default 0.25). */
+  plantLead?: number;
+}
+
+/**
+ * World-space target for a planted foot at time `t`.
+ *
+ * Each cycle is `duty` stance + `(1 - duty)` swing. During **stance** the foot
+ * is pinned to a fixed world position, so as the body advances the planted foot
+ * travels backward relative to the body by exactly one stride — it never slides.
+ * During **swing** the foot eases forward one stride (smoothstep) and arcs up by
+ * `lift`.
+ *
+ * Because the plant position is locked to `stride`, this is the core of
+ * slide-free walking: drive the body forward at `stride / period` px·s⁻¹, phase
+ * each leg, and feed this target into a 2-bone IK solve ({@link solveLimb}). For
+ * a believable quadruped walk, phase the four legs evenly (0, 0.25, 0.5, 0.75)
+ * with `duty ≈ 0.7`.
+ */
+export function plantedFoot(t: number, opts: PlantedFootOptions): Vector2 {
+  const {
+    startX,
+    groundY,
+    stride,
+    period,
+    lift,
+    hipOffsetX = 0,
+    phase = 0,
+    duty = 0.5,
+    plantLead = 0.25,
+  } = opts;
+  const p = t / period + phase;
+  const n = Math.floor(p);
+  const f = p - n;
+  const plantX = startX + hipOffsetX + stride * plantLead + stride * (n - phase);
+  if (f < duty) return new Vector2(plantX, groundY); // stance: contact pinned
+  const s = (f - duty) / (1 - duty);
+  return new Vector2(plantX + stride * smoothstep(s), groundY - lift * Math.sin(Math.PI * s));
+}
+
+export interface WalkBodyOptions {
+  startX: number;
+  speed: number; // px·s⁻¹ — keep equal to stride / period for no foot slide
+  groundY: number;
+  stand: number; // hip height above ground
+  period: number;
+  bob?: number; // vertical bounce amplitude (default 3)
+}
+
+/**
+ * World-space body (root) position for a walk cycle: advances at constant
+ * `speed` and bobs twice per stride. Keep `speed === stride / period` so the
+ * planted feet from {@link plantedFoot} stay locked to the ground.
+ */
+export function walkBody(t: number, opts: WalkBodyOptions): Vector2 {
+  const bob = opts.bob ?? 3;
+  return new Vector2(
+    opts.startX + opts.speed * t,
+    opts.groundY - opts.stand - bob * Math.cos(4 * Math.PI * (t / opts.period - 0.25)),
+  );
+}
+
+/**
+ * Solve an IK limb (e.g. hip→knee→ankle) so its effector reaches `target` while
+ * its base stays at `base`, with a stable bend direction. Returns the solved
+ * joint positions (base … effector); the caller writes them into its pose.
+ *
+ * `bendBias` nudges the interior joints' seed sideways (in +x) so the limb bends
+ * consistently — positive for a knee that leads forward, negative to flip it.
+ */
+export function solveLimb(
+  rig: Rig,
+  roles: string[],
+  base: Vector2,
+  target: Vector2,
+  bendBias = 16,
+): Vector2[] {
+  const lengths: number[] = [];
+  for (let i = 0; i < roles.length - 1; i++) {
+    lengths.push(rig.boneLength(roles[i], roles[i + 1]));
+  }
+  const total = lengths.reduce((a, b) => a + b, 0) || 1;
+  // Seed along the base→target line, interior joints pushed toward the bend pole.
+  const seed: Vector2[] = [base];
+  let acc = 0;
+  for (let i = 0; i < lengths.length; i++) {
+    acc += lengths[i];
+    if (i === lengths.length - 1) {
+      seed.push(target);
+    } else {
+      seed.push(base.add(target.sub(base).scale(acc / total)).add(new Vector2(bendBias, 0)));
+    }
+  }
+  return fabrik(base, target, lengths, seed);
+}
