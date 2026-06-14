@@ -3,15 +3,13 @@ import {fabrik} from '../ik';
 import type {Rig} from '../skeleton';
 import {smoothstep} from '../util/vec';
 
-export interface PlantedFootOptions {
+export interface FootTargetOptions {
   /** World x where the walk begins (matches the body's `startX`). */
   startX: number;
   /** Ground level — the world y the foot is planted on. */
   groundY: number;
-  /** Forward distance travelled per full stride (= speed × period). */
+  /** Forward distance travelled per full stride. */
   stride: number;
-  /** Seconds per stride. */
-  period: number;
   /** Peak foot clearance during the swing phase. */
   lift: number;
   /** This leg's hip x-offset from the body root (so feet plant under hips). */
@@ -29,40 +27,45 @@ export interface PlantedFootOptions {
   plantLead?: number;
 }
 
+export interface PlantedFootOptions extends FootTargetOptions {
+  /** Seconds per stride. */
+  period: number;
+}
+
 /**
- * World-space target for a planted foot at time `t`.
+ * The shared **ground-interaction primitive**: the world-space target for a foot
+ * at gait-phase `cyc` (in cycles — `t / period + phase` for a constant cadence,
+ * or an accumulated `∫ v/stride dt` for a variable-speed controller).
  *
- * Each cycle is `duty` stance + `(1 - duty)` swing. During **stance** the foot
- * is pinned to a fixed world position, so as the body advances the planted foot
- * travels backward relative to the body by exactly one stride — it never slides.
- * During **swing** the foot eases forward one stride (smoothstep) and arcs up by
- * `lift`.
+ * Each cycle is `duty` stance + `(1 - duty)` swing. During **stance** the foot is
+ * pinned to a fixed point on a world lattice spaced exactly `stride` apart, so it
+ * never slides and the swing ends precisely where the next stance begins (no
+ * replant pop). During **swing** it eases forward one stride (smoothstep) and
+ * arcs up by `lift`.
  *
- * Because the plant position is locked to `stride`, this is the core of
- * slide-free walking: drive the body forward at `stride / period` px·s⁻¹, phase
- * each leg, and feed this target into a 2-bone IK solve ({@link solveLimb}). For
- * a believable quadruped walk, phase the four legs evenly (0, 0.25, 0.5, 0.75)
- * with `duty ≈ 0.7`.
+ * This is only the TARGET — solve the leg to it with FABRIK via
+ * {@link solveLimb}. Both {@link plantedFoot} (constant cadence: walk / run /
+ * quadruped) and the `locomotion` controller (variable speed) build on this, so
+ * every gait shares one foot/ground model.
  */
-export function plantedFoot(t: number, opts: PlantedFootOptions): Vector2 {
-  const {
-    startX,
-    groundY,
-    stride,
-    period,
-    lift,
-    hipOffsetX = 0,
-    phase = 0,
-    duty = 0.5,
-    plantLead = 0.25,
-  } = opts;
-  const p = t / period + phase;
-  const n = Math.floor(p);
-  const f = p - n;
+export function plantedFootAt(cyc: number, opts: FootTargetOptions): Vector2 {
+  const {startX, groundY, stride, lift, hipOffsetX = 0, phase = 0, duty = 0.5, plantLead = 0.25} = opts;
+  const n = Math.floor(cyc);
+  const f = cyc - n;
   const plantX = startX + hipOffsetX + stride * plantLead + stride * (n - phase);
-  if (f < duty) return new Vector2(plantX, groundY); // stance: contact pinned
+  if (f < duty) return new Vector2(plantX, groundY); // stance: contact pinned to the lattice
   const s = (f - duty) / (1 - duty);
   return new Vector2(plantX + stride * smoothstep(s), groundY - lift * Math.sin(Math.PI * s));
+}
+
+/**
+ * Constant-cadence planted foot at time `t` — {@link plantedFootAt} evaluated at
+ * gait-phase `t / period + phase`. Drive the body forward at `stride / period`
+ * px·s⁻¹, phase each leg, and feed this into {@link solveLimb}. For a believable
+ * quadruped walk, phase the four legs evenly (0, 0.25, 0.5, 0.75) with `duty ≈ 0.7`.
+ */
+export function plantedFoot(t: number, opts: PlantedFootOptions): Vector2 {
+  return plantedFootAt(t / opts.period + (opts.phase ?? 0), opts);
 }
 
 export interface WalkBodyOptions {

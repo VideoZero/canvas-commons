@@ -288,27 +288,41 @@ export const biped = {
       const foreRaise = armAt(Math.max(0, f - 0.05)) + 14; // forearm trails + slight elbow bend
       for (const s of ['left', 'right'] as const) {
         if (!rig.joints[`${s}Shoulder`]) continue;
+        // Mirror the rotation per side: the two rest arm-vectors are mirror images,
+        // so the SAME signed angle would throw one arm overhead and swing the other
+        // out sideways. Negating one side keeps the throw bilaterally symmetric.
+        const mir = s === 'left' ? 1 : -1;
         const sh = m[`${s}Shoulder`];
-        const el = sh.add(rotateDeg(off(`${s}Elbow`).sub(off(`${s}Shoulder`)), armRaise));
+        const el = sh.add(rotateDeg(off(`${s}Elbow`).sub(off(`${s}Shoulder`)), armRaise * mir));
         m[`${s}Elbow`] = el;
         if (rig.joints[`${s}Wrist`])
-          m[`${s}Wrist`] = el.add(rotateDeg(off(`${s}Wrist`).sub(off(`${s}Elbow`)), foreRaise));
+          m[`${s}Wrist`] = el.add(rotateDeg(off(`${s}Wrist`).sub(off(`${s}Elbow`)), foreRaise * mir));
       }
 
+      // Target LEG LENGTH across the clip. The foot is placed `ll` below the hip
+      // but clamped so it can never sink below the ground — so while the hips rise
+      // during launch the planted foot stays put and the leg EXTENDS into a real
+      // toe-off push, then tucks at the apex, then reaches back out to meet the
+      // floor. During the grounded crouch/absorb the clamp keeps the foot planted
+      // and the knees fold. (No `groundY - rise` gap → feet never detach.)
+      const ll =
+        f < 0.4 ? reach * 0.95 // crouch / anticipation (clamped to the floor)
+        : f < 0.5 ? reach * (0.95 + 0.05 * smoothstep((f - 0.4) / 0.1)) // explode to full extension
+        : f < 0.62 ? reach * (1.0 - 0.15 * smoothstep((f - 0.5) / 0.12)) // tuck the knees at the apex
+        : f < 0.72 ? reach * (0.85 + 0.13 * smoothstep((f - 0.62) / 0.1)) // reach back out for the ground
+        : reach * 0.95; // landing / absorb (clamped to the floor)
       for (const s of ['left', 'right'] as const) {
-        // Airborne (rise > 0): feet rise WITH the body, so the leg keeps a constant
-        // slightly-bent length and never locks straight. Grounded (rise ≤ 0): feet
-        // stay on the floor, so as the body sinks the knees fold to absorb.
-        const footY = rise > 0 ? groundY - rise : groundY;
+        const footX = baseX + off(`${s}Hip`).x;
+        const footY = Math.min(groundY, root.y + ll); // a foot never sinks below the ground
         const [, knee, ankle] = solveLimb(
           rig, [`${s}Hip`, `${s}Knee`, `${s}Ankle`], m[`${s}Hip`],
-          new Vector2(baseX + off(`${s}Hip`).x, footY), bendBias,
+          new Vector2(footX, footY), bendBias,
         );
         m[`${s}Knee`] = knee;
         m[`${s}Ankle`] = ankle;
         if (hasToes) {
           const footLen = rig.boneLength(`${s}Ankle`, `${s}Toe`);
-          const toeAngle = rise > 0 ? 32 : 0; // point toes in the air, flat on the ground
+          const toeAngle = footY < groundY - 0.5 ? 38 : 0; // point toes only when off the floor
           m[`${s}Toe`] = ankle.add(rotateDeg(new Vector2(footLen, 0), toeAngle));
         }
       }

@@ -39,12 +39,13 @@ export {Rig, poseFK, solveChain} from './skeleton';
 export type {RigOptions, BoneDef, ChainDef, SkeletonTemplate} from './skeleton';
 
 // BEHAVIORS — pure, seek-deterministic motion you compose into a pose(t).
-export {bindPose, compose, plantedFoot, walkBody, solveLimb, springChain, wave, nod, lookAt} from './characters';
+export {bindPose, compose, plantedFoot, plantedFootAt, walkBody, solveLimb, springChain, wave, nod, lookAt} from './characters';
 export type {
   Pose,
   PoseFn,
   PoseLayer,
   PlantedFootOptions,
+  FootTargetOptions,
   WalkBodyOptions,
   SpringChainOptions,
   WaveOptions,

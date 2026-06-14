@@ -2,7 +2,7 @@ import {Vector2} from '@motion-canvas/core';
 import type {Rig} from '../skeleton';
 import {rotateDeg, smoothstep} from '../util/vec';
 import type {Pose, PoseFn} from './bind';
-import {solveLimb} from './walk';
+import {plantedFootAt, solveLimb} from './walk';
 
 /** A target ground speed (px·s⁻¹) the body should reach by clip-local time `t`. */
 export interface SpeedKey {
@@ -89,14 +89,11 @@ export function locomotion(rig: Rig, opts: LocomotionOptions): PoseFn {
   const ks = opts.stiffness ?? 32;
   const kd = opts.damping ?? 5;
   const leanGain = opts.leanGain ?? 0.6;
-  const STRIDE = reach * 1.4; // world distance per full gait cycle (wide → legs extend)
-  // How far ahead of the hip a foot plants, as a fraction of a stride. Scales with
-  // speed so feet plant UNDER the hips at idle (no forward slide when starting) and
-  // reach further ahead only as the gait quickens.
-  const plantLead = (sp: number) => STRIDE * (0.04 + 0.24 * Math.min(1, sp / runSpeed));
+  const STRIDE = reach * 0.95; // world distance per full gait cycle
+  const PLANT_LEAD = 0.3; // constant stance centring (≈ walk duty / 2); never varies → no slip
   const kv = 9; // body-velocity responsiveness (acceleration smoothing)
   const hasToes = !!rig.joints.leftToe && !!rig.joints.rightToe;
-  const LEGS = [['left', 0], ['right', 0.5]] as const;
+  const LEGS = [['right', 0], ['left', 0.5]] as const; // right leg leads (steps out first)
 
   return tQuery => {
     const steps = Math.max(0, Math.round(tQuery / DT));
@@ -105,41 +102,106 @@ export function locomotion(rig: Rig, opts: LocomotionOptions): PoseFn {
     let phi = 0; // gait cycles accumulated
     let dev = 0; // torso x deviation from support (inertia)
     let devV = 0;
-    const lastK: Record<string, number> = {left: -1, right: -1};
-    const plantX: Record<string, number> = {left: startX, right: startX};
+    let accel = 0; // current body acceleration (px·s⁻²)
     for (let i = 0; i < steps; i++) {
       const tv = targetSpeedAt(keys, i * DT);
       const prevV = v;
       v += (tv - v) * Math.min(1, DT * kv);
       bodyX += v * DT;
-      const bodyA = (v - prevV) / DT;
+      accel = (v - prevV) / DT;
       phi += (v / STRIDE) * DT;
       // Torso inertia in the support frame: settles to 0 at constant speed,
       // kicked by acceleration → overshoots forward when the body brakes.
-      const devA = -ks * dev - kd * devV - bodyA;
+      const devA = -ks * dev - kd * devV - accel;
       devV += devA * DT;
       dev += devV * DT;
-      for (const [leg, lp] of LEGS) {
-        const k = Math.floor(phi + lp);
-        if (k > lastK[leg]) {
-          lastK[leg] = k;
-          plantX[leg] = bodyX + off(`${leg}Hip`).x + plantLead(v); // plant ahead of the hip
-        }
-      }
     }
 
     // Speed-shaped gait parameters (walk ⇄ run).
     const s = Math.min(1, v / runSpeed);
     const duty = 0.6 - 0.18 * s; // ≥0.5 walk → ~0.42 run
-    const lift = reach * (0.08 + 0.08 * s);
-    const stand = reach * (0.97 - 0.05 * s); // tall stance → legs read straight, not crouched
-    const bobAmp = 2 + 5 * s;
-    const liftScale = smoothstep(Math.min(1, v / 60)); // feet hug the ground near a stop
+    const lift = reach * (0.12 + 0.06 * s);
+    // Only collapse the swing arc once almost fully stopped, so a foot frozen
+    // mid-stride lowers to the ground — a moving walk always lifts (no drag).
+    const liftScale = smoothstep(Math.min(1, v / 30));
 
-    const rootX = bodyX + dev;
-    const lean = Math.max(-18, Math.min(18, -dev * leanGain));
-    const bobY = bobAmp * Math.cos(2 * Math.PI * (2 * phi - 0.5));
-    const root = new Vector2(rootX, groundY - stand - bobY);
+    // Settle weight: 1 at a standstill → 0 once walking. Near a stop the feet
+    // gather to a neutral, feet-together stance (and splay out again on the first
+    // step), done as lifted STEPS rather than a ground slide.
+    const rest = 1 - smoothstep(Math.min(1, v / 35));
+
+    // Hip height: a mean stand plus a vault that lifts the body up over the
+    // supporting leg at each mid-stance (so the stance leg straightens into an
+    // extended stride), and dips at contact. Both fade out as the body comes to
+    // rest, where the figure simply stands tall and still — no phantom gait wobble.
+    const standMean = reach * (0.9 - 0.04 * s) + reach * 0.06 * rest;
+    const vault = reach * 0.06 * Math.cos(4 * Math.PI * (phi - PLANT_LEAD)) * (1 - rest);
+
+    // ── Foot targets ─────────────────────────────────────────────────────────
+    // During the walk each foot is locked to the world lattice (no slip). As the
+    // body settles to a stop the feet GATHER to a neutral, feet-together stance —
+    // but ONE foot at a time: each foot owns half of the `rest` ramp, and each is
+    // lifted in an arc as it travels so it steps into place. A believable weight
+    // shift, not a two-foot hop or a slide. At walking speed `rest` is 0, so every
+    // foot just tracks the lattice and none of this runs.
+    const STEP_ORDER: Record<string, number> = {right: 1, left: 0}; // right steps out first
+    const footPos: Record<string, Vector2> = {};
+    const footStep: Record<string, number> = {}; // 0 planted … 1 mid-step (foot in the air)
+    const footTravel: Record<string, number> = {}; // how far this foot actually moves this step
+    for (const [leg, lp] of LEGS) {
+      const tgt = plantedFootAt(phi + lp, {
+        startX, groundY, stride: STRIDE, lift: lift * liftScale,
+        hipOffsetX: off(`${leg}Hip`).x, phase: lp, duty, plantLead: PLANT_LEAD,
+      });
+      const neutralX = bodyX + off(`${leg}Hip`).x;
+      // A foot NEVER steps backward to begin a walk: don't let it travel behind the
+      // spot it is standing on (its idle world position). It just stays planted
+      // there and becomes the trailing leg as the body walks forward over it. Once
+      // the body has moved on, the lattice is well ahead and this never bites.
+      const idleSpotX = startX + off(`${leg}Hip`).x;
+      const tgtX = Math.max(tgt.x, idleSpotX);
+      const win = STEP_ORDER[leg] ?? 0; // 0 → first half of the settle, 1 → second half
+      const move = smoothstep(Math.min(1, Math.max(0, (rest - win * 0.5) / 0.5)));
+      const step = Math.sin(Math.PI * move); // lift arc: 0 at both ends, 1 mid-step
+      footStep[leg] = step;
+      // Lift scales with how far the foot actually travels, so a foot that just
+      // stays put (the trailing support) doesn't bob in place.
+      const travel = Math.abs(tgtX - neutralX);
+      footTravel[leg] = travel;
+      footPos[leg] = new Vector2(
+        tgtX + (neutralX - tgtX) * move,
+        tgt.y + (groundY - tgt.y) * move - step * 0.6 * travel,
+      );
+    }
+
+    // The center of mass shifts OVER the planted foot while the other foot is in
+    // the air — you can't lift a foot without first putting your weight on the
+    // support leg. (Only one foot steps at a time, so at most one term is active.)
+    // Gate the shift by how far the swinging foot ACTUALLY travels: a trailing
+    // support foot that stays pinned in place isn't really "in the air", so its
+    // phantom lift must not dump the whole COM forward onto the lead foot (that
+    // read as a lurch/wobble when starting to walk).
+    let comShiftX = 0;
+    for (const [leg] of LEGS) {
+      const other = leg === 'left' ? 'right' : 'left';
+      if (!footPos[other]) continue;
+      const airborne = footStep[leg] * smoothstep(Math.min(1, footTravel[leg] / (reach * 0.15)));
+      comShiftX += airborne * 0.8 * (footPos[other].x - bodyX);
+    }
+
+    // Active forward drive: to START (or speed up) a walk you tip your center of
+    // mass forward — begin to fall — and THEN swing a leg out to catch it. So the
+    // COM leads forward proportional to forward acceleration (plus a steady lean
+    // that grows with speed). The planted feet stay put (FABRIK solves the legs to
+    // them), so leading the COM forward tilts the whole body into the step instead
+    // of reading as a balance-save. Braking keeps the passive `dev` overshoot.
+    const drive = Math.min(1, Math.max(0, accel) / 160); // 0..1 forward-acceleration
+    const forwardCom = reach * (0.17 * drive + 0.05 * s);
+    const forwardLean = 14 * drive + 7 * s; // torso pitch into the direction of travel (deg)
+
+    const rootX = bodyX + dev + comShiftX + forwardCom;
+    const lean = Math.max(-18, Math.min(18, -dev * leanGain)) + forwardLean;
+    const root = new Vector2(rootX, groundY - standMean - vault);
     const m: Pose = {[rig.template.root]: root};
 
     const sway = lean + 3 * s * Math.sin(2 * Math.PI * phi);
@@ -153,7 +215,9 @@ export function locomotion(rig: Rig, opts: LocomotionOptions): PoseFn {
     const swing = armAmp * Math.cos(2 * Math.PI * phi);
     const elbowFlex = -(12 + 52 * s); // forearm bend relative to the upper arm
     const foreSwing = 0.6 * (10 + 14 * s) * Math.cos(2 * Math.PI * phi + 0.5); // forearm pump, lagged
-    for (const [side, a, fs] of [['left', -swing, -foreSwing], ['right', swing, foreSwing]] as const) {
+    // Arms counter the legs (opposite arm with each leg). Right leg leads, so the
+    // LEFT arm leads to keep the diagonal coordination.
+    for (const [side, a, fs] of [['left', swing, foreSwing], ['right', -swing, -foreSwing]] as const) {
       if (!rig.joints[`${side}Shoulder`]) continue;
       const sh = m[`${side}Shoulder`];
       const el = sh.add(rotateDeg(off(`${side}Elbow`).sub(off(`${side}Shoulder`)), a));
@@ -163,30 +227,17 @@ export function locomotion(rig: Rig, opts: LocomotionOptions): PoseFn {
     }
 
     for (const [leg, lp] of LEGS) {
-      const frac = phi + lp - Math.floor(phi + lp);
-      // Where this foot would plant if it landed NOW (ahead of the current hip).
-      // Easing the swing toward this fresh target — rather than a stale
-      // plant+STRIDE — keeps the feet under the body while it accelerates.
-      const aheadX = bodyX + off(`${leg}Hip`).x + plantLead(v);
-      let footX: number;
-      let footY: number;
-      if (frac < duty) {
-        footX = plantX[leg]; // stance: pinned to the world (no slip)
-        footY = groundY;
-      } else {
-        const sw = (frac - duty) / (1 - duty);
-        footX = plantX[leg] + (aheadX - plantX[leg]) * smoothstep(sw);
-        footY = groundY - lift * liftScale * Math.sin(Math.PI * sw);
-      }
       const [, knee, ankle] = solveLimb(
-        rig, [`${leg}Hip`, `${leg}Knee`, `${leg}Ankle`], m[`${leg}Hip`], new Vector2(footX, footY), bendBias,
+        rig, [`${leg}Hip`, `${leg}Knee`, `${leg}Ankle`], m[`${leg}Hip`], footPos[leg], bendBias,
       );
       m[`${leg}Knee`] = knee;
       m[`${leg}Ankle`] = ankle;
       if (hasToes) {
         const footLen = rig.boneLength(`${leg}Ankle`, `${leg}Toe`);
+        const frac = phi + lp - Math.floor(phi + lp);
         const sw = frac < duty ? 0 : (frac - duty) / (1 - duty);
-        const footAngle = frac < duty ? 0 : (18 - 30 * sw) * liftScale;
+        const walkToe = frac < duty ? 0 : (18 - 30 * sw) * liftScale;
+        const footAngle = walkToe + footStep[leg] * 22; // point the toe while stepping in
         m[`${leg}Toe`] = ankle.add(rotateDeg(new Vector2(footLen, 0), footAngle));
       }
     }
