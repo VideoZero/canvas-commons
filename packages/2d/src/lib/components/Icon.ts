@@ -113,6 +113,16 @@ export class Icon extends SVG {
       return svg;
     });
 
+    // Register the in-flight fetch as a render dependency *while drawing*, the
+    // same way Img.image() does. This lets the render loop
+    // (GeneratorScene.render's `consumePromises` do/while) await the fetch and
+    // re-render with the real SVG instead of capturing the placeholder.
+    // collectAsyncResources() alone is not enough here: it only runs from
+    // Node.toPromise(), which the validator/exporter frame-capture path never
+    // calls — so without this, the first cold-cache appearance of an icon is
+    // screenshotted as the transparent placeholder.
+    DependencyContext.collectPromise(this.fetchPromise);
+
     return PLACEHOLDER_SVG;
   }
 
