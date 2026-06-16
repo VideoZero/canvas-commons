@@ -1,3 +1,4 @@
+export * from './Attribution';
 export * from './CanvasUtils';
 export * from './PathDataBuilder';
 export * from './ResourceCache';

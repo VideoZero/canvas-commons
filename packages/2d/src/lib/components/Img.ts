@@ -18,7 +18,7 @@ import {
 } from '@motion-canvas/core';
 import {computed, initial, nodeName, signal} from '../decorators';
 import {DesiredLength} from '../partials';
-import {drawImage} from '../utils';
+import {drawImage, drawAttribution, registerAttributionForSource} from '../utils';
 import {Rect, RectProps} from './Rect';
 import imageWithoutSource from './__logs__/image-without-source.md';
 
@@ -165,6 +165,10 @@ export class Img extends Rect {
         url.searchParams.set('asset-hash', hash);
       }
       src = url.toString();
+      // Register attribution whenever the image element is (re)created or the
+      // source changes. Reads no signals and never throws, so it does not
+      // affect this computed's dependency graph.
+      registerAttributionForSource(rawSrc);
     }
 
     let image = Img.pool[key];
@@ -241,6 +245,7 @@ about working with images.`,
         context.imageSmoothingEnabled = this.smoothing();
         drawImage(context, image, box);
         context.restore();
+        drawAttribution(context, box, this.src(), alpha);
       }
     }
 

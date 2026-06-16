@@ -12,7 +12,7 @@ import {
 } from '@motion-canvas/core';
 import {computed, initial, nodeName, signal} from '../decorators';
 import {DesiredLength} from '../partials';
-import {drawImage} from '../utils';
+import {drawImage, drawAttribution, registerAttributionForSource} from '../utils';
 import {Rect, RectProps} from './Rect';
 import reactivePlaybackRate from './__logs__/reactive-playback-rate.md';
 
@@ -170,6 +170,9 @@ export class Video extends Rect {
   @computed()
   protected video(): HTMLVideoElement {
     const src = this.src();
+    // Register attribution whenever the video element is (re)created or the
+    // source changes. Reads no signals and never throws.
+    registerAttributionForSource(src);
     const key = `${this.key}/${src}`;
     let video = Video.pool[key];
     if (!video) {
@@ -239,7 +242,7 @@ export class Video extends Rect {
 
     if (Math.abs(video.currentTime - time) > 0.2) {
       this.setCurrentTime(time);
-    } else if (!playing) {
+    } else if (!playing && isFinite(time)) {
       video.currentTime = time;
     }
 
@@ -266,6 +269,7 @@ export class Video extends Rect {
       context.imageSmoothingEnabled = this.smoothing();
       drawImage(context, video, box);
       context.restore();
+      drawAttribution(context, box, this.src(), alpha);
     }
 
     if (this.clip()) {
@@ -356,10 +360,16 @@ export class Video extends Rect {
 
   public clampTime(time: number): number {
     const duration = this.video().duration;
+    // Until metadata loads (or if the source failed to load) duration is NaN.
+    // Guard so we never return a non-finite time, which would throw when
+    // assigned to HTMLMediaElement.currentTime.
+    if (!isFinite(duration) || duration <= 0) {
+      return 0;
+    }
     if (this.loop()) {
       time %= duration;
     }
-    return clamp(0, duration, time);
+    return isFinite(time) ? clamp(0, duration, time) : 0;
   }
 
   protected override collectAsyncResources() {
