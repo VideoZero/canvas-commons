@@ -245,7 +245,7 @@ about working with images.`,
         context.imageSmoothingEnabled = this.smoothing();
         drawImage(context, image, box);
         context.restore();
-        drawAttribution(context, box, this.src(), alpha);
+        drawAttribution(context, box, this.src(), alpha, this, this.getPath());
       }
     }
 

@@ -34,8 +34,8 @@ const FONT_FAMILY =
 
 const LIGHT_FILL = 'rgba(255, 255, 255, %A%)';
 const DARK_FILL = 'rgba(17, 17, 17, %A%)';
-const LIGHT_STROKE = 'rgba(255, 255, 255, 0.20)';
-const DARK_STROKE = 'rgba(0, 0, 0, 0.20)';
+const LIGHT_STROKE = 'rgba(255, 255, 255, 0.30)';
+const DARK_STROKE = 'rgba(0, 0, 0, 0.30)';
 
 export type AttributionPosition =
   | 'top-left'
@@ -130,7 +130,7 @@ export const attributionConfig: AttributionConfig = {
     position: 'bottom-left',
     paddingX: 24,
     paddingY: 10,
-    opacity: 0.6,
+    opacity: 0.65,
   },
 };
 
@@ -338,6 +338,37 @@ export function sanitizeAttributionHtml(html: string): string {
 // Per-source hysteresis so the credit color does not flicker frame to frame.
 const useDarkTextBySource = new Map<string, boolean>();
 
+/**
+ * Greedily wrap `text` onto as few lines as possible without any line exceeding
+ * `maxWidth` (measured with the context's current font). Breaks on whitespace
+ * only; a single word wider than `maxWidth` stays on its own line (the caller's
+ * clip is the backstop). Returns at least one line.
+ */
+function wrapText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length <= 1 || maxWidth <= 0) {
+    return [text];
+  }
+
+  const lines: string[] = [];
+  let current = words[0];
+  for (let i = 1; i < words.length; i++) {
+    const candidate = `${current} ${words[i]}`;
+    if (context.measureText(candidate).width <= maxWidth) {
+      current = candidate;
+    } else {
+      lines.push(current);
+      current = words[i];
+    }
+  }
+  lines.push(current);
+  return lines;
+}
+
 function averageLuminance(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -364,6 +395,15 @@ function averageLuminance(
 }
 
 /**
+ * The minimal node surface {@link drawAttribution} needs to keep the credit a
+ * constant scene-space size regardless of how the node is being rendered.
+ */
+export interface AttributionNode {
+  localToWorld(): DOMMatrix;
+  view(): {size(): {y: number}};
+}
+
+/**
  * Render the attribution credit for `src` onto the canvas, adapting its color
  * to the underlying pixels (same technique as the brand overlay). Drawn in the
  * canvas's device space at the configured corner of `box`.
@@ -372,12 +412,19 @@ function averageLuminance(
  * @param box - The node-local box of the image (e.g. `BBox.fromSizeCentered`).
  * @param src - The source URL; the registry key and hysteresis key.
  * @param opacity - Node alpha multiplier applied to the credit's fill opacity.
+ * @param node - The node being drawn. Used to keep the credit a constant
+ *   scene-space size; without it we fall back to a frame-relative heuristic
+ *   that mis-sizes the credit when the node is rendered into a cache canvas.
+ * @param clipPath - Optional node-local path (e.g. the image's rounded-rect
+ *   outline) the credit is clipped to, so it never spills past the media edge.
  */
 export function drawAttribution(
   context: CanvasRenderingContext2D,
   box: BBox,
   src: string,
   opacity = 1,
+  node?: AttributionNode,
+  clipPath?: Path2D,
 ): void {
   if (!attributionConfig.enabled || opacity <= 0) {
     return;
@@ -389,15 +436,35 @@ export function drawAttribution(
   }
 
   const {width, height} = context.canvas;
-  const scale = height / REFERENCE_HEIGHT;
   const {render} = attributionConfig;
-  const fontSize = render.fontSize * scale;
-  const paddingX = render.paddingX * scale;
-  const paddingY = render.paddingY * scale;
 
   // Map the node-local box to device space (the space getImageData uses and the
   // space we draw in with an identity transform).
   const m = context.getTransform();
+
+  // The credit must stay a constant, legible size in *scene* units no matter
+  // how small the image is drawn, or whether the node is rendered straight to
+  // the frame or into a node-sized cache canvas (fades, filters, shadows…).
+  // Sizing off `context.canvas.height` breaks in the cached path, where the
+  // canvas is sized to the node — a small image then yields tiny text. Instead
+  // we map a fixed scene-space size into whatever space we're drawing in, with
+  // the node's own scale divided out so the credit never shrinks with the image.
+  const ltw = node?.localToWorld();
+  const worldScale = ltw ? Math.hypot(ltw.a, ltw.b) : 0;
+  const drawScale = Math.hypot(m.a, m.b);
+  const worldToDraw =
+    worldScale > 0 && drawScale > 0 ? drawScale / worldScale : null;
+  const referenceScale = (node?.view().size().y ?? REFERENCE_HEIGHT) /
+    REFERENCE_HEIGHT;
+  const scale =
+    worldToDraw !== null
+      ? referenceScale * worldToDraw
+      : // Fallback: legacy frame-relative heuristic when no node is available.
+        height / REFERENCE_HEIGHT;
+  const fontSize = render.fontSize * scale;
+  const paddingX = render.paddingX * scale;
+  const paddingY = render.paddingY * scale;
+
   // Apply the affine transform manually (deviceX = a·x + c·y + e, etc.) to avoid
   // depending on DOMPoint/transformPoint, which not every canvas impl exposes.
   const corners = [box.topLeft, box.topRight, box.bottomLeft, box.bottomRight];
@@ -417,25 +484,45 @@ export function drawAttribution(
   const y = alignBottom ? deviceBottom - paddingY : deviceTop + paddingY;
 
   context.save();
+  // Clip to the media outline (in the node's local space) *before* switching to
+  // the identity transform — the clip rasterizes into device space and persists,
+  // so the credit (drawn below in device space) is confined to the image edges,
+  // rounded corners included.
+  if (clipPath) {
+    context.clip(clipPath);
+  }
   context.setTransform(1, 0, 0, 1, 0, 0);
 
   context.font = `${fontSize}px ${render.fontFamily}`;
   context.textAlign = alignRight ? 'right' : 'left';
   context.textBaseline = alignBottom ? 'bottom' : 'top';
 
-  // Sample the underlying pixels behind the text to choose a contrasting color.
+  // Wrap the credit to the media's available width so a long credit on a small
+  // image breaks onto multiple lines instead of being clipped at the edge.
+  const contentWidth = deviceRight - deviceLeft - 2 * paddingX;
+  const lines = wrapText(context, attribution.text, contentWidth);
+
   const metrics = context.measureText(attribution.text);
-  const textWidth = metrics.width;
   const ascent = metrics.actualBoundingBoxAscent ?? fontSize;
   const descent = metrics.actualBoundingBoxDescent ?? 0;
   const textHeight = ascent + descent;
+  // Baseline-to-baseline distance. Lines stack away from the anchored edge
+  // (upward for bottom positions, downward for top positions).
+  const lineAdvance = textHeight * 1.2;
+  const blockWidth = lines.reduce(
+    (max, line) => Math.max(max, context.measureText(line).width),
+    0,
+  );
+  const blockHeight = (lines.length - 1) * lineAdvance + textHeight;
 
-  const sampleX = alignRight ? x - textWidth : x;
-  const sampleY = alignBottom ? y - textHeight : y;
+  // Sample the underlying pixels behind the whole text block to choose a single
+  // contrasting color (one decision per source keeps the hysteresis stable).
+  const sampleX = alignRight ? x - blockWidth : x;
+  const sampleY = alignBottom ? y + descent - blockHeight : y;
   const clampedX = Math.max(0, Math.floor(sampleX));
   const clampedY = Math.max(0, Math.floor(sampleY));
-  const sampleW = Math.min(Math.ceil(textWidth), width - clampedX);
-  const sampleH = Math.min(Math.ceil(textHeight), height - clampedY);
+  const sampleW = Math.min(Math.ceil(blockWidth), width - clampedX);
+  const sampleH = Math.min(Math.ceil(blockHeight), height - clampedY);
 
   let useDarkText = useDarkTextBySource.get(src) ?? false;
   const avg = averageLuminance(context, clampedX, clampedY, sampleW, sampleH);
@@ -460,8 +547,14 @@ export function drawAttribution(
   // rotation is applied about (x, y) so the text position is unchanged.
   context.translate(x, y);
   context.rotate(0.001);
-  context.strokeText(attribution.text, 0, 0);
-  context.fillText(attribution.text, 0, 0);
+  for (let i = 0; i < lines.length; i++) {
+    // Offset each line from the anchored edge so the block grows inward.
+    const dy = alignBottom
+      ? -(lines.length - 1 - i) * lineAdvance
+      : i * lineAdvance;
+    context.strokeText(lines[i], 0, dy);
+    context.fillText(lines[i], 0, dy);
+  }
 
   context.restore();
 }

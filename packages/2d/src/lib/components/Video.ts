@@ -269,7 +269,7 @@ export class Video extends Rect {
       context.imageSmoothingEnabled = this.smoothing();
       drawImage(context, video, box);
       context.restore();
-      drawAttribution(context, box, this.src(), alpha);
+      drawAttribution(context, box, this.src(), alpha, this, this.getPath());
     }
 
     if (this.clip()) {
