@@ -93,6 +93,12 @@ export class Txt extends Shape {
   @signal()
   public declare readonly text: SimpleSignal<string, this>;
 
+  // Text outlines should use round joins by default — miter spikes on sharp
+  // glyph corners (overrides Shape's 'miter' default for text only).
+  @initial('round')
+  @signal()
+  public declare readonly lineJoin: SimpleSignal<CanvasLineJoin, this>;
+
   protected getText(): string {
     if (this.splitOriginalText !== null) {
       return this.splitOriginalText;

@@ -159,6 +159,12 @@ export class TxtLeaf extends Shape {
   @signal()
   public declare readonly text: SimpleSignal<string, this>;
 
+  // Text outlines should use round joins by default — miter spikes on sharp
+  // glyph corners (overrides Shape's 'miter' default for text only).
+  @initial('round')
+  @signal()
+  public declare readonly lineJoin: SimpleSignal<CanvasLineJoin, this>;
+
   // ─── Split state ──────────────────────────────────────────────
 
   // charStates holds TxtChar instances created at split time. Identity is
@@ -490,6 +496,10 @@ export class TxtLeaf extends Shape {
       if (stroke && lw > 0) {
         context.strokeStyle = stroke;
         context.lineWidth = lw;
+        // Honour the leaf's join/cap (defaults to 'round' for text) so split
+        // characters don't miter-spike on sharp glyph corners.
+        context.lineJoin = this.lineJoin();
+        context.lineCap = this.lineCap();
         context.strokeText(text, 0, 0);
       }
 
