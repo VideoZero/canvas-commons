@@ -171,6 +171,13 @@ export class TxtLeaf extends Shape {
   protected _splitClip = false;
   protected _splitClipPadding = 4;
 
+  /**
+   * Whether to apply the sub-pixel smoothing rotation when drawing this leaf
+   * (both normal and split rendering). Toggled via {@link enableSmooth} /
+   * {@link disableSmooth}.
+   */
+  public smooth = false;
+
   public constructor({children, ...rest}: TxtLeafProps) {
     super(rest);
     if (children) {
@@ -369,11 +376,13 @@ export class TxtLeaf extends Shape {
   }
 
   public enableSmooth(): this {
+    this.smooth = true;
     this.charStates.forEach(c => c.enableSmooth());
     return this;
   }
 
   public disableSmooth(): this {
+    this.smooth = false;
     this.charStates.forEach(c => c.disableSmooth());
     return this;
   }
@@ -522,20 +531,34 @@ export class TxtLeaf extends Shape {
     text: string,
     box: BBox,
   ) {
-    const y = box.y;
     if (this.styles.whiteSpace !== 'pre') {
       text = text.replace(/\s+/g, ' ');
     }
 
-    if (this.lineWidth() <= 0) {
-      context.fillText(text, box.x, y);
-    } else if (this.strokeFirst()) {
-      context.strokeText(text, box.x, y);
-      context.fillText(text, box.x, y);
-    } else {
-      context.fillText(text, box.x, y);
-      context.strokeText(text, box.x, y);
+    // Draw coordinates. When smoothing, pivot at the line's own anchor
+    // (translate → rotate → draw at 0,0) so the tiny rotation nudges the text
+    // off the integer-pixel fast path into grayscale anti-aliasing *without*
+    // shifting the line's position.
+    let x = box.x;
+    let y = box.y;
+    context.save();
+    if (this.smooth) {
+      context.translate(box.x, box.y);
+      context.rotate(0.001);
+      x = 0;
+      y = 0;
     }
+
+    if (this.lineWidth() <= 0) {
+      context.fillText(text, x, y);
+    } else if (this.strokeFirst()) {
+      context.strokeText(text, x, y);
+      context.fillText(text, x, y);
+    } else {
+      context.fillText(text, x, y);
+      context.strokeText(text, x, y);
+    }
+    context.restore();
   }
 
   protected override getCacheBBox(): BBox {

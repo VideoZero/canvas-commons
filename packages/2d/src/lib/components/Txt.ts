@@ -120,6 +120,13 @@ export class Txt extends Shape {
     }
 
     this.setParsedChildren([leaf]);
+
+    // Re-apply smoothing whenever the text changes — a freshly created leaf
+    // (above) would otherwise default to smoothing off, so the rotation trick
+    // only ever applied after an explicit split().
+    if (this.smooth) {
+      this.enableSmooth();
+    }
   }
 
   protected override setChildren(value: SignalValue<ComponentChildren>) {
@@ -228,14 +235,27 @@ export class Txt extends Shape {
   protected splitOriginalText: string | null = null;
 
   /**
-   * Whether to enable sub-pixel smoothing on split characters.
+   * Default value for {@link smooth} on newly created text nodes.
    *
    * @remarks
-   * When `true`, a tiny rotation (0.01 rad) is applied per character
-   * to disable canvas pixel-grid snapping, preventing wobble during
-   * vertical animation. Enabled by default.
+   * Set this once at app start to flip smoothing on/off globally:
+   * ```ts
+   * Txt.defaultSmooth = false;
+   * ```
    */
-  public smooth = true;
+  public static defaultSmooth = true;
+
+  /**
+   * Whether to enable sub-pixel smoothing on this text.
+   *
+   * @remarks
+   * When `true`, a tiny rotation (0.001 rad) is applied when rendering
+   * to disable canvas pixel-grid snapping. This smooths the glyph edges
+   * (grayscale anti-aliasing instead of hinted rendering) and prevents
+   * wobble during vertical animation. Applies both to normal text and to
+   * split characters. Initialised from {@link Txt.defaultSmooth}.
+   */
+  public smooth = Txt.defaultSmooth;
 
   /**
    * All TxtChar states, aggregated from all TxtLeaf descendants.
