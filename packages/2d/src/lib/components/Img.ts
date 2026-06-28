@@ -160,7 +160,13 @@ export class Img extends Rect {
     if (rawSrc) {
       key = viaProxy(rawSrc);
       const url = window.origin && window.origin !== "null"? new URL(key, window.origin) : new URL(key);
-      if (url.origin === window.origin) {
+      // Only cache-bust real same-origin asset URLs. data:/blob: URIs report an
+      // "null" origin which spuriously matches a sandboxed (null-origin) iframe,
+      // and appending a query param there corrupts the payload — so skip them.
+      if (
+        url.origin === window.origin &&
+        (url.protocol === 'http:' || url.protocol === 'https:')
+      ) {
         const hash = this.view().assetHash();
         url.searchParams.set('asset-hash', hash);
       }
