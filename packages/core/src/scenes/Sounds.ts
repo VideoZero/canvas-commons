@@ -110,9 +110,20 @@ export class Sounds {
 
   public add(settings: SoundSettings, offset?: number) {
     const playbackTime = this.scene.playback.time + (offset ?? 0);
+    this.addAt(settings, playbackTime);
+  }
 
+  /**
+   * Register a fully-resolved sound at an absolute timeline offset (in seconds),
+   * rather than relative to the current frame like {@link add}. Used by systems
+   * that resolve their sounds after the scene's timing is known — e.g. the music
+   * director, whose cues only reveal their end (the next cue or the scene end)
+   * once the whole scene has run, so it expands them into placed clips on
+   * `onRecalculated`.
+   */
+  public addAt(settings: SoundSettings, offset: number) {
     this.registeredSounds.push({
-      offset: playbackTime,
+      offset,
       realPlaybackRate:
         Math.pow(2, (settings.detune ?? 0) / 1200) *
         (settings.playbackRate ?? 1),
