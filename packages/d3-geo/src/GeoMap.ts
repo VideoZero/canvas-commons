@@ -1,0 +1,563 @@
+import {
+  CanvasStyleSignal,
+  PossibleCanvasStyle,
+  Rect,
+  RectProps,
+  canvasStyleSignal,
+  computed,
+  initial,
+  nodeName,
+  resolveCanvasStyle,
+  signal,
+  vector2Signal,
+} from '@motion-canvas/2d';
+import {
+  DependencyContext,
+  PossibleVector2,
+  SignalValue,
+  SimpleSignal,
+  TimingFunction,
+  Vector2,
+  Vector2Signal,
+  easeInOutCubic,
+  threadable,
+  tween,
+} from '@motion-canvas/core';
+import {
+  GeoPermissibleObjects,
+  GeoProjection,
+  geoCentroid,
+  geoDistance,
+  geoGraticule10,
+  geoInterpolate,
+  geoPath,
+} from 'd3-geo';
+import {feature, merge, mesh} from 'topojson-client';
+import {cityLonLat} from './cities';
+import {PROJECTIONS, ProjectionKind} from './projections';
+
+/**
+ * Map data accepted by {@link GeoMap}: a TopoJSON topology or GeoJSON
+ * FeatureCollection — given directly, as a promise, or as a URL to fetch.
+ */
+export type GeoDataInput = string | object | Promise<object>;
+
+interface GeoFeatureObject {
+  type: string;
+  id?: string | number;
+  properties?: Record<string, unknown> | null;
+  geometry?: unknown;
+
+  [key: string]: unknown;
+}
+
+interface GeoLayers {
+  /** Individual region features (countries, states, ...). */
+  features: GeoFeatureObject[];
+  /** Merged landmass for a single fill. */
+  land: GeoPermissibleObjects | null;
+  /** Interior borders between regions. */
+  borders: GeoPermissibleObjects | null;
+  /** Whether the data covers the whole world (fit to sphere by default). */
+  world: boolean;
+}
+
+export interface GeoMapProps extends RectProps {
+  /**
+   * Map data: TopoJSON topology or GeoJSON FeatureCollection, a promise of
+   * one, or a URL string to fetch it from.
+   */
+  data?: SignalValue<GeoDataInput | null>;
+
+  /**
+   * Name of the topology object holding the region features.
+   *
+   * @remarks
+   * Defaults to `'countries'` when present, otherwise the first object in
+   * the topology. Ignored for plain GeoJSON data.
+   */
+  layer?: SignalValue<string | null>;
+
+  /**
+   * The projection to render the map with.
+   */
+  projection?: SignalValue<ProjectionKind>;
+
+  /**
+   * The `[longitude, latitude]` the camera looks at.
+   */
+  center?: SignalValue<PossibleVector2>;
+
+  /**
+   * Camera zoom factor; `1` shows the fitted extent.
+   */
+  zoom?: SignalValue<number>;
+
+  /**
+   * What to fit into the node at zoom 1: a feature name from the data, a
+   * GeoJSON object, or `null` for the whole dataset (sphere for world data).
+   */
+  fit?: SignalValue<string | object | null>;
+
+  /**
+   * Padding in pixels around the fitted extent at zoom 1.
+   */
+  fitPadding?: SignalValue<number>;
+
+  water?: SignalValue<PossibleCanvasStyle>;
+  land?: SignalValue<PossibleCanvasStyle>;
+  borders?: SignalValue<PossibleCanvasStyle>;
+  bordersWidth?: SignalValue<number>;
+  graticule?: SignalValue<PossibleCanvasStyle>;
+  graticuleWidth?: SignalValue<number>;
+  outline?: SignalValue<PossibleCanvasStyle>;
+  outlineWidth?: SignalValue<number>;
+}
+
+/**
+ * A 2D map rendered with d3-geo.
+ *
+ * @remarks
+ * Renders synchronously into the scene canvas — no tiles, no async work at
+ * frame time — so it is fully deterministic under frame stepping. The camera
+ * is defined by the `center`/`zoom` signals; tween them directly or use
+ * {@link flyTo} for a great-circle camera flight.
+ *
+ * Region highlights and pins are child nodes: see `GeoFeature` and `GeoPin`.
+ *
+ * @example
+ * ```tsx
+ * const map = createRef<GeoMap>();
+ * view.add(
+ *   <GeoMap
+ *     ref={map}
+ *     data={worldAtlas()}
+ *     size={[1600, 900]}
+ *     water={'#0b1526'}
+ *     land={'#2b3a4d'}
+ *     borders={'#0b1526'}
+ *   >
+ *     <GeoFeature feature={'Germany'} fill={'#e8555d'} />
+ *     <GeoPin at={'Berlin'} fill={'#ffffff'} />
+ *   </GeoMap>,
+ * );
+ * yield* map().flyTo('Berlin', 6, 3);
+ * ```
+ */
+@nodeName('GeoMap')
+export class GeoMap extends Rect {
+  @initial(null)
+  @signal()
+  public declare readonly data: SimpleSignal<GeoDataInput | null, this>;
+
+  @initial(null)
+  @signal()
+  public declare readonly layer: SimpleSignal<string | null, this>;
+
+  @initial('naturalEarth')
+  @signal()
+  public declare readonly projection: SimpleSignal<ProjectionKind, this>;
+
+  @initial(Vector2.zero)
+  @vector2Signal('center')
+  public declare readonly center: Vector2Signal<this>;
+
+  @initial(1)
+  @signal()
+  public declare readonly zoom: SimpleSignal<number, this>;
+
+  @initial(null)
+  @signal()
+  public declare readonly fit: SimpleSignal<string | object | null, this>;
+
+  @initial(0)
+  @signal()
+  public declare readonly fitPadding: SimpleSignal<number, this>;
+
+  @canvasStyleSignal()
+  public declare readonly water: CanvasStyleSignal<this>;
+
+  @canvasStyleSignal()
+  public declare readonly land: CanvasStyleSignal<this>;
+
+  @canvasStyleSignal()
+  public declare readonly borders: CanvasStyleSignal<this>;
+
+  @initial(1)
+  @signal()
+  public declare readonly bordersWidth: SimpleSignal<number, this>;
+
+  @canvasStyleSignal()
+  public declare readonly graticule: CanvasStyleSignal<this>;
+
+  @initial(1)
+  @signal()
+  public declare readonly graticuleWidth: SimpleSignal<number, this>;
+
+  @canvasStyleSignal()
+  public declare readonly outline: CanvasStyleSignal<this>;
+
+  @initial(2)
+  @signal()
+  public declare readonly outlineWidth: SimpleSignal<number, this>;
+
+  private static readonly urlPool: Record<string, {value: object | null; promise: Promise<object>}> = {};
+  private static readonly promisePool = new WeakMap<
+    Promise<object>,
+    {value: object | null}
+  >();
+
+  public constructor(props: GeoMapProps) {
+    super({clip: true, ...props});
+  }
+
+  /**
+   * The resolved map data, or `null` while it is still loading.
+   */
+  @computed()
+  public geoData(): any | null {
+    const raw = this.data();
+    if (raw === null) {
+      return null;
+    }
+
+    if (typeof raw === 'string') {
+      let entry = GeoMap.urlPool[raw];
+      if (!entry) {
+        entry = {
+          value: null,
+          promise: fetch(raw).then(response => response.json()),
+        };
+        entry.promise.then(value => {
+          entry.value = value;
+        });
+        GeoMap.urlPool[raw] = entry;
+      }
+      if (entry.value === null) {
+        DependencyContext.collectPromise(entry.promise);
+      }
+      return entry.value;
+    }
+
+    if (raw instanceof Promise) {
+      let entry = GeoMap.promisePool.get(raw);
+      if (!entry) {
+        const created = {value: null as object | null};
+        raw.then(value => {
+          created.value = value;
+        });
+        GeoMap.promisePool.set(raw, created);
+        entry = created;
+      }
+      if (entry.value === null) {
+        DependencyContext.collectPromise(raw);
+      }
+      return entry.value;
+    }
+
+    return raw;
+  }
+
+  @computed()
+  private layers(): GeoLayers | null {
+    const data = this.geoData();
+    if (!data) {
+      return null;
+    }
+
+    if (data.type === 'Topology') {
+      const objects = data.objects ?? {};
+      const layerName =
+        this.layer() ??
+        ('countries' in objects ? 'countries' : Object.keys(objects)[0]);
+      const object = objects[layerName];
+      if (!object) {
+        return {features: [], land: null, borders: null, world: false};
+      }
+      const collection = feature(data, object) as any;
+      const features: GeoFeatureObject[] =
+        collection.type === 'FeatureCollection'
+          ? collection.features
+          : [collection];
+      const land = objects.land
+        ? (feature(data, objects.land) as any)
+        : (merge(data, object.geometries) as any);
+      const borders = mesh(data, object, (a: any, b: any) => a !== b) as any;
+      const world = 'land' in objects || layerName === 'countries';
+      return {features, land, borders, world};
+    }
+
+    const features: GeoFeatureObject[] =
+      data.type === 'FeatureCollection' ? data.features : [data];
+    return {
+      features,
+      land: data as GeoPermissibleObjects,
+      borders: null,
+      world: false,
+    };
+  }
+
+  /**
+   * Look up a region feature by `properties.name` (case-insensitive) or id.
+   */
+  public featureByName(name: string | number): GeoFeatureObject | null {
+    const layers = this.layers();
+    if (!layers) {
+      return null;
+    }
+    const query = String(name).toLowerCase();
+    return (
+      layers.features.find(
+        item =>
+          String(item.id).toLowerCase() === query ||
+          String(item.properties?.name ?? '').toLowerCase() === query,
+      ) ?? null
+    );
+  }
+
+  /**
+   * Resolve a location to `[longitude, latitude]`: accepts coordinates, a
+   * city name from the built-in gazetteer, or a region name from the data
+   * (resolved to its centroid).
+   */
+  public resolveLonLat(location: string | PossibleVector2): Vector2 {
+    if (typeof location === 'string') {
+      const city = cityLonLat(location);
+      if (city) {
+        return new Vector2(city);
+      }
+      const found = this.featureByName(location);
+      if (found) {
+        return new Vector2(geoCentroid(found as GeoPermissibleObjects));
+      }
+      throw new Error(`GeoMap: unknown location "${location}".`);
+    }
+    return new Vector2(location);
+  }
+
+  @computed()
+  private fitObject(): GeoPermissibleObjects {
+    const fit = this.fit();
+    if (fit !== null) {
+      if (typeof fit === 'string') {
+        const found = this.featureByName(fit);
+        if (found) {
+          return found as GeoPermissibleObjects;
+        }
+        throw new Error(`GeoMap: unknown fit target "${fit}".`);
+      }
+      return fit as GeoPermissibleObjects;
+    }
+
+    const layers = this.layers();
+    if (layers && !layers.world && layers.land) {
+      return layers.land;
+    }
+    return {type: 'Sphere'};
+  }
+
+  /**
+   * The configured d3 projection for the current camera state, or `null`
+   * until the node has a size.
+   */
+  @computed()
+  public projector(): GeoProjection | null {
+    const size = this.computedSize();
+    if (size.x === 0 || size.y === 0) {
+      return null;
+    }
+
+    const definition = PROJECTIONS[this.projection()];
+    const projection = definition.factory();
+    const padding = this.fitPadding();
+    projection.rotate([0, 0, 0]);
+    if (projection.center) {
+      projection.center([0, 0]);
+    }
+    projection.fitExtent(
+      [
+        [-size.x / 2 + padding, -size.y / 2 + padding],
+        [size.x / 2 - padding, size.y / 2 - padding],
+      ],
+      this.fitObject(),
+    );
+
+    const center = this.center();
+    if (definition.azimuthal) {
+      projection.rotate([-center.x, -center.y, 0]);
+    } else {
+      projection.rotate([-center.x, 0, 0]);
+      projection.center([0, center.y]);
+    }
+    projection.scale(projection.scale() * this.zoom());
+    projection.clipExtent([
+      [-size.x / 2, -size.y / 2],
+      [size.x / 2, size.y / 2],
+    ]);
+    return projection;
+  }
+
+  /**
+   * Project `[longitude, latitude]` into this node's local space.
+   *
+   * @returns `null` while data/size are unresolved or when the point is
+   * clipped away (e.g. on the far side of an orthographic globe).
+   */
+  public projectPoint(location: string | PossibleVector2): Vector2 | null {
+    const projection = this.projector();
+    if (!projection) {
+      return null;
+    }
+    const lonLat = this.resolveLonLat(location);
+    if (!this.isPointVisible(lonLat)) {
+      return null;
+    }
+    const projected = projection([lonLat.x, lonLat.y]);
+    return projected ? new Vector2(projected) : null;
+  }
+
+  /**
+   * Whether a location is on the camera-facing side of the globe.
+   *
+   * @remarks
+   * Always `true` for non-azimuthal projections.
+   */
+  public isPointVisible(location: string | PossibleVector2): boolean {
+    if (!PROJECTIONS[this.projection()].azimuthal) {
+      return true;
+    }
+    const lonLat = this.resolveLonLat(location);
+    const center = this.center();
+    return (
+      geoDistance([lonLat.x, lonLat.y], [center.x, center.y]) <
+      Math.PI / 2 + 1e-6
+    );
+  }
+
+  private renderPath(object: GeoPermissibleObjects): Path2D {
+    const path = new Path2D();
+    const projection = this.projector();
+    if (projection) {
+      geoPath(projection, path as any)(object);
+    }
+    return path;
+  }
+
+  @computed()
+  private spherePath(): Path2D {
+    return this.renderPath({type: 'Sphere'});
+  }
+
+  @computed()
+  private graticulePath(): Path2D {
+    return this.renderPath(geoGraticule10());
+  }
+
+  @computed()
+  private landPath(): Path2D | null {
+    const layers = this.layers();
+    return layers?.land ? this.renderPath(layers.land) : null;
+  }
+
+  @computed()
+  private bordersPath(): Path2D | null {
+    const layers = this.layers();
+    return layers?.borders ? this.renderPath(layers.borders) : null;
+  }
+
+  protected override draw(context: CanvasRenderingContext2D) {
+    this.drawShape(context);
+
+    context.save();
+    context.clip(this.getPath());
+
+    const water = this.water();
+    if (water !== null) {
+      context.fillStyle = resolveCanvasStyle(water, context);
+      context.fill(this.spherePath());
+    }
+
+    const graticule = this.graticule();
+    if (graticule !== null) {
+      context.strokeStyle = resolveCanvasStyle(graticule, context);
+      context.lineWidth = this.graticuleWidth();
+      context.stroke(this.graticulePath());
+    }
+
+    const land = this.land();
+    const landPath = this.landPath();
+    if (land !== null && landPath) {
+      context.fillStyle = resolveCanvasStyle(land, context);
+      context.fill(landPath);
+    }
+
+    const borders = this.borders();
+    const bordersPath = this.bordersPath();
+    if (borders !== null && bordersPath) {
+      context.strokeStyle = resolveCanvasStyle(borders, context);
+      context.lineWidth = this.bordersWidth();
+      context.lineJoin = 'round';
+      context.lineCap = 'round';
+      context.stroke(bordersPath);
+    }
+
+    const outline = this.outline();
+    if (outline !== null) {
+      context.strokeStyle = resolveCanvasStyle(outline, context);
+      context.lineWidth = this.outlineWidth();
+      context.stroke(this.spherePath());
+    }
+
+    context.restore();
+
+    if (this.clip()) {
+      context.clip(this.getPath());
+    }
+    this.drawChildren(context);
+  }
+
+  /**
+   * Fly the camera to a location along a great circle, optionally changing
+   * zoom, with a distance-proportional zoom-out "hop" in between.
+   *
+   * @param location - Target as `[longitude, latitude]`, a city name, or a
+   * region name (flies to its centroid).
+   * @param zoom - Target zoom; keeps the current zoom when omitted.
+   * @param duration - Flight duration in seconds.
+   * @param timing - Timing function for the flight.
+   *
+   * @example
+   * ```ts
+   * yield* map().flyTo('Tokyo', 5, 3);
+   * ```
+   */
+  @threadable()
+  public *flyTo(
+    location: string | PossibleVector2,
+    zoom: number | null = null,
+    duration = 3,
+    timing: TimingFunction = easeInOutCubic,
+  ) {
+    const from = this.center();
+    const fromZoom = this.zoom();
+    const to = this.resolveLonLat(location);
+    const toZoom = zoom ?? fromZoom;
+
+    const interpolate = geoInterpolate([from.x, from.y], [to.x, to.y]);
+    const distance = geoDistance([from.x, from.y], [to.x, to.y]);
+    const logFrom = Math.log2(fromZoom);
+    const logTo = Math.log2(toZoom);
+    // Zoom out during the flight, further for longer hops, but never below
+    // the fitted view (zoom 1).
+    const dip = Math.min(distance * 1.5, Math.max(0, Math.min(logFrom, logTo)));
+
+    yield* tween(duration, value => {
+      const t = timing(value);
+      const [lon, lat] = interpolate(t);
+      this.center(new Vector2(lon, lat));
+      this.zoom(
+        2 ** (logFrom + (logTo - logFrom) * t - dip * Math.sin(Math.PI * t)),
+      );
+    });
+  }
+}

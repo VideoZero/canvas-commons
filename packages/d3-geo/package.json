@@ -1,0 +1,32 @@
+{
+  "name": "@motion-canvas/d3-geo",
+  "version": "0.1.0",
+  "description": "d3-geo map rendering for Motion Canvas",
+  "main": "lib/index.js",
+  "types": "./lib/index.d.ts",
+  "author": "motion-canvas",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsc -w",
+    "build": "tsc"
+  },
+  "exports": {
+    ".": {"types": "./lib/index.d.ts", "import": "./lib/index.js"}
+  },
+  "sideEffects": false,
+  "files": [
+    "lib",
+    "src"
+  ],
+  "dependencies": {
+    "@motion-canvas/2d": "^3.18.0-alpha.0",
+    "@motion-canvas/core": "^3.18.0-alpha.0",
+    "d3-geo": "^3.1.0",
+    "topojson-client": "^3.1.0",
+    "world-atlas": "^2.0.2"
+  },
+  "devDependencies": {
+    "@types/d3-geo": "^3.1.0",
+    "@types/topojson-client": "^3.1.5"
+  }
+}

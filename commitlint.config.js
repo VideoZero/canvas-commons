@@ -17,6 +17,7 @@ module.exports = {
         'player',
         'echarts',
         'rig',
+        'd3-geo',
         'shiki',
         'ui',
         'vite-plugin',
