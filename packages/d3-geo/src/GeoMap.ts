@@ -3,6 +3,7 @@ import {
   PossibleCanvasStyle,
   Rect,
   RectProps,
+  canvasStyleParser,
   canvasStyleSignal,
   computed,
   initial,
@@ -151,6 +152,21 @@ export interface GeoMapProps extends RectProps {
    */
   coast?: SignalValue<PossibleCanvasStyle>;
   coastWidth?: SignalValue<number>;
+
+  /**
+   * Per-region fills keyed by feature name or id — the choropleth layer.
+   *
+   * @remarks
+   * Rendered between the land fill and the borders using the same
+   * level-of-detail pipeline as the base map, so coloring every country
+   * stays fast. For animated single-region highlights prefer `GeoFeature`.
+   *
+   * @example
+   * ```tsx
+   * <GeoMap featureFills={{Germany: '#e8555d', France: '#4666ff'}} />
+   * ```
+   */
+  featureFills?: SignalValue<Record<string, PossibleCanvasStyle>>;
   outline?: SignalValue<PossibleCanvasStyle>;
   outlineWidth?: SignalValue<number>;
 }
@@ -256,6 +272,13 @@ export class GeoMap extends Rect {
   @initial(1)
   @signal()
   public declare readonly coastWidth: SimpleSignal<number, this>;
+
+  @initial({})
+  @signal()
+  public declare readonly featureFills: SimpleSignal<
+    Record<string, PossibleCanvasStyle>,
+    this
+  >;
 
   @canvasStyleSignal()
   public declare readonly outline: CanvasStyleSignal<this>;
@@ -570,6 +593,11 @@ export class GeoMap extends Rect {
         if (found) {
           return found as GeoPermissibleObjects;
         }
+        if (this.geoData() === null) {
+          // Data still loading — fit the sphere for now; recomputed once
+          // the data arrives.
+          return {type: 'Sphere'};
+        }
         throw new Error(`GeoMap: unknown fit target "${fit}".`);
       }
       return fit as GeoPermissibleObjects;
@@ -596,10 +624,10 @@ export class GeoMap extends Rect {
     const definition = resolveProjection(this.projection());
     const projection = definition.factory();
     const padding = this.fitPadding();
-    projection.rotate([0, 0, 0]);
-    if (projection.center) {
-      projection.center([0, 0]);
-    }
+    // Composite projections (albersUsa) have no rotate/center/clipExtent;
+    // for those the camera is fixed and only fit/zoom apply.
+    projection.rotate?.([0, 0, 0]);
+    projection.center?.([0, 0]);
     projection.fitExtent(
       [
         [-size.x / 2 + padding, -size.y / 2 + padding],
@@ -610,14 +638,16 @@ export class GeoMap extends Rect {
 
     const center = this.center();
     const roll = this.roll();
-    if (definition.azimuthal) {
-      projection.rotate([-center.x, -center.y, roll]);
-    } else {
-      projection.rotate([-center.x, 0, roll]);
-      projection.center([0, center.y]);
+    if (projection.rotate) {
+      if (definition.azimuthal) {
+        projection.rotate([-center.x, -center.y, roll]);
+      } else {
+        projection.rotate([-center.x, 0, roll]);
+        projection.center?.([0, center.y]);
+      }
     }
     projection.scale(projection.scale() * this.zoom());
-    projection.clipExtent([
+    projection.clipExtent?.([
       [-size.x / 2, -size.y / 2],
       [size.x / 2, size.y / 2],
     ]);
@@ -688,6 +718,62 @@ export class GeoMap extends Rect {
     return layers?.coast ? this.renderPath(layers.coast) : null;
   }
 
+  /**
+   * LOD features indexed by lower-cased name and id.
+   */
+  @computed()
+  private featureIndex(): Map<string, GeoFeatureObject[]> {
+    const index = new Map<string, GeoFeatureObject[]>();
+    const layers = this.renderLayers();
+    if (!layers) {
+      return index;
+    }
+    for (const item of layers.features) {
+      for (const key of [
+        String(item.id ?? '').toLowerCase(),
+        String(item.properties?.name ?? '').toLowerCase(),
+      ]) {
+        if (!key) {
+          continue;
+        }
+        const list = index.get(key);
+        if (list) {
+          list.push(item);
+        } else {
+          index.set(key, [item]);
+        }
+      }
+    }
+    return index;
+  }
+
+  @computed()
+  private featureFillPaths(): {style: PossibleCanvasStyle; path: Path2D}[] {
+    const entries = Object.entries(this.featureFills());
+    if (entries.length === 0) {
+      return [];
+    }
+    const index = this.featureIndex();
+    const projection = this.projector();
+    if (!projection) {
+      return [];
+    }
+    const result: {style: PossibleCanvasStyle; path: Path2D}[] = [];
+    for (const [name, style] of entries) {
+      const features = index.get(name.toLowerCase());
+      if (!features) {
+        continue;
+      }
+      const path = new Path2D();
+      const render = geoPath(projection, path as any);
+      for (const item of features) {
+        render(item as GeoPermissibleObjects);
+      }
+      result.push({style, path});
+    }
+    return result;
+  }
+
   @computed()
   private landPath(): Path2D | null {
     const layers = this.renderLayers();
@@ -728,6 +814,11 @@ export class GeoMap extends Rect {
     if (land !== null && landPath) {
       context.fillStyle = resolveCanvasStyle(land, context);
       context.fill(landPath);
+    }
+
+    for (const {style, path} of this.featureFillPaths()) {
+      context.fillStyle = resolveCanvasStyle(canvasStyleParser(style), context);
+      context.fill(path);
     }
 
     const borders = this.borders();
@@ -808,5 +899,107 @@ export class GeoMap extends Rect {
         2 ** (logFrom + (logTo - logFrom) * t - dip * Math.sin(Math.PI * t)),
       );
     });
+  }
+
+  /**
+   * The zoom level at which the given region fits this node.
+   *
+   * @param target - A feature name/id from the map data, or a GeoJSON
+   * object (e.g. a `GeoCircle`-style geometry).
+   * @param padding - Space in pixels to leave around the region.
+   *
+   * @example
+   * ```ts
+   * map().zoom(map().zoomFor('France'), 2);
+   * ```
+   */
+  public zoomFor(target: string | number | object, padding = 80): number {
+    const size = this.computedSize();
+    if (size.x === 0 || size.y === 0) {
+      return this.zoom();
+    }
+
+    let geometry: GeoPermissibleObjects | null;
+    if (typeof target === 'object') {
+      geometry = target as GeoPermissibleObjects;
+    } else {
+      geometry = this.featureByName(target) as GeoPermissibleObjects | null;
+      if (!geometry) {
+        if (this.geoData() === null) {
+          // Data still loading — keep the current zoom; recomputed once
+          // the data arrives.
+          return this.zoom();
+        }
+        throw new Error(`GeoMap: unknown zoom target "${target}".`);
+      }
+    }
+
+    const definition = resolveProjection(this.projection());
+    const fitPadding = this.fitPadding();
+
+    // Scale of the zoom-1 view, matching the fit in projector().
+    const base = definition.factory();
+    base.rotate?.([0, 0, 0]);
+    base.center?.([0, 0]);
+    base.fitExtent(
+      [
+        [-size.x / 2 + fitPadding, -size.y / 2 + fitPadding],
+        [size.x / 2 - fitPadding, size.y / 2 - fitPadding],
+      ],
+      this.fitObject(),
+    );
+    const baseScale = base.scale();
+
+    // Scale needed to fit the target when the camera points at it.
+    const projection = definition.factory();
+    const [lon, lat] = geoCentroid(geometry);
+    if (projection.rotate) {
+      if (definition.azimuthal) {
+        projection.rotate([-lon, -lat, 0]);
+      } else {
+        projection.rotate([-lon, 0, 0]);
+        projection.center?.([0, lat]);
+      }
+    }
+    projection.fitExtent(
+      [
+        [-size.x / 2 + padding, -size.y / 2 + padding],
+        [size.x / 2 - padding, size.y / 2 - padding],
+      ],
+      geometry,
+    );
+    return projection.scale() / baseScale;
+  }
+
+  /**
+   * Fly the camera to a region and zoom so it fits the node.
+   *
+   * @remarks
+   * Combines {@link flyTo} with {@link zoomFor}: the camera flies to the
+   * region's centroid and arrives at the zoom level that frames it with
+   * the given padding.
+   *
+   * @example
+   * ```ts
+   * yield* map().flyToFeature('France', 3);
+   * ```
+   */
+  @threadable()
+  public *flyToFeature(
+    target: string | number | object,
+    duration = 3,
+    padding = 80,
+    timing: TimingFunction = easeInOutCubic,
+  ) {
+    const location =
+      typeof target === 'object'
+        ? new Vector2(geoCentroid(target as GeoPermissibleObjects))
+        : this.resolveLonLat(String(target));
+    yield* this.flyTo(
+      location,
+      this.zoomFor(target, padding),
+      duration,
+      timing,
+    );
   }
 }

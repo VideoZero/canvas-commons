@@ -1,5 +1,5 @@
 import {Shape, ShapeProps, computed, initial, nodeName, signal} from '@motion-canvas/2d';
-import {SignalValue, SimpleSignal} from '@motion-canvas/core';
+import {BBox, SignalValue, SimpleSignal} from '@motion-canvas/core';
 import {
   GeoPermissibleObjects,
   geoBounds,
@@ -154,5 +154,30 @@ export class GeoFeature extends Shape {
 
   protected override getPath(): Path2D {
     return this.featurePath();
+  }
+
+  /**
+   * Bounds of the projected geometry in local space.
+   *
+   * @remarks
+   * Required for effects that rasterize the node into a cache texture
+   * (`shaders`, filters, opacity) — the layout size of this node is zero.
+   */
+  @computed()
+  protected pathBBox(): BBox {
+    const geometry = this.geometry();
+    const projection = this.map().projector();
+    if (!geometry || !projection) {
+      return new BBox();
+    }
+    const [[left, top], [right, bottom]] = geoPath(projection).bounds(geometry);
+    if (![left, top, right, bottom].every(isFinite) || right < left) {
+      return new BBox();
+    }
+    return new BBox(left, top, right - left, bottom - top);
+  }
+
+  protected override getCacheBBox(): BBox {
+    return this.pathBBox().expand(this.lineWidth() / 2);
   }
 }

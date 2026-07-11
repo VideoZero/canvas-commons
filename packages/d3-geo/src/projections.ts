@@ -1,5 +1,6 @@
 import {
   GeoProjection,
+  geoAlbersUsa,
   geoAzimuthalEqualArea,
   geoConicEqualArea,
   geoEqualEarth,
@@ -20,7 +21,8 @@ export type ProjectionKind =
   | 'stereographic'
   | 'azimuthalEqualArea'
   | 'conicEqualArea'
-  | 'transverseMercator';
+  | 'transverseMercator'
+  | 'albersUsa';
 
 export interface ProjectionDefinition {
   factory: () => GeoProjection;
@@ -70,4 +72,7 @@ export const PROJECTIONS: Record<ProjectionKind, ProjectionDefinition> = {
   azimuthalEqualArea: {factory: geoAzimuthalEqualArea, azimuthal: true},
   conicEqualArea: {factory: geoConicEqualArea, azimuthal: false},
   transverseMercator: {factory: geoTransverseMercator, azimuthal: false},
+  // Composite US projection (Alaska + Hawaii insets). Has no rotate/center,
+  // so the camera cannot pan — use `fit` and `zoom` only.
+  albersUsa: {factory: geoAlbersUsa as unknown as () => GeoProjection, azimuthal: false},
 };

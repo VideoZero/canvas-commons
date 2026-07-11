@@ -77,11 +77,21 @@ export class GeoLabel extends Txt {
   }
 
   /**
-   * Whether the label's location faces the camera (relevant on globes).
+   * Whether the label's location faces the camera (relevant on globes) and
+   * is representable by the projection.
    */
   @computed()
   public isVisibleOnGlobe(): boolean {
-    return this.map().isPointVisible(this.at());
+    const map = this.map();
+    if (!map.isPointVisible(this.at())) {
+      return false;
+    }
+    const projection = map.projector();
+    if (!projection) {
+      return true;
+    }
+    const lonLat = map.resolveLonLat(this.at());
+    return projection([lonLat.x, lonLat.y]) !== null;
   }
 
   protected override draw(context: CanvasRenderingContext2D) {

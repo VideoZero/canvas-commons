@@ -1,5 +1,6 @@
 import {Shape, ShapeProps, computed, initial, nodeName, signal} from '@motion-canvas/2d';
 import {
+  BBox,
   PossibleVector2,
   SignalValue,
   SimpleSignal,
@@ -95,11 +96,22 @@ export class GeoPin extends Shape {
   }
 
   /**
-   * Whether the pin's location faces the camera (relevant on globes).
+   * Whether the pin's location faces the camera (relevant on globes) and
+   * is representable by the projection (composite projections like
+   * albersUsa cannot project points outside their domain).
    */
   @computed()
   public isVisibleOnGlobe(): boolean {
-    return this.map().isPointVisible(this.at());
+    const map = this.map();
+    if (!map.isPointVisible(this.at())) {
+      return false;
+    }
+    const projection = map.projector();
+    if (!projection) {
+      return true;
+    }
+    const lonLat = map.resolveLonLat(this.at());
+    return projection([lonLat.x, lonLat.y]) !== null;
   }
 
   @computed()
@@ -137,6 +149,22 @@ export class GeoPin extends Shape {
 
   protected override getPath(): Path2D {
     return this.markerPath();
+  }
+
+  protected override getCacheBBox(): BBox {
+    const size = this.pinSize();
+    const kind = this.marker();
+    let box: BBox;
+    if (kind === 'dot') {
+      const radius = size * 0.28;
+      box = new BBox(-radius, -radius, radius * 2, radius * 2);
+    } else if (kind === 'pin') {
+      const radius = size * 0.38;
+      box = new BBox(-radius, -size, radius * 2, size);
+    } else {
+      box = new BBox();
+    }
+    return box.expand(this.lineWidth() / 2);
   }
 
   protected override draw(context: CanvasRenderingContext2D) {

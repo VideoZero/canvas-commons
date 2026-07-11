@@ -1,5 +1,6 @@
 import {Shape, ShapeProps, computed, initial, nodeName, signal} from '@motion-canvas/2d';
 import {
+  BBox,
   PossibleVector2,
   SignalValue,
   SimpleSignal,
@@ -28,6 +29,16 @@ export interface GeoLineProps extends ShapeProps {
    * Tween `end` from 0 to 1 to animate a route being drawn.
    */
   end?: SignalValue<number>;
+
+  /**
+   * Screen-space bow of each leg in pixels — the "flight arc" look.
+   *
+   * @remarks
+   * Offsets the line perpendicular to its direction of travel, peaking at
+   * the middle of each leg. Negative values bow the other way. `0` (the
+   * default) renders the exact geodesic.
+   */
+  bulge?: SignalValue<number>;
 }
 
 /**
@@ -68,6 +79,10 @@ export class GeoLine extends Shape {
   @initial(1)
   @signal()
   public declare readonly end: SimpleSignal<number, this>;
+
+  @initial(0)
+  @signal()
+  public declare readonly bulge: SimpleSignal<number, this>;
 
   public constructor(props: GeoLineProps) {
     // The path is generated in map space; never let flex layout move it.
@@ -182,22 +197,22 @@ export class GeoLine extends Shape {
   }
 
   @computed()
-  private linePath(): Path2D {
-    const path = new Path2D();
-    const projection = this.map().projector();
+  private trimmedSamples(): {coordinates: [number, number][]; lengths: number[]} {
+    const empty = {coordinates: [] as [number, number][], lengths: [] as number[]};
     const {coordinates, lengths} = this.samples();
-    if (!projection || coordinates.length < 2) {
-      return path;
+    if (coordinates.length < 2) {
+      return empty;
     }
 
     const total = lengths[lengths.length - 1];
     const start = Math.min(this.start(), this.end()) * total;
     const end = Math.max(this.start(), this.end()) * total;
     if (total === 0 || end - start <= 0) {
-      return path;
+      return empty;
     }
 
     const trimmed: [number, number][] = [];
+    const trimmedLengths: number[] = [];
     for (let i = 0; i < coordinates.length; i++) {
       if (lengths[i] < start || lengths[i] > end) {
         // Interpolate the boundary points of the visible window.
@@ -205,32 +220,138 @@ export class GeoLine extends Shape {
         const previous = lengths[i - 1];
         if (next !== undefined && lengths[i] < start && next > start) {
           const t = (start - lengths[i]) / (next - lengths[i]);
-          trimmed.push(
-            geoInterpolate(coordinates[i], coordinates[i + 1])(t),
-          );
+          trimmed.push(geoInterpolate(coordinates[i], coordinates[i + 1])(t));
+          trimmedLengths.push(start);
         }
         if (previous !== undefined && lengths[i] > end && previous < end) {
           const t = (end - previous) / (lengths[i] - previous);
-          trimmed.push(
-            geoInterpolate(coordinates[i - 1], coordinates[i])(t),
-          );
+          trimmed.push(geoInterpolate(coordinates[i - 1], coordinates[i])(t));
+          trimmedLengths.push(end);
         }
         continue;
       }
       trimmed.push(coordinates[i]);
+      trimmedLengths.push(lengths[i]);
     }
-    if (trimmed.length < 2) {
+    return trimmed.length < 2
+      ? empty
+      : {coordinates: trimmed, lengths: trimmedLengths};
+  }
+
+  /**
+   * Cumulative spherical length at each waypoint, for mapping a sample's
+   * length to its leg.
+   */
+  @computed()
+  private waypointLengths(): number[] {
+    const map = this.map();
+    const resolved = this.points().map(point => {
+      const lonLat = map.resolveLonLat(point);
+      return [lonLat.x, lonLat.y] as [number, number];
+    });
+    const cumulative = [0];
+    for (let i = 1; i < resolved.length; i++) {
+      cumulative.push(
+        cumulative[i - 1] + geoDistance(resolved[i - 1], resolved[i]),
+      );
+    }
+    return cumulative;
+  }
+
+  @computed()
+  private linePath(): Path2D {
+    const path = new Path2D();
+    const projection = this.map().projector();
+    const {coordinates, lengths} = this.trimmedSamples();
+    if (!projection || coordinates.length < 2) {
       return path;
     }
 
-    geoPath(projection, path as any)({
-      type: 'LineString',
-      coordinates: trimmed,
+    const bulge = this.bulge();
+    if (bulge === 0) {
+      geoPath(projection, path as any)({
+        type: 'LineString',
+        coordinates,
+      });
+      return path;
+    }
+
+    // Bulged lines are built manually: project each sample, offset it
+    // perpendicular to the direction of travel with a sinusoidal envelope
+    // peaking mid-leg. Far-side points (on globes) break the line.
+    const map = this.map();
+    const waypoints = this.waypointLengths();
+    const projected = coordinates.map((point, i) => {
+      if (!map.isPointVisible(point)) {
+        return null;
+      }
+      const result = projection(point);
+      return result ? {x: result[0], y: result[1], length: lengths[i]} : null;
     });
+
+    let leg = 0;
+    let started = false;
+    for (let i = 0; i < projected.length; i++) {
+      const current = projected[i];
+      if (!current) {
+        started = false;
+        continue;
+      }
+      while (leg < waypoints.length - 2 && current.length > waypoints[leg + 1]) {
+        leg++;
+      }
+      const legStart = waypoints[leg] ?? 0;
+      const legEnd = waypoints[leg + 1] ?? legStart + 1;
+      const t = (current.length - legStart) / (legEnd - legStart || 1);
+
+      const before = projected[i - 1] ?? current;
+      const after = projected[i + 1] ?? current;
+      const dx = after.x - before.x;
+      const dy = after.y - before.y;
+      const magnitude = Math.hypot(dx, dy) || 1;
+      const offset = bulge * Math.sin(Math.PI * Math.max(0, Math.min(1, t)));
+      const x = current.x + (dy / magnitude) * offset;
+      const y = current.y - (dx / magnitude) * offset;
+
+      if (started) {
+        path.lineTo(x, y);
+      } else {
+        path.moveTo(x, y);
+        started = true;
+      }
+    }
     return path;
   }
 
   protected override getPath(): Path2D {
     return this.linePath();
+  }
+
+  /**
+   * Bounds of the projected line in local space — required for effects
+   * that rasterize the node (`shaders`, filters, opacity), since the
+   * layout size of this node is zero.
+   */
+  @computed()
+  protected pathBBox(): BBox {
+    const projection = this.map().projector();
+    const {coordinates} = this.trimmedSamples();
+    if (!projection || coordinates.length < 2) {
+      return new BBox();
+    }
+    const [[left, top], [right, bottom]] = geoPath(projection).bounds({
+      type: 'LineString',
+      coordinates,
+    });
+    if (![left, top, right, bottom].every(isFinite) || right < left) {
+      return new BBox();
+    }
+    return new BBox(left, top, right - left, bottom - top);
+  }
+
+  protected override getCacheBBox(): BBox {
+    return this.pathBBox().expand(
+      this.lineWidth() / 2 + Math.abs(this.bulge()),
+    );
   }
 }
