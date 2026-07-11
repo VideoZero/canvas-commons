@@ -1,5 +1,6 @@
 export * from './GeoCircle';
 export * from './GeoFeature';
+export * from './GeoLabel';
 export * from './GeoLine';
 export * from './GeoMap';
 export * from './GeoPin';

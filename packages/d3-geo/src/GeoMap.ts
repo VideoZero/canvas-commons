@@ -29,14 +29,14 @@ import {
   geoBounds,
   geoCentroid,
   geoDistance,
-  geoGraticule10,
+  geoGraticule,
   geoInterpolate,
   geoPath,
 } from 'd3-geo';
 import {feature, merge, mesh} from 'topojson-client';
 import {presimplify, simplify, sphericalTriangleArea} from 'topojson-simplify';
 import {cityLonLat} from './cities';
-import {PROJECTIONS, ProjectionKind} from './projections';
+import {PossibleProjection, resolveProjection} from './projections';
 
 /**
  * Map data accepted by {@link GeoMap}: a TopoJSON topology or GeoJSON
@@ -60,6 +60,8 @@ interface GeoLayers {
   land: GeoPermissibleObjects | null;
   /** Interior borders between regions. */
   borders: GeoPermissibleObjects | null;
+  /** Outer coastline (edges not shared between regions). */
+  coast: GeoPermissibleObjects | null;
   /** Whether the data covers the whole world (fit to sphere by default). */
   world: boolean;
   /** Source topology of these layers (LOD-simplified), if any. */
@@ -90,14 +92,21 @@ export interface GeoMapProps extends RectProps {
   layer?: SignalValue<string | null>;
 
   /**
-   * The projection to render the map with.
+   * The projection to render the map with: a built-in kind by name, a bare
+   * projection factory (e.g. `geoRobinson` from `d3-geo-projection`), or a
+   * `{factory, azimuthal}` definition.
    */
-  projection?: SignalValue<ProjectionKind>;
+  projection?: SignalValue<PossibleProjection>;
 
   /**
    * The `[longitude, latitude]` the camera looks at.
    */
   center?: SignalValue<PossibleVector2>;
+
+  /**
+   * Camera roll in degrees (rotation around the view axis).
+   */
+  roll?: SignalValue<number>;
 
   /**
    * Camera zoom factor; `1` shows the fitted extent.
@@ -132,6 +141,16 @@ export interface GeoMapProps extends RectProps {
   bordersWidth?: SignalValue<number>;
   graticule?: SignalValue<PossibleCanvasStyle>;
   graticuleWidth?: SignalValue<number>;
+  /**
+   * Grid spacing of the graticule in degrees; a single number applies to
+   * both axes.
+   */
+  graticuleStep?: SignalValue<number | [number, number]>;
+  /**
+   * Stroke style of the outer coastline (where land meets ocean).
+   */
+  coast?: SignalValue<PossibleCanvasStyle>;
+  coastWidth?: SignalValue<number>;
   outline?: SignalValue<PossibleCanvasStyle>;
   outlineWidth?: SignalValue<number>;
 }
@@ -178,7 +197,11 @@ export class GeoMap extends Rect {
 
   @initial('naturalEarth')
   @signal()
-  public declare readonly projection: SimpleSignal<ProjectionKind, this>;
+  public declare readonly projection: SimpleSignal<PossibleProjection, this>;
+
+  @initial(0)
+  @signal()
+  public declare readonly roll: SimpleSignal<number, this>;
 
   @initial(Vector2.zero)
   @vector2Signal('center')
@@ -219,6 +242,20 @@ export class GeoMap extends Rect {
   @initial(1)
   @signal()
   public declare readonly graticuleWidth: SimpleSignal<number, this>;
+
+  @initial(10)
+  @signal()
+  public declare readonly graticuleStep: SimpleSignal<
+    number | [number, number],
+    this
+  >;
+
+  @canvasStyleSignal()
+  public declare readonly coast: CanvasStyleSignal<this>;
+
+  @initial(1)
+  @signal()
+  public declare readonly coastWidth: SimpleSignal<number, this>;
 
   @canvasStyleSignal()
   public declare readonly outline: CanvasStyleSignal<this>;
@@ -295,7 +332,7 @@ export class GeoMap extends Rect {
         ('countries' in objects ? 'countries' : Object.keys(objects)[0]);
       const object = objects[layerName];
       if (!object) {
-        return {features: [], land: null, borders: null, world: false};
+        return {features: [], land: null, borders: null, coast: null, world: false};
       }
       const collection = feature(data, object) as any;
       const features: GeoFeatureObject[] =
@@ -306,8 +343,9 @@ export class GeoMap extends Rect {
         ? (feature(data, objects.land) as any)
         : (merge(data, object.geometries) as any);
       const borders = mesh(data, object, (a: any, b: any) => a !== b) as any;
+      const coast = mesh(data, object, (a: any, b: any) => a === b) as any;
       const world = 'land' in objects || layerName === 'countries';
-      return {features, land, borders, world, topology: data, layerName};
+      return {features, land, borders, coast, world, topology: data, layerName};
     }
 
     const features: GeoFeatureObject[] =
@@ -316,6 +354,7 @@ export class GeoMap extends Rect {
       features,
       land: data as GeoPermissibleObjects,
       borders: null,
+      coast: null,
       world: false,
     };
   }
@@ -512,6 +551,11 @@ export class GeoMap extends Rect {
       if (found) {
         return new Vector2(geoCentroid(found as GeoPermissibleObjects));
       }
+      if (this.geoData() === null) {
+        // Data still loading — resolve quietly; dependents re-evaluate
+        // once the data arrives.
+        return Vector2.zero;
+      }
       throw new Error(`GeoMap: unknown location "${location}".`);
     }
     return new Vector2(location);
@@ -549,7 +593,7 @@ export class GeoMap extends Rect {
       return null;
     }
 
-    const definition = PROJECTIONS[this.projection()];
+    const definition = resolveProjection(this.projection());
     const projection = definition.factory();
     const padding = this.fitPadding();
     projection.rotate([0, 0, 0]);
@@ -565,10 +609,11 @@ export class GeoMap extends Rect {
     );
 
     const center = this.center();
+    const roll = this.roll();
     if (definition.azimuthal) {
-      projection.rotate([-center.x, -center.y, 0]);
+      projection.rotate([-center.x, -center.y, roll]);
     } else {
-      projection.rotate([-center.x, 0, 0]);
+      projection.rotate([-center.x, 0, roll]);
       projection.center([0, center.y]);
     }
     projection.scale(projection.scale() * this.zoom());
@@ -605,7 +650,7 @@ export class GeoMap extends Rect {
    * Always `true` for non-azimuthal projections.
    */
   public isPointVisible(location: string | PossibleVector2): boolean {
-    if (!PROJECTIONS[this.projection()].azimuthal) {
+    if (!resolveProjection(this.projection()).azimuthal) {
       return true;
     }
     const lonLat = this.resolveLonLat(location);
@@ -632,7 +677,15 @@ export class GeoMap extends Rect {
 
   @computed()
   private graticulePath(): Path2D {
-    return this.renderPath(geoGraticule10());
+    const step = this.graticuleStep();
+    const [stepX, stepY] = typeof step === 'number' ? [step, step] : step;
+    return this.renderPath(geoGraticule().step([stepX, stepY])());
+  }
+
+  @computed()
+  private coastPath(): Path2D | null {
+    const layers = this.renderLayers();
+    return layers?.coast ? this.renderPath(layers.coast) : null;
   }
 
   @computed()
@@ -685,6 +738,16 @@ export class GeoMap extends Rect {
       context.lineJoin = 'round';
       context.lineCap = 'round';
       context.stroke(bordersPath);
+    }
+
+    const coast = this.coast();
+    const coastPath = this.coastPath();
+    if (coast !== null && coastPath) {
+      context.strokeStyle = resolveCanvasStyle(coast, context);
+      context.lineWidth = this.coastWidth();
+      context.lineJoin = 'round';
+      context.lineCap = 'round';
+      context.stroke(coastPath);
     }
 
     const outline = this.outline();

@@ -1,5 +1,11 @@
 import {Shape, ShapeProps, computed, initial, nodeName, signal} from '@motion-canvas/2d';
-import {PossibleVector2, SignalValue, SimpleSignal} from '@motion-canvas/core';
+import {
+  PossibleVector2,
+  SignalValue,
+  SimpleSignal,
+  Vector2,
+  clamp,
+} from '@motion-canvas/core';
 import {geoDistance, geoInterpolate, geoPath} from 'd3-geo';
 import {GeoMap} from './GeoMap';
 
@@ -111,6 +117,39 @@ export class GeoLine extends Shape {
       }
     }
     return {coordinates, lengths};
+  }
+
+  /**
+   * The `[longitude, latitude]` on the line at a fraction of its length.
+   *
+   * @remarks
+   * Useful for making a marker ride the line as it draws on:
+   *
+   * @example
+   * ```tsx
+   * <GeoPin at={() => route().pointAt(route().end())} marker={'dot'} />
+   * ```
+   */
+  public pointAt(fraction: number): Vector2 {
+    const {coordinates, lengths} = this.samples();
+    if (coordinates.length === 0) {
+      return Vector2.zero;
+    }
+    const total = lengths[lengths.length - 1];
+    if (total === 0 || coordinates.length === 1) {
+      return new Vector2(coordinates[0]);
+    }
+    const target = clamp(0, 1, fraction) * total;
+    for (let i = 1; i < coordinates.length; i++) {
+      if (lengths[i] >= target) {
+        const span = lengths[i] - lengths[i - 1];
+        const t = span === 0 ? 0 : (target - lengths[i - 1]) / span;
+        return new Vector2(
+          geoInterpolate(coordinates[i - 1], coordinates[i])(t),
+        );
+      }
+    }
+    return new Vector2(coordinates[coordinates.length - 1]);
   }
 
   /**
