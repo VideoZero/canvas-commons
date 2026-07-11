@@ -28,6 +28,23 @@ export class PlaybackStatus {
     return this.framesToSeconds(this.playback.frame);
   }
 
+  /**
+   * Triggered once after every scene has been recalculated.
+   *
+   * @remarks
+   * Fires at the end of a full {@link PlaybackManager.recalculate} pass, when
+   * the timing of all scenes is final and {@link frame} holds the total project
+   * length. Exposed here so scene-scoped code (which only sees this read-only
+   * status, not the manager) can resolve timelines that span multiple scenes —
+   * e.g. the music director expands its cross-scene cue ledger against the final
+   * project duration.
+   *
+   * @eventProperty
+   */
+  public get onScenesRecalculated() {
+    return this.playback.onScenesRecalculated;
+  }
+
   public get frame(): number {
     return this.playback.frame;
   }

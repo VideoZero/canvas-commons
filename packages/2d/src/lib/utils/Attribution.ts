@@ -223,6 +223,41 @@ export function registerAttributionForSource(
 }
 
 /**
+ * Register attribution for a source from an explicit credit object instead of
+ * parsing it out of a `vz_attribution` URL param.
+ *
+ * Images and videos register themselves as their `<Img>`/`<Video>` node renders
+ * ({@link registerAttributionForSource}), but node-less media — sfx and music
+ * sounds — have nothing that draws them, so their credit would never reach the
+ * registry. This is the entry point they call once their source is resolved, so
+ * the credit still shows in the player's attribution list and fires its
+ * export-time download notification. Idempotent and never throws: a source with
+ * no usable credit is remembered so it isn't reprocessed, and a re-registration
+ * of a known source is a no-op (so calling it every recompute is cheap).
+ *
+ * @param src - The (resolved) source URL; the registry key.
+ * @param data - The raw credit object (`{text, html?, download_notification?}`),
+ *   the same shape {@link parseAttributionFromUrl} decodes from the URL param.
+ */
+export function registerAttribution(src: string, data: unknown): void {
+  if (!attributionConfig.enabled || !src) {
+    return;
+  }
+  if (registry.has(src) || checkedWithout.has(src)) {
+    return;
+  }
+
+  const parsed = toParsedAttribution(data, src);
+  if (!parsed) {
+    checkedWithout.add(src);
+    return;
+  }
+
+  registry.set(src, parsed);
+  notify();
+}
+
+/**
  * Extract attribution from a source URL's `vz_attribution` query param. Returns
  * `null` when the param is absent or malformed.
  */
@@ -241,34 +276,46 @@ export function parseAttributionFromUrl(url: string): ParsedAttribution | null {
       return null;
     }
 
-    const data = JSON.parse(decodeURIComponent(raw));
-    if (!data || typeof data !== 'object') {
-      return null;
-    }
-
-    const text = typeof data.text === 'string' ? data.text : '';
-    const html =
-      typeof data.html === 'string'
-        ? sanitizeAttributionHtml(data.html)
-        : undefined;
-
-    let downloadNotification: DownloadNotification | undefined;
-    const dn = data.download_notification ?? data.downloadNotification;
-    if (dn && typeof dn === 'object' && typeof dn.url === 'string') {
-      downloadNotification = {
-        url: dn.url,
-        method: typeof dn.method === 'string' ? dn.method : 'POST',
-      };
-    }
-
-    if (!text && !html) {
-      return null;
-    }
-
-    return {text, html, downloadNotification, sourceUrl: url};
+    return toParsedAttribution(JSON.parse(decodeURIComponent(raw)), url);
   } catch {
     return null;
   }
+}
+
+/**
+ * Normalize a raw credit object into a {@link ParsedAttribution}, or `null` when
+ * it carries no text/html. Shared by the URL-param path and the explicit
+ * {@link registerAttribution} path so both sanitize HTML and normalize the
+ * download-notification identically.
+ */
+function toParsedAttribution(
+  data: any,
+  sourceUrl: string,
+): ParsedAttribution | null {
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+
+  const text = typeof data.text === 'string' ? data.text : '';
+  const html =
+    typeof data.html === 'string'
+      ? sanitizeAttributionHtml(data.html)
+      : undefined;
+
+  let downloadNotification: DownloadNotification | undefined;
+  const dn = data.download_notification ?? data.downloadNotification;
+  if (dn && typeof dn === 'object' && typeof dn.url === 'string') {
+    downloadNotification = {
+      url: dn.url,
+      method: typeof dn.method === 'string' ? dn.method : 'POST',
+    };
+  }
+
+  if (!text && !html) {
+    return null;
+  }
+
+  return {text, html, downloadNotification, sourceUrl};
 }
 
 const MAX_HTML_LENGTH = 512;
