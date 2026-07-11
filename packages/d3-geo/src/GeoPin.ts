@@ -62,7 +62,8 @@ export class GeoPin extends Shape {
   public declare readonly pinSize: SimpleSignal<number, this>;
 
   public constructor(props: GeoPinProps) {
-    super(props);
+    // Pins anchor to projected coordinates; never let flex layout move them.
+    super({layout: false, ...props});
     if (
       props.position === undefined &&
       props.x === undefined &&

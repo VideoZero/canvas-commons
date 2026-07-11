@@ -35,7 +35,8 @@ export class GeoFeature extends Shape {
   >;
 
   public constructor(props: GeoFeatureProps) {
-    super(props);
+    // The path is generated in map space; never let flex layout move it.
+    super({layout: false, ...props});
   }
 
   @computed()
