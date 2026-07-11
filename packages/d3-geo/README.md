@@ -88,12 +88,19 @@ Earth draws de-facto boundaries; audiences with legally mandated borders
 
 ## Performance
 
-Rendering cost is dominated by d3's spherical polygon clipping, not canvas
-rasterization. `GeoMap` therefore simplifies detailed topologies to match the
-current projection scale (`simplification` signal, default 2px tolerance,
-`0` disables) and culls off-screen regions when zoomed in. With the 50m
-atlas at 1080p this keeps camera flights at 60fps; without it, world views
-cost ~90ms/frame.
+Rendering cost is dominated by d3's spherical clipping, not canvas
+rasterization — and d3 walks every point of a geometry each frame even when
+it ends up off-screen. `GeoMap` therefore simplifies detailed topologies to
+match the current projection scale (`simplification` signal, default 2px
+tolerance, `0` disables) and, when zoomed in, rebuilds land, borders, coast,
+and the choropleth from only the features that can intersect the view. With
+the 50m atlas at 1080p this keeps camera flights at 60fps; without it,
+world views cost ~90ms/frame and zoomed-in views ~25ms/frame.
+
+LOD levels are quantized to half-octaves of scale and built once. The first
+build prewarms deeper levels (`lodPrewarm` signal, default 6 half-octaves ≈
+zoom 8×, ~80ms once at data load) so zoom flights don't hit level-build
+hitches mid-animation; zooming beyond the prewarmed range builds lazily.
 
 Beware the Motion Canvas signal convention: methods named
 `get<SignalName>`/`set<SignalName>`/`tween<SignalName>` are hijacked as

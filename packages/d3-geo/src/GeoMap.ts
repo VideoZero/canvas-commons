@@ -138,6 +138,17 @@ export interface GeoMapProps extends RectProps {
    */
   simplification?: SignalValue<number>;
 
+  /**
+   * Number of half-octave LOD levels above the base scale to prebuild
+   * along with the first one, so zoom flights don't pay level-build
+   * hitches mid-animation.
+   *
+   * @remarks
+   * The default (`6`) covers camera zooms up to ~8×; deeper zooms build
+   * lazily. `0` disables prewarming.
+   */
+  lodPrewarm?: SignalValue<number>;
+
   water?: SignalValue<PossibleCanvasStyle>;
   land?: SignalValue<PossibleCanvasStyle>;
   borders?: SignalValue<PossibleCanvasStyle>;
@@ -246,6 +257,10 @@ export class GeoMap extends Rect {
   @initial(2)
   @signal()
   public declare readonly simplification: SimpleSignal<number, this>;
+
+  @initial(6)
+  @signal()
+  public declare readonly lodPrewarm: SimpleSignal<number, this>;
 
   @canvasStyleSignal()
   public declare readonly water: CanvasStyleSignal<this>;
@@ -407,13 +422,15 @@ export class GeoMap extends Rect {
       if (!object) {
         return {features: [], land: null, borders: null, coast: null, world: false};
       }
-      const collection = sanitizePolygons(feature(data, object)) as any;
+      // Topology winding is trusted — only degenerate rings (from
+      // simplification) need cleanup, which keeps LOD builds cheap.
+      const collection = sanitizePolygons(feature(data, object), false) as any;
       const features: GeoFeatureObject[] =
         collection.type === 'FeatureCollection'
           ? collection.features
           : [collection];
       const land = objects.land
-        ? sanitizePolygons(feature(data, objects.land) as any)
+        ? sanitizePolygons(feature(data, objects.land) as any, false)
         : sanitizePolygons(merge(data, object.geometries ?? [object]) as any);
       const borders = mesh(data, object, (a: any, b: any) => a !== b) as any;
       const coast = mesh(data, object, (a: any, b: any) => a === b) as any;
@@ -479,11 +496,14 @@ export class GeoMap extends Rect {
   }
 
   /**
-   * Single-entry cache for the merged visible landmass, recreated whenever
-   * the source data or layer changes.
+   * Single-entry cache for the visible-only land/borders/coast, recreated
+   * whenever the source data or layer changes.
    */
   @computed()
-  private culledLandStore(): Map<string, GeoPermissibleObjects> {
+  private culledStore(): Map<
+    string,
+    Pick<GeoLayers, 'land' | 'borders' | 'coast'>
+  > {
     this.geoData();
     this.layer();
     return new Map();
@@ -509,8 +529,16 @@ export class GeoMap extends Rect {
     const cache = this.lodStore();
     let lod = cache.get(key);
     if (!lod) {
-      const minWeight = (pixels / 2 ** step) ** 2;
-      lod = this.buildLayers(simplify(pre, minWeight));
+      const build = (level: number) =>
+        this.buildLayers(simplify(pre, (pixels / 2 ** level) ** 2));
+      if (cache.size === 0) {
+        // First build: prewarm deeper levels in the same pass so camera
+        // zooms don't hit level-build hitches mid-flight.
+        for (let extra = this.lodPrewarm() / 2; extra >= 0.5; extra -= 0.5) {
+          cache.set(`${pixels}:${step + extra}`, build(step + extra));
+        }
+      }
+      lod = build(step);
       cache.set(key, lod);
     }
     return lod;
@@ -541,6 +569,16 @@ export class GeoMap extends Rect {
       }
       return {center, radius};
     });
+  }
+
+  /**
+   * The view cap when it is small enough for viewport culling to pay off,
+   * `null` otherwise.
+   */
+  @computed()
+  private cullingView(): SphericalRegion | null {
+    const view = this.viewRegion();
+    return view && view.radius <= Math.PI / 3 ? view : null;
   }
 
   /**
@@ -590,17 +628,24 @@ export class GeoMap extends Rect {
   }
 
   /**
-   * Landmass merged from only the features that can intersect the current
-   * view. Falls back to the full merged land when culling isn't possible
-   * or wouldn't pay off.
+   * Land, borders, and coast rebuilt from only the features that can
+   * intersect the current view.
+   *
+   * @remarks
+   * d3's spherical clipping processes every point of a geometry each frame
+   * even when it ends up off-screen, so at higher zooms path generation
+   * over world-sized meshes dominates the frame budget. Falls back to the
+   * full layers (`null`) when culling isn't possible or wouldn't pay off.
    */
-  private culledLand(layers: GeoLayers): GeoPermissibleObjects | null {
+  private culledLayers(
+    layers: GeoLayers,
+  ): Pick<GeoLayers, 'land' | 'borders' | 'coast'> | null {
     if (!layers.topology || !layers.layerName) {
       return null;
     }
-    const view = this.viewRegion();
+    const view = this.cullingView();
     const regions = this.featureRegions();
-    if (!view || !regions || view.radius > Math.PI / 3) {
+    if (!view || !regions) {
       return null;
     }
     const geometries = layers.topology.objects[layers.layerName]?.geometries;
@@ -616,23 +661,33 @@ export class GeoMap extends Rect {
         visible.push(i);
       }
     }
-    // The merge is built from the current LOD topology, so the key must
-    // include the LOD step — otherwise land and borders could render at
-    // different detail levels.
+    // Built from the current LOD topology, so the key must include the
+    // LOD step — otherwise layers could render at mixed detail levels.
     const key = `${this.simplification()}:${this.lodStep()}:${visible.join(',')}`;
-    const cache = this.culledLandStore();
-    let land = cache.get(key);
-    if (land === undefined) {
-      land = sanitizePolygons(
-        merge(
+    const cache = this.culledStore();
+    let culled = cache.get(key);
+    if (culled === undefined) {
+      const subset = visible.map(i => geometries[i]);
+      const collection = {type: 'GeometryCollection', geometries: subset};
+      culled = {
+        land: sanitizePolygons(
+          merge(layers.topology, subset),
+        ) as GeoPermissibleObjects,
+        borders: mesh(
           layers.topology,
-          visible.map(i => geometries[i]),
-        ),
-      ) as GeoPermissibleObjects;
+          collection as any,
+          (a: any, b: any) => a !== b,
+        ) as GeoPermissibleObjects,
+        coast: mesh(
+          layers.topology,
+          collection as any,
+          (a: any, b: any) => a === b,
+        ) as GeoPermissibleObjects,
+      };
       cache.clear();
-      cache.set(key, land);
+      cache.set(key, culled);
     }
-    return land;
+    return culled;
   }
 
   /**
@@ -850,20 +905,25 @@ export class GeoMap extends Rect {
   @computed()
   private coastPath(): Path2D | null {
     const layers = this.renderLayers();
-    return layers?.coast ? this.renderPath(layers.coast) : null;
+    if (!layers?.coast) {
+      return null;
+    }
+    const culled = this.culledLayers(layers);
+    return this.renderPath(culled?.coast ?? layers.coast);
   }
 
   /**
-   * LOD features indexed by lower-cased name and id.
+   * LOD feature positions indexed by lower-cased name and id.
    */
   @computed()
-  private featureIndex(): Map<string, GeoFeatureObject[]> {
-    const index = new Map<string, GeoFeatureObject[]>();
+  private featureIndex(): Map<string, number[]> {
+    const index = new Map<string, number[]>();
     const layers = this.renderLayers();
     if (!layers) {
       return index;
     }
-    for (const item of layers.features) {
+    for (let i = 0; i < layers.features.length; i++) {
+      const item = layers.features[i];
       for (const key of [
         String(item.id ?? '').toLowerCase(),
         String(item.properties?.name ?? '').toLowerCase(),
@@ -873,9 +933,9 @@ export class GeoMap extends Rect {
         }
         const list = index.get(key);
         if (list) {
-          list.push(item);
+          list.push(i);
         } else {
-          index.set(key, [item]);
+          index.set(key, [i]);
         }
       }
     }
@@ -889,23 +949,41 @@ export class GeoMap extends Rect {
     if (entries.length === 0) {
       return [];
     }
+    const layers = this.renderLayers();
     const index = this.featureIndex();
     const projection = this.projector();
-    if (!projection) {
+    if (!layers || !projection) {
       return [];
     }
+    const view = this.cullingView();
+    const regions = this.featureRegions();
+    const cull =
+      view && regions && regions.length === layers.features.length
+        ? (i: number) =>
+            geoDistance(view.center, regions[i].center) >=
+            view.radius + regions[i].radius
+        : () => false;
     const result: {style: PossibleCanvasStyle; path: Path2D}[] = [];
     for (const [name, style] of entries) {
-      const features = index.get(name.toLowerCase());
-      if (!features) {
+      const indices = index.get(name.toLowerCase());
+      if (!indices) {
         continue;
       }
       const path = new Path2D();
       const render = geoPath(projection, path as any);
-      for (const item of features) {
-        render(item as GeoPermissibleObjects);
+      let drew = false;
+      for (const i of indices) {
+        // Skip features that cannot intersect the view — d3's clipping
+        // would still walk all of their points otherwise.
+        if (cull(i)) {
+          continue;
+        }
+        render(layers.features[i] as GeoPermissibleObjects);
+        drew = true;
       }
-      result.push({style, path});
+      if (drew) {
+        result.push({style, path});
+      }
     }
     return result;
   }
@@ -926,14 +1004,18 @@ export class GeoMap extends Rect {
     if (!layers?.land) {
       return null;
     }
-    const culled = this.culledLand(layers);
-    return this.renderPath(culled ?? layers.land);
+    const culled = this.culledLayers(layers);
+    return this.renderPath(culled?.land ?? layers.land);
   }
 
   @computed()
   private bordersPath(): Path2D | null {
     const layers = this.renderLayers();
-    return layers?.borders ? this.renderPath(layers.borders) : null;
+    if (!layers?.borders) {
+      return null;
+    }
+    const culled = this.culledLayers(layers);
+    return this.renderPath(culled?.borders ?? layers.borders);
   }
 
   protected override draw(context: CanvasRenderingContext2D) {
