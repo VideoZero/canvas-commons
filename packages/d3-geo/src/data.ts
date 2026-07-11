@@ -1,7 +1,7 @@
 /**
  * Geo data loading: bundled world-atlas plus configurable remote sources.
  */
-export type WorldAtlasResolution = '110m' | '50m';
+export type WorldAtlasResolution = '110m' | '50m' | '10m';
 
 export interface GeoDataConfig {
   /**
@@ -77,8 +77,9 @@ const cache = new Map<string, Promise<object>>();
  * data. When `configureGeoData({hostWorldAtlas: true, ...})` is set, the
  * data is fetched from the configured source instead.
  *
- * @param resolution - `'110m'` (small, default) or `'50m'` (more detail,
- * better when zooming in on countries).
+ * @param resolution - `'110m'` (small, default), `'50m'` (more detail,
+ * better when zooming in on countries), or `'10m'` (full detail, large —
+ * for close-ups of coastlines and small islands).
  */
 export function worldAtlas(
   resolution: WorldAtlasResolution = '110m',
@@ -96,9 +97,13 @@ export function worldAtlas(
           ? import('world-atlas/countries-50m.json').then(
               module => module.default as object,
             )
-          : import('world-atlas/countries-110m.json').then(
-              module => module.default as object,
-            );
+          : resolution === '10m'
+            ? import('world-atlas/countries-10m.json').then(
+                module => module.default as object,
+              )
+            : import('world-atlas/countries-110m.json').then(
+                module => module.default as object,
+              );
     }
     cache.set(key, promise);
   }

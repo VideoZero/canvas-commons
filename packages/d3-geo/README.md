@@ -8,7 +8,7 @@ is deterministic under frame stepping.
 
 | Component    | Purpose |
 | ------------ | ------- |
-| `GeoMap`     | The map itself: data, projection, camera (`center`/`zoom`/`roll`, `flyTo`/`flyToFeature`/`zoomFor`), layer styling (`water`, `land`, `borders`, `coast`, `graticule`, `outline`), and `featureFills` (a `{name: fill}` record — the choropleth layer, rendered with LOD). |
+| `GeoMap`     | The map itself: data, projection, camera (`center`/`zoom`/`roll`, `flyTo`/`flyToFeature`/`zoomFor`), layer styling (`water`, `land`, `borders`, `coast`, `graticule`, `outline`), and the choropleth layer: `featureFills`/`featureStrokes` (`{name: style}` records, rendered with LOD; stroke width via `featureStrokeWidth`). |
 | `GeoFeature` | Highlights a region by name/id or GeoJSON object. `reveal` animates a circular color-in wipe. |
 | `GeoCircle`  | Geodesic circle region (`at` + `radius` in km). Tween `radius` for range/ripple effects. |
 | `GeoLine`    | Great-circle route through waypoints. `start`/`end` animate a draw-on; `progressAt(i)` gives the fraction at waypoint `i`; `pointAt(t)` lets markers ride the line; `bulge` bows each leg for the flight-arc look. |
@@ -65,14 +65,21 @@ import {geoRobinson} from 'd3-geo-projection';
 
 ## Data
 
-- `worldAtlas('110m' | '50m')` — bundled Natural Earth countries
+- `worldAtlas('110m' | '50m' | '10m')` — bundled Natural Earth countries
   (TopoJSON from the `world-atlas` npm package).
 - `data` also accepts any TopoJSON/GeoJSON object, promise, or URL.
+  Failed fetches surface as scene errors instead of a silently blank map.
 - `configureGeoData({baseUrl, resolver, hostWorldAtlas})` + `geoData(name)`
   resolve named datasets from a server at runtime.
 
 TopoJSON inputs get interior borders and coastlines via topology meshing and
 support automatic simplification; plain GeoJSON renders features only.
+
+All polygon data is sanitized for d3's spherical winding rules on load —
+standard RFC 7946 GeoJSON (counterclockwise exteriors) is rewound
+automatically and degenerate rings are dropped, so files from qgis/mapshaper
+render as-is. `sanitizePolygons()` is exported for custom geometry passed
+straight to `GeoFeature`.
 
 **Licensing:** all runtime dependencies are ISC. Natural Earth data is public
 domain — free for commercial use, no attribution required. Note that Natural
@@ -91,6 +98,11 @@ cost ~90ms/frame.
 Beware the Motion Canvas signal convention: methods named
 `get<SignalName>`/`set<SignalName>`/`tween<SignalName>` are hijacked as
 signal accessors — never add such methods to these classes.
+
+## Tests
+
+`npm test` (vitest) covers the pure helpers: projections, gazetteer, URL
+resolution, geometry sanitization, and `GeoLine`/`GeoMap` lookup math.
 
 ## Shaders
 

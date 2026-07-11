@@ -37,6 +37,7 @@ import {
 import {feature, merge, mesh} from 'topojson-client';
 import {presimplify, simplify, sphericalTriangleArea} from 'topojson-simplify';
 import {cityLonLat} from './cities';
+import {sanitizePolygons} from './geometry';
 import {PossibleProjection, resolveProjection} from './projections';
 
 /**
@@ -75,6 +76,7 @@ interface SphericalRegion {
   center: [number, number];
   radius: number;
 }
+
 
 export interface GeoMapProps extends RectProps {
   /**
@@ -167,6 +169,12 @@ export interface GeoMapProps extends RectProps {
    * ```
    */
   featureFills?: SignalValue<Record<string, PossibleCanvasStyle>>;
+  /**
+   * Per-region strokes keyed by feature name or id — outlines for the
+   * choropleth layer, drawn above borders and coast.
+   */
+  featureStrokes?: SignalValue<Record<string, PossibleCanvasStyle>>;
+  featureStrokeWidth?: SignalValue<number>;
   outline?: SignalValue<PossibleCanvasStyle>;
   outlineWidth?: SignalValue<number>;
 }
@@ -280,6 +288,17 @@ export class GeoMap extends Rect {
     this
   >;
 
+  @initial({})
+  @signal()
+  public declare readonly featureStrokes: SimpleSignal<
+    Record<string, PossibleCanvasStyle>,
+    this
+  >;
+
+  @initial(1)
+  @signal()
+  public declare readonly featureStrokeWidth: SimpleSignal<number, this>;
+
   @canvasStyleSignal()
   public declare readonly outline: CanvasStyleSignal<this>;
 
@@ -287,13 +306,13 @@ export class GeoMap extends Rect {
   @signal()
   public declare readonly outlineWidth: SimpleSignal<number, this>;
 
-  private readonly lodCache = new Map<string, GeoLayers>();
-  private readonly culledLandCache = new Map<string, GeoPermissibleObjects>();
-
-  private static readonly urlPool: Record<string, {value: object | null; promise: Promise<object>}> = {};
+  private static readonly urlPool: Record<
+    string,
+    {value: object | null; error: unknown; settled: Promise<unknown>}
+  > = {};
   private static readonly promisePool = new WeakMap<
     Promise<object>,
-    {value: object | null}
+    {value: object | null; error: unknown; settled: Promise<unknown>}
   >();
 
   public constructor(props: GeoMapProps) {
@@ -313,17 +332,36 @@ export class GeoMap extends Rect {
     if (typeof raw === 'string') {
       let entry = GeoMap.urlPool[raw];
       if (!entry) {
-        entry = {
+        const created: (typeof GeoMap.urlPool)[string] = {
           value: null,
-          promise: fetch(raw).then(response => response.json()),
+          error: null,
+          settled: Promise.resolve(),
         };
-        entry.promise.then(value => {
-          entry.value = value;
-        });
-        GeoMap.urlPool[raw] = entry;
+        created.settled = fetch(raw)
+          .then(response => {
+            if (!response.ok) {
+              throw new Error(`${response.status} ${response.statusText}`);
+            }
+            return response.json();
+          })
+          .then(
+            value => {
+              created.value = value;
+            },
+            error => {
+              created.error = error;
+            },
+          );
+        GeoMap.urlPool[raw] = created;
+        entry = created;
+      }
+      if (entry.error !== null) {
+        throw new Error(
+          `GeoMap: failed to load map data from "${raw}": ${entry.error}`,
+        );
       }
       if (entry.value === null) {
-        DependencyContext.collectPromise(entry.promise);
+        DependencyContext.collectPromise(entry.settled);
       }
       return entry.value;
     }
@@ -331,15 +369,27 @@ export class GeoMap extends Rect {
     if (raw instanceof Promise) {
       let entry = GeoMap.promisePool.get(raw);
       if (!entry) {
-        const created = {value: null as object | null};
-        raw.then(value => {
-          created.value = value;
-        });
+        const created = {
+          value: null as object | null,
+          error: null as unknown,
+          settled: Promise.resolve() as Promise<unknown>,
+        };
+        created.settled = raw.then(
+          value => {
+            created.value = value;
+          },
+          error => {
+            created.error = error;
+          },
+        );
         GeoMap.promisePool.set(raw, created);
         entry = created;
       }
+      if (entry.error !== null) {
+        throw new Error(`GeoMap: map data promise rejected: ${entry.error}`);
+      }
       if (entry.value === null) {
-        DependencyContext.collectPromise(raw);
+        DependencyContext.collectPromise(entry.settled);
       }
       return entry.value;
     }
@@ -357,25 +407,30 @@ export class GeoMap extends Rect {
       if (!object) {
         return {features: [], land: null, borders: null, coast: null, world: false};
       }
-      const collection = feature(data, object) as any;
+      const collection = sanitizePolygons(feature(data, object)) as any;
       const features: GeoFeatureObject[] =
         collection.type === 'FeatureCollection'
           ? collection.features
           : [collection];
       const land = objects.land
-        ? (feature(data, objects.land) as any)
-        : (merge(data, object.geometries) as any);
+        ? sanitizePolygons(feature(data, objects.land) as any)
+        : sanitizePolygons(merge(data, object.geometries ?? [object]) as any);
       const borders = mesh(data, object, (a: any, b: any) => a !== b) as any;
       const coast = mesh(data, object, (a: any, b: any) => a === b) as any;
       const world = 'land' in objects || layerName === 'countries';
       return {features, land, borders, coast, world, topology: data, layerName};
     }
 
+    // Sanitizing also rewinds RFC 7946 GeoJSON, which d3 would otherwise
+    // read as the polygon's complement.
+    const collection = sanitizePolygons(data);
     const features: GeoFeatureObject[] =
-      data.type === 'FeatureCollection' ? data.features : [data];
+      collection.type === 'FeatureCollection'
+        ? collection.features
+        : [collection];
     return {
       features,
-      land: data as GeoPermissibleObjects,
+      land: collection as GeoPermissibleObjects,
       borders: null,
       coast: null,
       world: false,
@@ -402,6 +457,39 @@ export class GeoMap extends Rect {
   }
 
   /**
+   * The projection scale quantized to half-octaves — the LOD level.
+   */
+  @computed()
+  private lodStep(): number | null {
+    const projection = this.projector();
+    return projection
+      ? Math.round(Math.log2(projection.scale()) * 2) / 2
+      : null;
+  }
+
+  /**
+   * Cache of LOD-simplified layers, recreated whenever the source data or
+   * layer changes so stale geometry can never leak across datasets.
+   */
+  @computed()
+  private lodStore(): Map<string, GeoLayers> {
+    this.geoData();
+    this.layer();
+    return new Map();
+  }
+
+  /**
+   * Single-entry cache for the merged visible landmass, recreated whenever
+   * the source data or layer changes.
+   */
+  @computed()
+  private culledLandStore(): Map<string, GeoPermissibleObjects> {
+    this.geoData();
+    this.layer();
+    return new Map();
+  }
+
+  /**
    * Layers simplified for the current projection scale.
    *
    * @remarks
@@ -412,18 +500,18 @@ export class GeoMap extends Rect {
   private renderLayers(): GeoLayers | null {
     const raw = this.layers();
     const pre = this.presimplified();
-    const projection = this.projector();
-    if (!raw || !pre || !projection) {
+    const step = this.lodStep();
+    if (!raw || !pre || step === null) {
       return raw;
     }
     const pixels = this.simplification();
-    const step = Math.round(Math.log2(projection.scale()) * 2) / 2;
     const key = `${pixels}:${step}`;
-    let lod = this.lodCache.get(key);
+    const cache = this.lodStore();
+    let lod = cache.get(key);
     if (!lod) {
       const minWeight = (pixels / 2 ** step) ** 2;
       lod = this.buildLayers(simplify(pre, minWeight));
-      this.lodCache.set(key, lod);
+      cache.set(key, lod);
     }
     return lod;
   }
@@ -515,8 +603,8 @@ export class GeoMap extends Rect {
     if (!view || !regions || view.radius > Math.PI / 3) {
       return null;
     }
-    const geometries = layers.topology.objects[layers.layerName].geometries;
-    if (regions.length !== geometries.length) {
+    const geometries = layers.topology.objects[layers.layerName]?.geometries;
+    if (!geometries || regions.length !== geometries.length) {
       return null;
     }
     const visible: number[] = [];
@@ -528,15 +616,21 @@ export class GeoMap extends Rect {
         visible.push(i);
       }
     }
-    const key = `${this.simplification()}:${visible.join(',')}`;
-    let land = this.culledLandCache.get(key);
+    // The merge is built from the current LOD topology, so the key must
+    // include the LOD step — otherwise land and borders could render at
+    // different detail levels.
+    const key = `${this.simplification()}:${this.lodStep()}:${visible.join(',')}`;
+    const cache = this.culledLandStore();
+    let land = cache.get(key);
     if (land === undefined) {
-      land = merge(
-        layers.topology,
-        visible.map(i => geometries[i]),
+      land = sanitizePolygons(
+        merge(
+          layers.topology,
+          visible.map(i => geometries[i]),
+        ),
       ) as GeoPermissibleObjects;
-      this.culledLandCache.clear();
-      this.culledLandCache.set(key, land);
+      cache.clear();
+      cache.set(key, land);
     }
     return land;
   }
@@ -677,18 +771,59 @@ export class GeoMap extends Rect {
    * Whether a location is on the camera-facing side of the globe.
    *
    * @remarks
-   * Always `true` for non-azimuthal projections.
+   * Always `true` for non-azimuthal projections. For azimuthal ones the
+   * visible cap is set by the projection's own clip angle (90° for
+   * orthographic, 142° for stereographic, ~180° for azimuthal equal-area).
    */
   public isPointVisible(location: string | PossibleVector2): boolean {
     if (!resolveProjection(this.projection()).azimuthal) {
+      return true;
+    }
+    const clipAngle = this.projector()?.clipAngle?.() ?? null;
+    if (clipAngle === null) {
       return true;
     }
     const lonLat = this.resolveLonLat(location);
     const center = this.center();
     return (
       geoDistance([lonLat.x, lonLat.y], [center.x, center.y]) <
-      Math.PI / 2 + 1e-6
+      (clipAngle * Math.PI) / 180 + 1e-6
     );
+  }
+
+  /**
+   * The projected position of a location in this node's local space,
+   * regardless of visibility.
+   *
+   * @returns `Vector2.zero` while data/size are unresolved or when the
+   * projection cannot represent the point.
+   */
+  public geoPosition(location: string | PossibleVector2): Vector2 {
+    const projection = this.projector();
+    if (!projection) {
+      return Vector2.zero;
+    }
+    const lonLat = this.resolveLonLat(location);
+    const projected = projection([lonLat.x, lonLat.y]);
+    return projected ? new Vector2(projected) : Vector2.zero;
+  }
+
+  /**
+   * Whether an anchored node at this location should be shown: on the
+   * camera-facing side of a globe and representable by the projection
+   * (composite projections like albersUsa cannot project points outside
+   * their domain).
+   */
+  public isLocationVisible(location: string | PossibleVector2): boolean {
+    if (!this.isPointVisible(location)) {
+      return false;
+    }
+    const projection = this.projector();
+    if (!projection) {
+      return true;
+    }
+    const lonLat = this.resolveLonLat(location);
+    return projection([lonLat.x, lonLat.y]) !== null;
   }
 
   private renderPath(object: GeoPermissibleObjects): Path2D {
@@ -747,9 +882,10 @@ export class GeoMap extends Rect {
     return index;
   }
 
-  @computed()
-  private featureFillPaths(): {style: PossibleCanvasStyle; path: Path2D}[] {
-    const entries = Object.entries(this.featureFills());
+  private featurePathsFor(
+    record: Record<string, PossibleCanvasStyle>,
+  ): {style: PossibleCanvasStyle; path: Path2D}[] {
+    const entries = Object.entries(record);
     if (entries.length === 0) {
       return [];
     }
@@ -772,6 +908,16 @@ export class GeoMap extends Rect {
       result.push({style, path});
     }
     return result;
+  }
+
+  @computed()
+  private featureFillPaths(): {style: PossibleCanvasStyle; path: Path2D}[] {
+    return this.featurePathsFor(this.featureFills());
+  }
+
+  @computed()
+  private featureStrokePaths(): {style: PossibleCanvasStyle; path: Path2D}[] {
+    return this.featurePathsFor(this.featureStrokes());
   }
 
   @computed()
@@ -841,6 +987,14 @@ export class GeoMap extends Rect {
       context.stroke(coastPath);
     }
 
+    for (const {style, path} of this.featureStrokePaths()) {
+      context.strokeStyle = resolveCanvasStyle(canvasStyleParser(style), context);
+      context.lineWidth = this.featureStrokeWidth();
+      context.lineJoin = 'round';
+      context.lineCap = 'round';
+      context.stroke(path);
+    }
+
     const outline = this.outline();
     if (outline !== null) {
       context.strokeStyle = resolveCanvasStyle(outline, context);
@@ -882,9 +1036,14 @@ export class GeoMap extends Rect {
     const fromZoom = this.zoom();
     const to = this.resolveLonLat(location);
     const toZoom = zoom ?? fromZoom;
+    // Composite projections (albersUsa) have a fixed camera — only the
+    // zoom part of the flight applies.
+    const fixedCamera = !this.projector()?.rotate;
 
     const interpolate = geoInterpolate([from.x, from.y], [to.x, to.y]);
-    const distance = geoDistance([from.x, from.y], [to.x, to.y]);
+    const distance = fixedCamera
+      ? 0
+      : geoDistance([from.x, from.y], [to.x, to.y]);
     const logFrom = Math.log2(fromZoom);
     const logTo = Math.log2(toZoom);
     // Zoom out during the flight, further for longer hops, but never below
@@ -893,8 +1052,10 @@ export class GeoMap extends Rect {
 
     yield* tween(duration, value => {
       const t = timing(value);
-      const [lon, lat] = interpolate(t);
-      this.center(new Vector2(lon, lat));
+      if (!fixedCamera) {
+        const [lon, lat] = interpolate(t);
+        this.center(new Vector2(lon, lat));
+      }
       this.zoom(
         2 ** (logFrom + (logTo - logFrom) * t - dip * Math.sin(Math.PI * t)),
       );

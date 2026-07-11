@@ -8,7 +8,8 @@
   "license": "MIT",
   "scripts": {
     "dev": "tsc -w",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest"
   },
   "exports": {
     ".": {
@@ -31,6 +32,8 @@
   },
   "devDependencies": {
     "@types/d3-geo": "^3.1.0",
-    "@types/topojson-client": "^3.1.5"
+    "@types/topojson-client": "^3.1.5",
+    "jsdom": "^22.1.0",
+    "vitest": "^0.34.6"
   }
 }

@@ -2,12 +2,12 @@ import {Shape, ShapeProps, computed, initial, nodeName, signal} from '@motion-ca
 import {BBox, SignalValue, SimpleSignal} from '@motion-canvas/core';
 import {
   GeoPermissibleObjects,
-  geoBounds,
   geoCentroid,
   geoCircle,
   geoDistance,
   geoPath,
 } from 'd3-geo';
+import {sanitizePolygons} from './geometry';
 import {GeoMap} from './GeoMap';
 
 export interface GeoFeatureProps extends ShapeProps {
@@ -77,7 +77,7 @@ export class GeoFeature extends Shape {
       return null;
     }
     if (typeof value === 'object') {
-      return value as GeoPermissibleObjects;
+      return sanitizePolygons(value) as GeoPermissibleObjects;
     }
     return this.map().featureByName(value) as GeoPermissibleObjects | null;
   }
@@ -104,15 +104,34 @@ export class GeoFeature extends Shape {
       return null;
     }
     const center = geoCentroid(geometry);
-    const [[west, south], [east, north]] = geoBounds(geometry);
+    // Sweep the actual vertices: bounding-box corners underestimate the
+    // radius for regions crossing the antimeridian (Russia, Fiji, ...).
     let radius = 0;
-    for (const point of [
-      [west, south],
-      [west, north],
-      [east, south],
-      [east, north],
-    ] as [number, number][]) {
-      radius = Math.max(radius, geoDistance(center, point));
+    const visit = (coordinates: any): void => {
+      if (typeof coordinates[0] === 'number') {
+        radius = Math.max(
+          radius,
+          geoDistance(center, coordinates as [number, number]),
+        );
+        return;
+      }
+      for (const nested of coordinates) {
+        visit(nested);
+      }
+    };
+    const item = geometry as any;
+    const geometries =
+      item.type === 'Feature'
+        ? [item.geometry]
+        : item.type === 'FeatureCollection'
+          ? item.features.map((entry: any) => entry.geometry)
+          : item.type === 'GeometryCollection'
+            ? item.geometries
+            : [item];
+    for (const entry of geometries) {
+      if (entry?.coordinates?.length) {
+        visit(entry.coordinates);
+      }
     }
     return {center, radius: (radius * 180) / Math.PI};
   }

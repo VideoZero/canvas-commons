@@ -177,23 +177,13 @@ export class GeoLine extends Shape {
    * ```
    */
   public progressAt(index: number): number {
-    const map = this.map();
-    const resolved = this.points().map(point => {
-      const lonLat = map.resolveLonLat(point);
-      return [lonLat.x, lonLat.y] as [number, number];
-    });
-    if (resolved.length < 2) {
+    const lengths = this.waypointLengths();
+    const total = lengths[lengths.length - 1] ?? 0;
+    if (total === 0) {
       return 0;
     }
-    let total = 0;
-    let at = 0;
-    for (let i = 1; i < resolved.length; i++) {
-      total += geoDistance(resolved[i - 1], resolved[i]);
-      if (i === index) {
-        at = total;
-      }
-    }
-    return index <= 0 || total === 0 ? 0 : Math.min(1, at / total || 1);
+    const at = lengths[Math.round(clamp(0, lengths.length - 1, index))];
+    return Math.min(1, at / total);
   }
 
   @computed()
@@ -289,6 +279,16 @@ export class GeoLine extends Shape {
       return result ? {x: result[0], y: result[1], length: lengths[i]} : null;
     });
 
+    // Consecutive samples are ~1° apart, so their projected distance is a
+    // small fraction of the projection scale. A jump beyond it means the
+    // leg wrapped around the antimeridian on a flat projection — break the
+    // line there, like d3's clipping does for the geodesic case.
+    const scale = projection.scale?.() ?? Number.POSITIVE_INFINITY;
+    const isJump = (
+      a: {x: number; y: number},
+      b: {x: number; y: number},
+    ): boolean => Math.hypot(a.x - b.x, a.y - b.y) > scale;
+
     let leg = 0;
     let started = false;
     for (let i = 0; i < projected.length; i++) {
@@ -297,6 +297,11 @@ export class GeoLine extends Shape {
         started = false;
         continue;
       }
+      const previous = projected[i - 1] ?? null;
+      const next = projected[i + 1] ?? null;
+      if (previous && isJump(current, previous)) {
+        started = false;
+      }
       while (leg < waypoints.length - 2 && current.length > waypoints[leg + 1]) {
         leg++;
       }
@@ -304,8 +309,8 @@ export class GeoLine extends Shape {
       const legEnd = waypoints[leg + 1] ?? legStart + 1;
       const t = (current.length - legStart) / (legEnd - legStart || 1);
 
-      const before = projected[i - 1] ?? current;
-      const after = projected[i + 1] ?? current;
+      const before = previous && !isJump(current, previous) ? previous : current;
+      const after = next && !isJump(current, next) ? next : current;
       const dx = after.x - before.x;
       const dy = after.y - before.y;
       const magnitude = Math.hypot(dx, dy) || 1;

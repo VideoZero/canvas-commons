@@ -66,14 +66,7 @@ export class GeoLabel extends Txt {
 
   @computed()
   private geoPosition(): Vector2 {
-    const map = this.map();
-    const projection = map.projector();
-    if (!projection) {
-      return Vector2.zero;
-    }
-    const lonLat = map.resolveLonLat(this.at());
-    const projected = projection([lonLat.x, lonLat.y]);
-    return projected ? new Vector2(projected) : Vector2.zero;
+    return this.map().geoPosition(this.at());
   }
 
   /**
@@ -82,16 +75,7 @@ export class GeoLabel extends Txt {
    */
   @computed()
   public isVisibleOnGlobe(): boolean {
-    const map = this.map();
-    if (!map.isPointVisible(this.at())) {
-      return false;
-    }
-    const projection = map.projector();
-    if (!projection) {
-      return true;
-    }
-    const lonLat = map.resolveLonLat(this.at());
-    return projection([lonLat.x, lonLat.y]) !== null;
+    return this.map().isLocationVisible(this.at());
   }
 
   protected override draw(context: CanvasRenderingContext2D) {
