@@ -11,7 +11,10 @@
     "build": "tsc"
   },
   "exports": {
-    ".": {"types": "./lib/index.d.ts", "import": "./lib/index.js"}
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    }
   },
   "sideEffects": false,
   "files": [
@@ -23,6 +26,7 @@
     "@motion-canvas/core": "^3.18.0-alpha.0",
     "d3-geo": "^3.1.0",
     "topojson-client": "^3.1.0",
+    "topojson-simplify": "^3.0.3",
     "world-atlas": "^2.0.2"
   },
   "devDependencies": {

@@ -26,6 +26,7 @@ import {
 import {
   GeoPermissibleObjects,
   GeoProjection,
+  geoBounds,
   geoCentroid,
   geoDistance,
   geoGraticule10,
@@ -33,6 +34,7 @@ import {
   geoPath,
 } from 'd3-geo';
 import {feature, merge, mesh} from 'topojson-client';
+import {presimplify, simplify, sphericalTriangleArea} from 'topojson-simplify';
 import {cityLonLat} from './cities';
 import {PROJECTIONS, ProjectionKind} from './projections';
 
@@ -60,6 +62,15 @@ interface GeoLayers {
   borders: GeoPermissibleObjects | null;
   /** Whether the data covers the whole world (fit to sphere by default). */
   world: boolean;
+  /** Source topology of these layers (LOD-simplified), if any. */
+  topology?: any;
+  /** Name of the topology object the layers came from. */
+  layerName?: string;
+}
+
+interface SphericalRegion {
+  center: [number, number];
+  radius: number;
 }
 
 export interface GeoMapProps extends RectProps {
@@ -103,6 +114,17 @@ export interface GeoMapProps extends RectProps {
    * Padding in pixels around the fitted extent at zoom 1.
    */
   fitPadding?: SignalValue<number>;
+
+  /**
+   * Geometry simplification tolerance in pixels for rendering; `0` disables.
+   *
+   * @remarks
+   * Detailed datasets (e.g. the 50m world atlas) are automatically
+   * simplified to match the current projection scale, keeping camera
+   * animation fast without visible quality loss. Highlighted features
+   * always render at full detail.
+   */
+  simplification?: SignalValue<number>;
 
   water?: SignalValue<PossibleCanvasStyle>;
   land?: SignalValue<PossibleCanvasStyle>;
@@ -174,6 +196,10 @@ export class GeoMap extends Rect {
   @signal()
   public declare readonly fitPadding: SimpleSignal<number, this>;
 
+  @initial(2)
+  @signal()
+  public declare readonly simplification: SimpleSignal<number, this>;
+
   @canvasStyleSignal()
   public declare readonly water: CanvasStyleSignal<this>;
 
@@ -200,6 +226,9 @@ export class GeoMap extends Rect {
   @initial(2)
   @signal()
   public declare readonly outlineWidth: SimpleSignal<number, this>;
+
+  private readonly lodCache = new Map<string, GeoLayers>();
+  private readonly culledLandCache = new Map<string, GeoPermissibleObjects>();
 
   private static readonly urlPool: Record<string, {value: object | null; promise: Promise<object>}> = {};
   private static readonly promisePool = new WeakMap<
@@ -258,13 +287,7 @@ export class GeoMap extends Rect {
     return raw;
   }
 
-  @computed()
-  private layers(): GeoLayers | null {
-    const data = this.geoData();
-    if (!data) {
-      return null;
-    }
-
+  private buildLayers(data: any): GeoLayers {
     if (data.type === 'Topology') {
       const objects = data.objects ?? {};
       const layerName =
@@ -284,7 +307,7 @@ export class GeoMap extends Rect {
         : (merge(data, object.geometries) as any);
       const borders = mesh(data, object, (a: any, b: any) => a !== b) as any;
       const world = 'land' in objects || layerName === 'countries';
-      return {features, land, borders, world};
+      return {features, land, borders, world, topology: data, layerName};
     }
 
     const features: GeoFeatureObject[] =
@@ -295,6 +318,165 @@ export class GeoMap extends Rect {
       borders: null,
       world: false,
     };
+  }
+
+  @computed()
+  private layers(): GeoLayers | null {
+    const data = this.geoData();
+    return data ? this.buildLayers(data) : null;
+  }
+
+  /**
+   * The raw topology with per-vertex simplification weights, used to derive
+   * LOD variants for rendering. `null` for plain GeoJSON data.
+   */
+  @computed()
+  private presimplified(): any | null {
+    const data = this.geoData();
+    if (!data || data.type !== 'Topology' || this.simplification() <= 0) {
+      return null;
+    }
+    return presimplify(data, sphericalTriangleArea);
+  }
+
+  /**
+   * Layers simplified for the current projection scale.
+   *
+   * @remarks
+   * The scale is quantized to half-octaves and each level is built once and
+   * cached, so camera tweens only pay the path-generation cost per frame.
+   */
+  @computed()
+  private renderLayers(): GeoLayers | null {
+    const raw = this.layers();
+    const pre = this.presimplified();
+    const projection = this.projector();
+    if (!raw || !pre || !projection) {
+      return raw;
+    }
+    const pixels = this.simplification();
+    const step = Math.round(Math.log2(projection.scale()) * 2) / 2;
+    const key = `${pixels}:${step}`;
+    let lod = this.lodCache.get(key);
+    if (!lod) {
+      const minWeight = (pixels / 2 ** step) ** 2;
+      lod = this.buildLayers(simplify(pre, minWeight));
+      this.lodCache.set(key, lod);
+    }
+    return lod;
+  }
+
+  /**
+   * Bounding region (spherical cap) of each raw feature, index-aligned with
+   * the topology's geometries. Used for viewport culling.
+   */
+  @computed()
+  private featureRegions(): SphericalRegion[] | null {
+    const raw = this.layers();
+    if (!raw || !raw.topology) {
+      return null;
+    }
+    return raw.features.map(item => {
+      const geometry = item as GeoPermissibleObjects;
+      const center = geoCentroid(geometry);
+      const [[west, south], [east, north]] = geoBounds(geometry);
+      let radius = 0;
+      for (const point of [
+        [west, south],
+        [west, north],
+        [east, south],
+        [east, north],
+      ] as [number, number][]) {
+        radius = Math.max(radius, geoDistance(center, point));
+      }
+      return {center, radius};
+    });
+  }
+
+  /**
+   * The visible portion of the map as a spherical cap, or `null` when it
+   * cannot be determined (e.g. the whole globe is in view).
+   */
+  @computed()
+  private viewRegion(): SphericalRegion | null {
+    const projection = this.projector();
+    if (!projection || !projection.invert) {
+      return null;
+    }
+    const size = this.computedSize();
+    const center = this.center();
+    const centerLonLat: [number, number] = [center.x, center.y];
+    let radius = 0;
+    for (const [fx, fy] of [
+      [0, 0],
+      [0.5, 0],
+      [1, 0],
+      [0, 0.5],
+      [1, 0.5],
+      [0, 1],
+      [0.5, 1],
+      [1, 1],
+    ]) {
+      const point: [number, number] = [
+        -size.x / 2 + size.x * fx,
+        -size.y / 2 + size.y * fy,
+      ];
+      const inverted = projection.invert(point);
+      if (!inverted || !inverted.every(isFinite)) {
+        return null;
+      }
+      // Inversion can report a false hit for points outside the projection
+      // (e.g. beyond the globe's horizon) — verify by projecting back.
+      const roundTrip = projection(inverted);
+      if (
+        !roundTrip ||
+        Math.hypot(roundTrip[0] - point[0], roundTrip[1] - point[1]) > 0.5
+      ) {
+        return null;
+      }
+      radius = Math.max(radius, geoDistance(centerLonLat, inverted));
+    }
+    return {center: centerLonLat, radius};
+  }
+
+  /**
+   * Landmass merged from only the features that can intersect the current
+   * view. Falls back to the full merged land when culling isn't possible
+   * or wouldn't pay off.
+   */
+  private culledLand(layers: GeoLayers): GeoPermissibleObjects | null {
+    if (!layers.topology || !layers.layerName) {
+      return null;
+    }
+    const view = this.viewRegion();
+    const regions = this.featureRegions();
+    if (!view || !regions || view.radius > Math.PI / 3) {
+      return null;
+    }
+    const geometries = layers.topology.objects[layers.layerName].geometries;
+    if (regions.length !== geometries.length) {
+      return null;
+    }
+    const visible: number[] = [];
+    for (let i = 0; i < regions.length; i++) {
+      if (
+        geoDistance(view.center, regions[i].center) <
+        view.radius + regions[i].radius
+      ) {
+        visible.push(i);
+      }
+    }
+    const key = `${this.simplification()}:${visible.join(',')}`;
+    let land = this.culledLandCache.get(key);
+    if (land === undefined) {
+      land = merge(
+        layers.topology,
+        visible.map(i => geometries[i]),
+      ) as GeoPermissibleObjects;
+      this.culledLandCache.clear();
+      this.culledLandCache.set(key, land);
+    }
+    return land;
   }
 
   /**
@@ -455,13 +637,17 @@ export class GeoMap extends Rect {
 
   @computed()
   private landPath(): Path2D | null {
-    const layers = this.layers();
-    return layers?.land ? this.renderPath(layers.land) : null;
+    const layers = this.renderLayers();
+    if (!layers?.land) {
+      return null;
+    }
+    const culled = this.culledLand(layers);
+    return this.renderPath(culled ?? layers.land);
   }
 
   @computed()
   private bordersPath(): Path2D | null {
-    const layers = this.layers();
+    const layers = this.renderLayers();
     return layers?.borders ? this.renderPath(layers.borders) : null;
   }
 

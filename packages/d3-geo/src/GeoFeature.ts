@@ -40,7 +40,7 @@ export class GeoFeature extends Shape {
   }
 
   @computed()
-  private map(): GeoMap {
+  protected map(): GeoMap {
     const map = this.findAncestor(node => node instanceof GeoMap);
     if (!map) {
       throw new Error('GeoFeature must be a descendant of a GeoMap.');

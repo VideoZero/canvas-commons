@@ -1,4 +1,6 @@
+export * from './GeoCircle';
 export * from './GeoFeature';
+export * from './GeoLine';
 export * from './GeoMap';
 export * from './GeoPin';
 export * from './cities';
