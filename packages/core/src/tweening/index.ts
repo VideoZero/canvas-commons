@@ -4,6 +4,7 @@
  * @packageDocumentation
  */
 
+export * from './expressiveEasings';
 export * from './interpolationFunctions';
 export * from './spring';
 export * from './timingFunctions';
