@@ -109,15 +109,7 @@ export class Shaders implements WebGLContextOwner {
     gl.bindTexture(gl.TEXTURE_2D, this.destinationTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    // Trilinear so backdrop effects (LiquidGlass frost) can textureLod() into
-    // the mip pyramid instead of paying dozens of level-0 taps. Implicit
-    // texture() at ~1:1 UVs still resolves to level 0 (lambda ≈ 0), so plain
-    // backdrop reads are unaffected; displaced reads should use textureLod.
-    gl.texParameteri(
-      gl.TEXTURE_2D,
-      gl.TEXTURE_MIN_FILTER,
-      gl.LINEAR_MIPMAP_LINEAR,
-    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   }
 
@@ -183,10 +175,8 @@ export class Shaders implements WebGLContextOwner {
   }
 
   public copyTextures(destination: TexImageSource, source: TexImageSource) {
-    // No mips for the source: its filter is plain LINEAR, so nothing can read
-    // them — generating a full pyramid per cached node per frame is pure cost.
-    this.copyTexture(source, this.sourceTexture!, false);
-    this.copyTexture(destination, this.destinationTexture!, true);
+    this.copyTexture(source, this.sourceTexture!);
+    this.copyTexture(destination, this.destinationTexture!);
   }
 
   public clear() {
@@ -200,16 +190,10 @@ export class Shaders implements WebGLContextOwner {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  private copyTexture(
-    source: TexImageSource,
-    texture: WebGLTexture,
-    mipmap: boolean,
-  ) {
+  private copyTexture(source: TexImageSource, texture: WebGLTexture) {
     const gl = this.getGL();
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-    if (mipmap) {
-      gl.generateMipmap(gl.TEXTURE_2D);
-    }
+    gl.generateMipmap(gl.TEXTURE_2D);
   }
 }
