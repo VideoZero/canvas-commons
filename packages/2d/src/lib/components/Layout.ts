@@ -1,6 +1,7 @@
 import {
   BBox,
   DEFAULT,
+  DependencyContext,
   Direction,
   InterpolationFunction,
   Origin,
@@ -1173,6 +1174,11 @@ export class Layout extends Node {
 
   @computed()
   protected applyFont() {
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
+    if (fonts?.status === 'loading') {
+      DependencyContext.collectPromise(fonts.ready);
+    }
+
     this.element.style.fontFamily = resolveFontFamily(this.fontFamily());
     this.element.style.fontSize = `${this.fontSize()}px`;
     this.element.style.fontStyle = this.fontStyle();

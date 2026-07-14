@@ -295,6 +295,9 @@ export abstract class GeneratorScene<T>
     );
     this.state = SceneState.AfterTransitionIn;
     this.afterReset.dispatch();
+    if (typeof document !== 'undefined') {
+      await document.fonts?.ready;
+    }
     await this.next();
   }
 
