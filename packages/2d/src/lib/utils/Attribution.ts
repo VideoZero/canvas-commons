@@ -28,6 +28,11 @@ import {BBox} from '@motion-canvas/core';
 // with the rest of the frame chrome.
 const REFERENCE_HEIGHT = 1080;
 const STROKE_WIDTH = 2;
+// Omit the credit entirely when its text block would cover more than this
+// fraction of the image's area. The credit is kept a constant on-screen size,
+// so on a heavily scaled-down picture it can grow to dominate the image — at
+// which point not drawing it looks better than smothering the picture.
+const MAX_AREA_FRACTION = 0.2;
 
 const FONT_FAMILY =
   'ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN", Quicksand, Comfortaa, Manjari, "Arial Rounded MT", "Arial Rounded MT Bold", Calibri, source-sans-pro, sans-serif';
@@ -485,8 +490,8 @@ export function drawAttribution(
   const {width, height} = context.canvas;
   const {render} = attributionConfig;
 
-  // Map the node-local box to device space (the space getImageData uses and the
-  // space we draw in with an identity transform).
+  // The node-to-device transform. Used both to place/orient the credit and to
+  // sample underlying pixels (getImageData works in this device space).
   const m = context.getTransform();
 
   // The credit must stay a constant, legible size in *scene* units no matter
@@ -512,41 +517,57 @@ export function drawAttribution(
   const paddingX = render.paddingX * scale;
   const paddingY = render.paddingY * scale;
 
-  // Apply the affine transform manually (deviceX = a·x + c·y + e, etc.) to avoid
-  // depending on DOMPoint/transformPoint, which not every canvas impl exposes.
-  const corners = [box.topLeft, box.topRight, box.bottomLeft, box.bottomRight];
-  const xs = corners.map(p => m.a * p.x + m.c * p.y + m.e);
-  const ys = corners.map(p => m.b * p.x + m.d * p.y + m.f);
-  const deviceLeft = Math.min(...xs);
-  const deviceRight = Math.max(...xs);
-  const deviceTop = Math.min(...ys);
-  const deviceBottom = Math.max(...ys);
+  // Map the node-local box corners to device space by applying the affine
+  // transform manually (deviceX = a·x + c·y + e, deviceY = b·x + d·y + f) to
+  // avoid depending on DOMPoint/transformPoint, which not every canvas impl
+  // exposes. We keep the individual corners (not just their AABB) so the credit
+  // can follow the image's rotation instead of staying screen-horizontal.
+  const toDevice = (p: {x: number; y: number}) => ({
+    x: m.a * p.x + m.c * p.y + m.e,
+    y: m.b * p.x + m.d * p.y + m.f,
+  });
+  const tl = toDevice(box.topLeft);
+  const tr = toDevice(box.topRight);
+  const bl = toDevice(box.bottomLeft);
+  const br = toDevice(box.bottomRight);
+
+  // Recover the image's on-screen rotation from the transform so the credit sits
+  // along the (possibly rotated) edge. In this rotated frame the local +x axis
+  // maps to device (cos, sin) and local +y to (-sin, cos).
+  const angle = Math.atan2(m.b, m.a);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const edgeWidth = Math.hypot(tr.x - tl.x, tr.y - tl.y);
 
   const position = render.position;
   const alignRight = position === 'top-right' || position === 'bottom-right';
   const alignBottom =
     position === 'bottom-left' || position === 'bottom-right';
 
-  const x = alignRight ? deviceRight - paddingX : deviceLeft + paddingX;
-  const y = alignBottom ? deviceBottom - paddingY : deviceTop + paddingY;
+  // Anchor to the chosen device-space corner, inset by the padding along the
+  // image's own axes (so the inset rotates with the image too).
+  const anchorCorner = alignBottom
+    ? alignRight
+      ? br
+      : bl
+    : alignRight
+      ? tr
+      : tl;
+  const insetX = alignRight ? -paddingX : paddingX;
+  const insetY = alignBottom ? -paddingY : paddingY;
+  const anchorX = anchorCorner.x + cos * insetX - sin * insetY;
+  const anchorY = anchorCorner.y + sin * insetX + cos * insetY;
 
   context.save();
-  // Clip to the media outline (in the node's local space) *before* switching to
-  // the identity transform — the clip rasterizes into device space and persists,
-  // so the credit (drawn below in device space) is confined to the image edges,
-  // rounded corners included.
-  if (clipPath) {
-    context.clip(clipPath);
-  }
-  context.setTransform(1, 0, 0, 1, 0, 0);
 
   context.font = `${fontSize}px ${render.fontFamily}`;
   context.textAlign = alignRight ? 'right' : 'left';
   context.textBaseline = alignBottom ? 'bottom' : 'top';
 
-  // Wrap the credit to the media's available width so a long credit on a small
-  // image breaks onto multiple lines instead of being clipped at the edge.
-  const contentWidth = deviceRight - deviceLeft - 2 * paddingX;
+  // Wrap the credit to the media's available width (measured along the rotated
+  // edge) so a long credit on a small image breaks onto multiple lines instead
+  // of being clipped at the edge.
+  const contentWidth = edgeWidth - 2 * paddingX;
   const lines = wrapText(context, attribution.text, contentWidth);
 
   const metrics = context.measureText(attribution.text);
@@ -562,14 +583,64 @@ export function drawAttribution(
   );
   const blockHeight = (lines.length - 1) * lineAdvance + textHeight;
 
+  // Skip the credit when it would dominate the image. The image's device-space
+  // area is the parallelogram spanned by its edges (so it accounts for both
+  // scale and rotation); compare the credit's block area against it.
+  const pictureArea = Math.abs(
+    (tr.x - tl.x) * (bl.y - tl.y) - (tr.y - tl.y) * (bl.x - tl.x),
+  );
+  if (
+    pictureArea > 0 &&
+    (blockWidth * blockHeight) / pictureArea > MAX_AREA_FRACTION
+  ) {
+    context.restore();
+    return;
+  }
+
+  // Clip to the media outline (in the node's local space) *before* switching to
+  // the credit's own transform — the clip rasterizes into device space and
+  // persists, so the credit is confined to the image edges, rounded corners
+  // included.
+  if (clipPath) {
+    context.clip(clipPath);
+  }
+  // Draw in a frame anchored at the corner and rotated with the image, so the
+  // text follows the picture's rotation. The extra 0.001 nudges the browser off
+  // the integer-pixel fast path into smooth grayscale anti-aliasing, so the
+  // credit doesn't render with harsh hinted edges.
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.translate(anchorX, anchorY);
+  context.rotate(angle + 0.001);
+
   // Sample the underlying pixels behind the whole text block to choose a single
   // contrasting color (one decision per source keeps the hysteresis stable).
-  const sampleX = alignRight ? x - blockWidth : x;
-  const sampleY = alignBottom ? y + descent - blockHeight : y;
-  const clampedX = Math.max(0, Math.floor(sampleX));
-  const clampedY = Math.max(0, Math.floor(sampleY));
-  const sampleW = Math.min(Math.ceil(blockWidth), width - clampedX);
-  const sampleH = Math.min(Math.ceil(blockHeight), height - clampedY);
+  // getImageData works in device space, so map the block's corners (in the
+  // rotated frame) back to device space and sample their axis-aligned bounds.
+  const blockMinX = alignRight ? -blockWidth : 0;
+  const blockMaxX = alignRight ? 0 : blockWidth;
+  const blockMinY = alignBottom ? descent - blockHeight : 0;
+  const blockMaxY = alignBottom ? descent : blockHeight;
+  const blockCorners = [
+    [blockMinX, blockMinY],
+    [blockMaxX, blockMinY],
+    [blockMaxX, blockMaxY],
+    [blockMinX, blockMaxY],
+  ].map(([lx, ly]) => ({
+    x: anchorX + cos * lx - sin * ly,
+    y: anchorY + sin * lx + cos * ly,
+  }));
+  const sampleXs = blockCorners.map(p => p.x);
+  const sampleYs = blockCorners.map(p => p.y);
+  const clampedX = Math.max(0, Math.floor(Math.min(...sampleXs)));
+  const clampedY = Math.max(0, Math.floor(Math.min(...sampleYs)));
+  const sampleW = Math.min(
+    Math.ceil(Math.max(...sampleXs)) - clampedX,
+    width - clampedX,
+  );
+  const sampleH = Math.min(
+    Math.ceil(Math.max(...sampleYs)) - clampedY,
+    height - clampedY,
+  );
 
   let useDarkText = useDarkTextBySource.get(src) ?? false;
   const avg = averageLuminance(context, clampedX, clampedY, sampleW, sampleH);
@@ -583,17 +654,15 @@ export function drawAttribution(
   const fillAlpha = (render.opacity * opacity).toFixed(3);
   context.strokeStyle = useDarkText ? LIGHT_STROKE : DARK_STROKE;
   context.lineWidth = STROKE_WIDTH * scale;
+  // Rounded joins/caps so the contrast outline reads as a soft halo rather than
+  // sharp mitered spikes at the glyph corners.
+  context.lineJoin = 'round';
+  context.lineCap = 'round';
   context.fillStyle = (useDarkText ? DARK_FILL : LIGHT_FILL).replace(
     '%A%',
     fillAlpha,
   );
 
-  // Draw with a near-imperceptible rotation around the text anchor. This nudges
-  // the browser off the integer-pixel fast path into smooth grayscale
-  // anti-aliasing, so the credit doesn't render with harsh hinted edges. The
-  // rotation is applied about (x, y) so the text position is unchanged.
-  context.translate(x, y);
-  context.rotate(0.001);
   for (let i = 0; i < lines.length; i++) {
     // Offset each line from the anchored edge so the block grows inward.
     const dy = alignBottom
