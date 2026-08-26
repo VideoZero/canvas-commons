@@ -107,6 +107,9 @@ export class Txt extends Shape {
   }
 
   protected setText(value: SignalValue<string>) {
+    // A split node keeps drawing the TxtChars created for the OLD string —
+    // drop them so the next entrance animation re-splits the new text.
+    if (this.isSplit) this.unsplit();
     const children = this.children();
     let leaf: TxtLeaf | null = null;
     for (let i = 0; i < children.length; i++) {
@@ -154,6 +157,7 @@ export class Txt extends Shape {
     timingFunction: TimingFunction,
     interpolationFunction: InterpolationFunction<string>,
   ): ThreadGenerator {
+    if (this.isSplit) this.unsplit();
     const children = this.children();
     if (children.length !== 1 || !(children[0] instanceof TxtLeaf)) {
       this.text.save();
@@ -390,14 +394,26 @@ export class Txt extends Shape {
     return this;
   }
 
-  private prepare() {
-    if (!this.isSplit) this.split();
+  /**
+   * Split for an entrance animation.
+   *
+   * @remarks
+   * Always re-splits so that detached char positions, leftover
+   * scale/rotation/shadow/stroke state and the clip mode of a previous
+   * animation never leak into this one.
+   */
+  private prepare(clip = false) {
+    this.split(clip);
     this.opacity(1);
   }
 
   private prepareClipped() {
-    if (!this.isSplit) this.split(true);
-    this.opacity(1);
+    this.prepare(true);
+  }
+
+  /** Exit animations need chars too — split if the node was shown without a helper. */
+  private prepareExit() {
+    if (!this.isSplit) this.split();
   }
 
   // ─── Private helpers ──────────────────────────────────────────
@@ -723,56 +739,79 @@ export class Txt extends Shape {
 
   // ─── Exit Animations ──────────────────────────────────────────
 
+  /**
+   * Finish an exit animation: hide the node and drop the split chars so the
+   * shifted/scaled char state doesn't leak into the next entrance (which
+   * re-splits from the current text and layout).
+   */
+  private endExit() {
+    this.opacity(0);
+    this.unsplit();
+  }
+
   @threadable()
   public *fadeOut(duration = 0.35, tf: TimingFunction = easeInCubic): ThreadGenerator {
+    this.prepareExit();
     yield* all(...this.chars.map(c => c.opacity(0, duration, tf)));
+    this.endExit();
   }
 
   @threadable()
   public *fadeOutUp(duration = 0.35, stagger = 0, tf: TimingFunction = easeInCubic): ThreadGenerator {
+    this.prepareExit();
     const origY = this.saveY();
     const h = this.maxCharHeight;
     yield* sequence(stagger, ...this.chars.map((c, i) =>
         all(c.opacity(0, duration, tf), c.position.y(origY[i] - h * 0.15, duration, tf)),
     ));
+    this.endExit();
   }
 
   @threadable()
   public *fadeOutDown(duration = 0.35, stagger = 0, tf: TimingFunction = easeInCubic): ThreadGenerator {
+    this.prepareExit();
     const origY = this.saveY();
     const h = this.maxCharHeight;
     yield* sequence(stagger, ...this.chars.map((c, i) =>
         all(c.opacity(0, duration, tf), c.position.y(origY[i] + h * 0.15, duration, tf)),
     ));
+    this.endExit();
   }
 
   @threadable()
   public *scaleOut(duration = 0.3, tf: TimingFunction = easeInCubic): ThreadGenerator {
+    this.prepareExit();
     yield* all(...this.chars.map(c =>
         all(c.opacity(0, duration, tf), c.scale(0.8, duration, tf)),
     ));
+    this.endExit();
   }
 
   @threadable()
   public *revealOutUp(duration = 0.35, tf: TimingFunction = easeInCubic): ThreadGenerator {
+    this.prepareExit();
     const origY = this.saveY();
     const h = this.maxCharHeight;
     yield* all(...this.chars.map((c, i) =>
         c.position.y(origY[i] - h, duration, tf),
     ));
+    this.endExit();
   }
 
   @threadable()
   public *revealOutDown(duration = 0.35, tf: TimingFunction = easeInCubic): ThreadGenerator {
+    this.prepareExit();
     const origY = this.saveY();
     const h = this.maxCharHeight;
     yield* all(...this.chars.map((c, i) =>
         c.position.y(origY[i] + h, duration, tf),
     ));
+    this.endExit();
   }
 
   @threadable()
   public *trackingOut(duration = 0.35, spread = 0.2, tf: TimingFunction = easeInCubic): ThreadGenerator {
+    this.prepareExit();
     const origX = this.saveX();
     const center = origX.reduce((a, b) => a + b, 0) / origX.length;
     yield* all(...this.chars.map((c, i) =>
@@ -781,10 +820,12 @@ export class Txt extends Shape {
             c.position.x(origX[i] - (origX[i] - center) * spread, duration, tf),
         ),
     ));
+    this.endExit();
   }
 
   @threadable()
   public *swapOut(duration = 0.3, tf: TimingFunction = easeInCubic): ThreadGenerator {
+    this.prepareExit();
     const origY = this.saveY();
     const h = this.maxCharHeight;
     yield* all(...this.chars.map((c, i) =>
@@ -793,6 +834,7 @@ export class Txt extends Shape {
             c.position.y(origY[i] - h, duration, tf),
         ),
     ));
+    this.endExit();
   }
 }
 
