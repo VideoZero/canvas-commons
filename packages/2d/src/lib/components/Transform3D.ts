@@ -65,6 +65,14 @@ export interface Transform3DProps extends NodeProps {
    */
   depthShade?: SignalValue<number>;
   /**
+   * {@inheritDoc Transform3D.depthSteps}
+   */
+  depthSteps?: SignalValue<number>;
+  /**
+   * {@inheritDoc Transform3D.edgeGuard}
+   */
+  edgeGuard?: SignalValue<number>;
+  /**
    * Headroom rendered around the content, fixed at construction.
    *
    * @remarks
@@ -308,6 +316,44 @@ export class Transform3D extends Node {
   @signal()
   public declare readonly depthShade: SimpleSignal<number, this>;
 
+  /**
+   * How many slices the extruded slab is built from.
+   *
+   * @remarks
+   * `0` (the default) derives the count from {@link depth} — roughly one slice
+   * per 2px, capped at 64. That is right for shallow slabs, but two things
+   * break it: a deep extrusion spreads those 64 slices too far apart, and an
+   * edge that runs diagonally to the offset direction shifts sideways from one
+   * slice to the next, leaving a fine sawtooth comb along the wall. Both are
+   * fixed by asking for more slices — set this to about `depth` for 1px
+   * spacing, or higher for a mark with steep diagonal edges.
+   *
+   * Each slice is one draw call reusing the same texture, so the cost is linear
+   * and cheap; the value is clamped to 512.
+   */
+  @initial(0)
+  @signal()
+  public declare readonly depthSteps: SimpleSignal<number, this>;
+
+  /**
+   * How close to edge-on, in degrees, the slab is allowed to be *drawn*.
+   *
+   * @remarks
+   * The slab is a stack of flat quads, so exactly edge-on every one of them
+   * projects to zero width and the object vanishes — where a real solid would
+   * show its side wall. This guards that pose: within `edgeGuard` degrees of
+   * edge-on the drawn rotation snaps out to the nearer side, so a turn passes
+   * through the crossing instead of blinking out. The signals keep their true
+   * values — only the matrix used for drawing is nudged — so anything reading
+   * the rotation (a two-sided card deciding which face to show) is unaffected.
+   *
+   * Only applies while {@link depth} is greater than 0: a flat sheet SHOULD
+   * disappear edge-on. `0` disables the guard.
+   */
+  @initial(4)
+  @signal()
+  public declare readonly edgeGuard: SimpleSignal<number, this>;
+
   private readonly headroom: number | 'frame';
   private bufferCanvas: HTMLCanvasElement | null = null;
   private bufferContext: CanvasRenderingContext2D | null = null;
@@ -526,8 +572,21 @@ export class Transform3D extends Node {
       (globalThis as any).DOMMatrix || (globalThis as any).WebKitCSSMatrix;
     const perspective = this.perspective();
     const origin = this.transformOrigin();
-    const rotX = this.rotationX();
-    const rotY = this.rotationY();
+    const depth = this.depth();
+    // Edge-on, every slice of the slab projects to zero width and the object
+    // blinks out. Push the DRAWN angle out of that band so a turn crosses it
+    // instead — the signals themselves are untouched, so a caller reading the
+    // rotation still sees the true pose.
+    const guard = this.edgeGuard();
+    const guardAngle = (angle: number) => {
+      if (guard <= 0 || depth <= 0) return angle;
+      // Distance from the nearest edge-on pose (90° + 180°k).
+      const toEdge = (((angle % 180) + 180) % 180) - 90;
+      if (Math.abs(toEdge) >= guard) return angle;
+      return angle + (toEdge >= 0 ? guard - toEdge : -(guard + toEdge));
+    };
+    const rotX = guardAngle(this.rotationX());
+    const rotY = guardAngle(this.rotationY());
     const rotZ = this.rotationZ();
     const buildMatrix = (z: number) => {
       const m = new MatrixCtor();
@@ -586,11 +645,15 @@ export class Transform3D extends Node {
     };
 
     // Extruded depth: draw the slab back-to-front, far layers darker, then the
-    // front face at full brightness on top. ~1 layer per 2px of depth (capped),
-    // all reusing the single texture upload above.
-    const depth = this.depth();
+    // front face at full brightness on top. ~1 layer per 2px of depth by
+    // default (capped), or exactly `depthSteps` when asked — all reusing the
+    // single texture upload above.
     if (depth > 0) {
-      const steps = Math.min(64, Math.max(2, Math.round(depth / 2)));
+      const requested = this.depthSteps();
+      const steps =
+        requested > 0
+          ? Math.min(512, Math.max(2, Math.round(requested)))
+          : Math.min(64, Math.max(2, Math.round(depth / 2)));
       const shade = this.depthShade();
       for (let i = steps; i >= 1; i--) {
         const f = i / steps;
