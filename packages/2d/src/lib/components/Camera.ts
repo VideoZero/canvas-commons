@@ -15,7 +15,7 @@ import {
   unwrap,
   Vector2,
 } from '@motion-canvas/core';
-import {cloneable, signal} from '../decorators';
+import {cloneable, computed, signal} from '../decorators';
 import {Curve} from './Curve';
 import {Node, NodeProps} from './Node';
 import {Rect, RectProps} from './Rect';
@@ -96,9 +96,40 @@ export class Camera extends Node {
       );
     }
 
+    // The scene node is not one of our children (we draw it ourselves in
+    // `drawChildren`), but it must still see this camera as its parent so that
+    // `localToWorld()` of every node inside the scene includes the camera's
+    // (inverse) transform and the view's resolution scale. Without this link
+    // cached nodes (opacity < 1, filters, shadows, shaders, `cache`) are
+    // rasterized at the un-zoomed 1x scene resolution and then upscaled by the
+    // zoom, which shows up as pixelated content whenever the camera zooms in.
+    this.scene().parent(this);
+
     if (children) {
       this.scene().add(children);
     }
+  }
+
+  /**
+   * The world matrix of the space the camera's scene lives in.
+   *
+   * @remarks
+   * A camera transforms its scene by the *inverse* of its own local transform
+   * (moving the camera right moves the scene left), so the matrix that nodes
+   * inside the scene chain onto is `parentToWorld * inverse(localToParent)` —
+   * the same matrix {@link transformContext} pushes onto the context. With
+   * this, `scene.localToWorld()` maps scene-local coordinates straight to
+   * device pixels, so `scene.worldToLocal()` converts world positions into
+   * camera space (used by {@link centerOn} and the `followCurve` family).
+   */
+  @computed()
+  public override localToWorld(): DOMMatrix {
+    // `drawChildren` draws the scene's children directly, skipping the scene
+    // node's own transform, so cancel it here to keep the matrix chain in sync
+    // with what actually ends up on the context.
+    return this.parentToWorld()
+      .multiply(this.localToParent().inverse())
+      .multiply(this.scene().localToParent().inverse());
   }
 
   /**
@@ -226,7 +257,8 @@ export class Camera extends Node {
       const t = timing(value);
       const point = curve
         .getPointAtPercentage(t)
-        .position.transformAsPoint(curve.localToWorld());
+        .position.transformAsPoint(curve.localToWorld())
+        .transformAsPoint(this.scene().worldToLocal());
 
       this.position(point);
     });
@@ -256,7 +288,8 @@ export class Camera extends Node {
       const t = 1 - timing(value);
       const point = curve
         .getPointAtPercentage(t)
-        .position.transformAsPoint(curve.localToWorld());
+        .position.transformAsPoint(curve.localToWorld())
+        .transformAsPoint(this.scene().worldToLocal());
 
       this.position(point);
     });
@@ -286,7 +319,8 @@ export class Camera extends Node {
     yield* tween(duration, value => {
       const t = timing(value);
       const {position, normal} = curve.getPointAtPercentage(t);
-      const point = position.transformAsPoint(curve.localToWorld());
+      const point = position.transformAsPoint(curve.localToWorld())
+        .transformAsPoint(this.scene().worldToLocal());
       const angle = normal.flipped.perpendicular.degrees;
 
       this.position(point);
@@ -318,7 +352,8 @@ export class Camera extends Node {
     yield* tween(duration, value => {
       const t = 1 - timing(value);
       const {position, normal} = curve.getPointAtPercentage(t);
-      const point = position.transformAsPoint(curve.localToWorld());
+      const point = position.transformAsPoint(curve.localToWorld())
+        .transformAsPoint(this.scene().worldToLocal());
       const angle = normal.flipped.perpendicular.degrees;
 
       this.position(point);
@@ -344,7 +379,14 @@ export class Camera extends Node {
   }
 
   protected override drawChildren(context: CanvasRenderingContext2D) {
-    (this.scene() as Camera).drawChildren(context);
+    const scene = this.scene();
+    // Several cameras may share one scene (`Camera.Stage` with a `scene`
+    // prop). Point the scene at the camera that is drawing it right now so
+    // cache rasterization matches this camera's transform.
+    if (scene.parent() !== this) {
+      scene.parent(this);
+    }
+    (scene as Camera).drawChildren(context);
   }
 
   // eslint-disable-next-line @typescript-eslint/naming-convention
