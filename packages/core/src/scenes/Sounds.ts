@@ -9,6 +9,13 @@ export interface SoundSettings {
   gain?: number;
   detune?: number;
   playbackRate?: number;
+  /**
+   * Linear fade-in over the first N timeline seconds of the (trimmed) clip.
+   * Applied on top of `gain`, in the preview and in the export mix alike.
+   */
+  fadeIn?: number;
+  /** Linear fade-out over the last N timeline seconds of the (trimmed) clip. */
+  fadeOut?: number;
 }
 
 export interface Sound extends SoundSettings {
@@ -49,6 +56,18 @@ export class SoundBuilder {
    */
   public gain(db: number): this {
     this.settings.gain = db;
+    return this;
+  }
+
+  /**
+   * Fade the sound in and/or out.
+   *
+   * @param fadeIn - Seconds to ramp from silence at the clip start.
+   * @param fadeOut - Seconds to ramp to silence at the clip end.
+   */
+  public fade(fadeIn?: number, fadeOut?: number): this {
+    this.settings.fadeIn = fadeIn;
+    this.settings.fadeOut = fadeOut;
     return this;
   }
 

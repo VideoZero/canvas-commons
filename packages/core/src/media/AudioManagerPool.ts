@@ -67,7 +67,10 @@ export class AudioManagerPool {
     for (const sound of this.sounds) {
       if (this.isInRange(sound, time)) {
         let manager = this.managers.get(sound);
-        if (manager) continue;
+        if (manager) {
+          manager.updateEnvelope(time);
+          continue;
+        }
 
         // sound is starting
         manager = this.pool.pop() ?? this.spawn();

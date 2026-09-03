@@ -11,6 +11,9 @@ export class AudioManager {
   private duration?: number;
   private gainNode?: GainNode;
   private sourceNode?: MediaElementAudioSourceNode;
+  private baseGain = 1;
+  private fadeIn = 0;
+  private fadeOut = 0;
 
   public constructor(
     private readonly logger: Logger,
@@ -39,8 +42,46 @@ export class AudioManager {
       this.gainNode.connect(this.context.destination);
     }
 
-    this.gainNode.gain.value = Math.pow(10, (sound.gain ?? 0) / 10);
+    this.baseGain = Math.pow(10, (sound.gain ?? 0) / 10);
+    this.fadeIn = sound.fadeIn ?? 0;
+    this.fadeOut = sound.fadeOut ?? 0;
     this.setPlaybackRate(sound.realPlaybackRate, true);
+    this.updateEnvelope(sound.offset);
+  }
+
+  /**
+   * Re-apply the gain for the given timeline time, including the fade
+   * envelope. Called every frame by the pool while the sound is in range, so
+   * fades track seeks and scrubbing (the fade is a function of time, not of
+   * elapsed playback).
+   */
+  public updateEnvelope(time: number) {
+    if (!this.gainNode) return;
+    this.gainNode.gain.value = this.baseGain * this.envelope(time);
+  }
+
+  /** Fade multiplier in [0, 1] at an absolute timeline time. */
+  private envelope(time: number): number {
+    if (this.fadeIn <= 0 && this.fadeOut <= 0) return 1;
+    const rel = Math.max(0, time - this.offset);
+    let g = 1;
+    if (this.fadeIn > 0) g = Math.min(g, rel / this.fadeIn);
+    if (this.fadeOut > 0) {
+      const total = this.clipDuration();
+      if (total !== undefined) g = Math.min(g, (total - rel) / this.fadeOut);
+    }
+    return Math.max(0, Math.min(1, g));
+  }
+
+  /** Length of the (trimmed) clip in timeline seconds, once known. */
+  private clipDuration(): number | undefined {
+    const source =
+      this.duration ??
+      (isNaN(this.audioElement.duration)
+        ? undefined
+        : this.audioElement.duration - (this.start ?? 0));
+    if (source === undefined) return undefined;
+    return source / (this.audioElement.playbackRate || 1);
   }
 
   public getTime() {
