@@ -2,6 +2,7 @@ import {
   BBox,
   Color,
   Matrix2D,
+  PossibleColor,
   PossibleSpacing,
   SerializedVector2,
   SignalValue,
@@ -10,6 +11,7 @@ import {
   TimingFunction,
   Vector2,
   all,
+  clamp,
   clampRemap,
   createSignal,
   delay,
@@ -24,7 +26,9 @@ import {
   sequence,
   threadable,
   tween,
+  unwrap,
   useLogger,
+  useRandom,
   waitFor,
 } from '@motion-canvas/core';
 import {computed, initial, signal} from '../decorators';
@@ -95,6 +99,48 @@ A Node for drawing and animating SVG images.
 @remarks
 If you're not interested in animating SVG, you can use {@link Img} instead.
  */
+/** The order {@link SVG.build} and {@link SVG.unbuild} sequence children in. */
+export type SVGBuildOrder = 'forward' | 'reverse' | 'random';
+
+export interface SVGBuildOptions {
+  /**
+   * How much of a child's draw the next one starts within, from `0` (strictly
+   * one after another) to `1` (all at once). The total duration is unchanged
+   * either way: less overlap means each child draws faster.
+   *
+   * @defaultValue 0.5
+   */
+  overlap?: number;
+  /**
+   * The order children are sequenced in. `'random'` is seeded by the scene, so
+   * a shuffled build plays the same way every time it runs.
+   *
+   * @defaultValue 'forward'
+   */
+  order?: SVGBuildOrder;
+  /**
+   * Whether a fill-only child borrows an outline to draw with.
+   *
+   * @remarks
+   * Exported artwork is mostly solid shapes with no stroke of their own. With
+   * an outline they read as drawn — a line traces the shape and the fill rises
+   * behind it, then the line goes. Without one there is nothing to trace, so
+   * the fill simply crossfades in over the child's whole slot. Children that
+   * carry their own stroke always draw it, either way.
+   *
+   * @defaultValue true
+   */
+  outline?: boolean;
+}
+
+/** A curve's paint as the document declared it, before a build touched it. */
+interface AuthoredPaint {
+  fill: SignalValue<PossibleCanvasStyle> | null;
+  stroke: SignalValue<PossibleCanvasStyle> | null;
+  lineWidth: number;
+  strokeFirst: boolean;
+}
+
 export class SVG extends Shape {
   @lazy(() => {
     const element = document.createElement('div');
@@ -131,6 +177,9 @@ export class SVG extends Shape {
    */
   public wrapper: Node;
 
+  /** See {@link authoredPaint}. */
+  private readonly authoredPaints = new WeakMap<Curve, AuthoredPaint>();
+
   protected readonly morpher: PathMorpher;
 
   private lastTweenTargetSrc: string | null = null;
@@ -161,74 +210,253 @@ export class SVG extends Shape {
   }
 
   /**
-   * Animate the SVG by sequencing child strokes with overlap.
+   * Animate the SVG on, sequencing child strokes with overlap.
    *
    * @remarks
-   * Each child curve draws its stroke progressively. Filled children
-   * get an outline stroke phase followed by a fill crossfade.
-   * Children are staggered with 50% overlap.
+   * Each child curve draws its stroke progressively. Filled children get an
+   * outline stroke phase followed by a fill crossfade. Children are staggered
+   * with 50% overlap by default.
    *
    * @param duration - Total animation duration in seconds.
-   * @param timingFunction - Easing for each child's stroke.
+   * @param timingFunction - Easing for each child's stroke. Left out, a stroke
+   *                         being traced across a shape runs at a constant
+   *                         speed and a curve drawing on its own eases out —
+   *                         passing one applies it to both. The fill crossfade
+   *                         behind the stroke always eases out.
+   * @param options - See {@link SVGBuildOptions}.
    */
   @threadable()
   public *build(
     duration = 4,
-    timingFunction: TimingFunction = easeOutCubic,
+    timingFunction?: TimingFunction,
+    options: SVGBuildOptions = {},
+  ): ThreadGenerator {
+    yield* this.sequenceBuild(true, duration, timingFunction, options);
+  }
+
+  /**
+   * Animate the SVG off — {@link build} played backwards.
+   *
+   * @remarks
+   * Each child's fill crossfades out and its stroke retracts to nothing,
+   * leaving the document invisible but intact: a later {@link build} restores
+   * the paint the document was authored with, so the two can alternate.
+   *
+   * `order` describes the build being undone, not the order children come off
+   * in: `unbuild` runs it backwards, so the same options that built a document
+   * rewind it exactly.
+   *
+   * @param duration - Total animation duration in seconds.
+   * @param timingFunction - Easing for each child's stroke.
+   * @param options - See {@link SVGBuildOptions}.
+   */
+  @threadable()
+  public *unbuild(
+    duration = 4,
+    timingFunction?: TimingFunction,
+    options: SVGBuildOptions = {},
+  ): ThreadGenerator {
+    yield* this.sequenceBuild(false, duration, timingFunction, options);
+  }
+
+  /**
+   * The paint a curve was authored with.
+   *
+   * @remarks
+   * {@link build} and {@link unbuild} both overwrite fill, stroke and line
+   * width while they run, so neither can read the document's own paint off the
+   * node once the other has touched it. The first call to see a curve records
+   * it; every call after that reads it back from here. Entries die with the
+   * curves when the `svg` signal replaces the document.
+   */
+  private authoredPaint(curve: Curve): AuthoredPaint {
+    let paint = this.authoredPaints.get(curve);
+    if (!paint) {
+      paint = {
+        fill: curve.fill(),
+        stroke: curve.stroke(),
+        lineWidth: curve.lineWidth(),
+        strokeFirst: curve.strokeFirst(),
+      };
+      this.authoredPaints.set(curve, paint);
+    }
+    return paint;
+  }
+
+  /**
+   * Draw every child on (`draw`) or off, staggered.
+   *
+   * @remarks
+   * The shared body of {@link build} and {@link unbuild} — the two are the same
+   * sequence with the stroke and the fill crossfade running in opposite
+   * directions, so they stay in step by being one implementation.
+   */
+  @threadable()
+  protected *sequenceBuild(
+    draw: boolean,
+    duration: number,
+    timingFunction: TimingFunction | undefined,
+    {overlap = 0.5, order = 'forward', outline = true}: SVGBuildOptions,
   ): ThreadGenerator {
     const curves = this.orderedCurveDescendants();
     const n = curves.length;
     if (n === 0) return;
 
+    // A stroke tracing across a filled shape reads as a pen moving at a steady
+    // speed, while a curve drawing on its own is a normal entrance and eases.
+    // An easing passed by the caller means both.
+    const traceEasing = timingFunction ?? linear;
+    const curveEasing = timingFunction ?? easeOutCubic;
+
     const containerFill = this.fill();
-    const containerFillStr = containerFill ? String(containerFill) : '#fff';
-
-    const childData = curves.map(c => ({
-      c,
-      fillColor: String(c.fill() ?? containerFill ?? '#fff'),
-      hasFill: c.fill() !== null || containerFill !== null,
-      hadNoStroke: c.stroke() === null,
-    }));
-
-    curves.forEach(c => {
-      c.end(0);
-      c.fill(null);
+    const children = curves.map(curve => {
+      const authored = this.authoredPaint(curve);
+      const fill = authored.fill ?? containerFill ?? null;
+      // A fill-only child (the common case in exported artwork) has no line to
+      // draw, so it borrows one for the stroke phase and gives it back.
+      const fade = SVG.fadeColor(fill);
+      return {
+        curve,
+        authored,
+        fill,
+        // The color the fill crossfades through. A gradient or a pattern is not
+        // a color and cannot carry an alpha, so a gradient lends its middle
+        // stop and the real paint is swapped back in at the end of the fade.
+        fade,
+        hasFill: fill !== null,
+        borrowed: authored.stroke === null && outline && fade !== null,
+        // Nothing to trace: crossfade the fill across the child's whole slot.
+        fillOnly: authored.stroke === null && !(outline && fade !== null),
+      };
     });
-    const overlap = 0.5;
-    const perChild = duration / (n - overlap * (n - 1));
-    const stagger = perChild * (1 - overlap);
+
+    if (draw) {
+      curves.forEach(curve => {
+        curve.end(0);
+        curve.fill(null);
+      });
+    }
+
+    const clamped = clamp(0, 1, overlap);
+    const perChild = duration / (n - clamped * (n - 1));
+    const stagger = perChild * (1 - clamped);
+
+    // Undoing a build runs its order backwards, so the same options rewind it.
+    const sequenced = SVG.inOrder(children, order);
+    if (!draw) sequenced.reverse();
 
     yield* sequence(
       stagger,
-      ...childData.map(({c, fillColor, hasFill, hadNoStroke}) => {
-        function* anim(): ThreadGenerator {
-          if (!hasFill) {
-            yield* c.end(1, perChild, timingFunction);
-            return;
+      ...sequenced.map(
+        ({curve, authored, fill, fade, hasFill, borrowed, fillOnly}) => {
+          const strokeDur = hasFill && !fillOnly ? perChild * 0.7 : perChild;
+          const fillDur = hasFill && !fillOnly ? perChild * 0.3 : perChild;
+
+          function* strokePhase(): ThreadGenerator {
+            if (borrowed) curve.lineWidth(1);
+            if (draw) {
+              yield curve.end(1, strokeDur, hasFill ? traceEasing : curveEasing);
+              yield* waitFor(strokeDur);
+            } else {
+              yield* curve.end(0, strokeDur, hasFill ? traceEasing : curveEasing);
+            }
           }
-          if (hadNoStroke) {
-            c.strokeFirst(true);
-            c.stroke(new Color(fillColor));
-            c.lineWidth(1);
+
+          function* fillPhase(): ThreadGenerator {
+            if (!fade) {
+              // A pattern, or a gradient with no stops: nothing to fade
+              // through, so the paint simply appears or goes.
+              curve.fill(draw ? fill : null);
+              yield* waitFor(fillDur);
+              return;
+            }
+            const alpha = fade.alpha();
+            yield* tween(fillDur, t => {
+              const progress = draw ? easeOutSine(t) : 1 - easeOutSine(t);
+              curve.fill(fade.alpha(alpha * progress));
+              if (borrowed) curve.lineWidth(Math.max(0, 1 - progress));
+            });
+            curve.fill(draw ? fill : null);
           }
-          const strokeDur = perChild * 0.7;
-          const fillDur = perChild * 0.3;
-          yield c.end(1, strokeDur, linear);
-          yield* waitFor(strokeDur);
-          const parsed = new Color(fillColor);
-          const origAlpha = parsed.alpha();
-          yield* tween(fillDur, t => {
-            const p = easeOutSine(t);
-            c.fill(parsed.alpha(origAlpha * p));
-            if (hadNoStroke) c.lineWidth(Math.max(0, 1 - p));
-          });
-          c.fill(fillColor);
-        }
-        return anim();
-      }),
+
+          function* anim(): ThreadGenerator {
+            if (!hasFill) {
+              yield* strokePhase();
+              return;
+            }
+            if (fillOnly) {
+              // The child has neither a stroke of its own nor a borrowed one:
+              // the fill is the whole animation. `end` still has to be put back
+              // where a draw found it, since build() rewound it to 0.
+              if (draw) curve.end(1);
+              yield* fillPhase();
+              if (!draw) curve.end(0);
+              return;
+            }
+            if (borrowed) {
+              curve.strokeFirst(true);
+              curve.stroke(fade);
+            }
+            if (draw) {
+              yield* strokePhase();
+              yield* fillPhase();
+              // Hand the document its own paint back, so the node ends the
+              // animation exactly as it was authored.
+              curve.lineWidth(authored.lineWidth);
+              if (borrowed) {
+                curve.stroke(authored.stroke);
+                curve.strokeFirst(authored.strokeFirst);
+              }
+            } else {
+              yield* fillPhase();
+              yield* strokePhase();
+            }
+          }
+          return anim();
+        },
+      ),
     );
   }
 
+  /**
+   * A color standing in for a paint while it fades.
+   * Gradients lend their middle stop; anything unparseable lends nothing.
+   */
+  private static fadeColor(
+    paint: SignalValue<PossibleCanvasStyle> | null,
+  ): Color | null {
+    if (paint === null || paint === undefined) return null;
+    if (paint instanceof Gradient) {
+      const stops = paint.stops();
+      const stop = stops[Math.floor(stops.length / 2)];
+      if (!stop) return null;
+      try {
+        return new Color(unwrap(stop.color));
+      } catch {
+        return null;
+      }
+    }
+    try {
+      return new Color(paint as PossibleColor);
+    } catch {
+      return null;
+    }
+  }
+
+  /** A fresh array of the children, sequenced the way `order` asks for. */
+  private static inOrder<T>(children: T[], order: SVGBuildOrder): T[] {
+    if (order === 'reverse') return [...children].reverse();
+    if (order !== 'random') return [...children];
+    // useRandom is seeded per scene, so a shuffled build renders the same way
+    // every time it plays.
+    const random = useRandom();
+    const shuffled = [...children];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = random.nextInt(0, i + 1);
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+  }
 
   /**
    * Get all SVG nodes with the given id.
