@@ -57,7 +57,7 @@ import {
   TextWrap,
 } from '../partials';
 import {resolveFontFamily} from '../text/fontRegistry';
-import {drawLine, drawPivot, is, roundPx} from '../utils';
+import {drawLine, drawPivot, roundPx} from '../utils';
 import {Node, NodeProps} from './Node';
 import type {ComponentChildren} from './types';
 
@@ -604,7 +604,6 @@ export class Layout extends Node {
     };
 
     try {
-
       // PLAY — interpolate size and world position each frame
       yield* tween(time, raw => {
         const t = timingFunction(raw);
@@ -834,9 +833,29 @@ export class Layout extends Node {
     this.sizeLockCounter(this.sizeLockCounter() - 1);
   }
 
+  /**
+   * The nearest {@link Layout} ancestor within the same view.
+   *
+   * @remarks
+   * A node whose `view()` differs from this node's (the surface content of
+   * a 3D mesh, for instance) is a boundary: nothing above it takes part in
+   * this node's layout, so the node becomes a layout root measured against
+   * that view.
+   */
   @computed()
   protected parentTransform(): Layout | null {
-    return this.findAncestor(is(Layout));
+    const view = this.view();
+    let parent = this.parent();
+    while (parent) {
+      if (parent.view() !== view) {
+        return null;
+      }
+      if (parent instanceof Layout) {
+        return parent;
+      }
+      parent = parent.parent();
+    }
+    return null;
   }
 
   @computed()
@@ -998,14 +1017,20 @@ export class Layout extends Node {
     const queue = [...this.children()];
     const result: Layout[] = [];
     const elements: HTMLElement[] = [];
+    const view = this.view();
     while (queue.length) {
       const child = queue.shift();
+      if (!child || child.view() !== view) {
+        // A view boundary (see parentTransform): its subtree lays out on
+        // its own.
+        continue;
+      }
       if (child instanceof Layout) {
         if (child.layoutEnabled()) {
           result.push(child);
           elements.push(child.element);
         }
-      } else if (child) {
+      } else {
         queue.unshift(...child.children());
       }
     }
