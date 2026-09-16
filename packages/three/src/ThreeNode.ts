@@ -156,7 +156,11 @@ export interface ThreeProps extends RectProps {
  * {@link sceneObject}, {@link cameraObject}, {@link rootGroup} and a node's
  * `object3D()` are only available once the runtime has loaded — inside
  * `onUpdate`, `onRender`, an `Object3D` `update` callback, or a signal
- * function evaluated during rendering. Calling them at scene setup throws.
+ * function evaluated during rendering. Calling them earlier throws; to use
+ * them in generator code, `yield loadThree()` (or `yield stage()`) first.
+ *
+ * `onUpdate` and `onRender` survive {@link clone}; a supplied `scene` or
+ * `camera` is copied by reference, so a clone renders the same scene.
  *
  * @example
  * ```tsx
@@ -376,9 +380,17 @@ export class Three extends Rect implements Object3DRoot {
    * to the current signal values and with world matrices up to date. Add your
    * own objects to {@link rootGroup} rather than to the scene directly if you
    * want them in pixel units.
+   *
+   * @remarks
+   * Throws while the runtime is still loading; see the class remarks.
    */
-  @computed()
   public sceneObject(): THREE.Scene {
+    getThree();
+    return this.syncScene();
+  }
+
+  @computed()
+  private syncScene(): THREE.Scene {
     const three = getThree();
     if (!this.root) {
       this.root = new three.Group();
@@ -393,7 +405,7 @@ export class Three extends Rect implements Object3DRoot {
     syncObjectChildren(this, this.root);
     this.syncDefaultLights(three, scene, this.root);
     this.syncEnvironment(three, scene);
-    const camera = this.cameraObject();
+    const camera = this.syncCamera();
     this.onUpdate?.(scene, camera, three);
     scene.updateMatrixWorld(true);
     // A camera moved inside onUpdate must project correctly right away.
@@ -428,6 +440,9 @@ export class Three extends Rect implements Object3DRoot {
 
   /**
    * The group (scaled to pixel units) that holds every 3D child.
+   *
+   * @remarks
+   * Throws while the runtime is still loading; see the class remarks.
    */
   public rootGroup(): THREE.Group {
     this.sceneObject();
@@ -436,9 +451,17 @@ export class Three extends Rect implements Object3DRoot {
 
   /**
    * The active camera, positioned and projecting for the current signals.
+   *
+   * @remarks
+   * Throws while the runtime is still loading; see the class remarks.
    */
-  @computed()
   public cameraObject(): THREE.Camera {
+    getThree();
+    return this.syncCamera();
+  }
+
+  @computed()
+  private syncCamera(): THREE.Camera {
     const three = getThree();
     const size = this.computedSize();
     const width = Math.max(1, size.width);
@@ -546,7 +569,7 @@ export class Three extends Rect implements Object3DRoot {
       return Vector2.zero;
     }
     const three = getThree();
-    this.sceneObject();
+    this.syncScene();
     const v = new three.Vector3();
     object.getWorldPosition(v);
     return this.projectWorld(v);
@@ -562,8 +585,8 @@ export class Three extends Rect implements Object3DRoot {
       return Vector2.zero;
     }
     // Runs onUpdate first so a camera moved there projects correctly.
-    this.sceneObject();
-    const camera = this.cameraObject();
+    this.syncScene();
+    const camera = this.syncCamera();
     const size = this.computedSize();
     v.project(camera);
     return new Vector2((v.x * size.width) / 2, (-v.y * size.height) / 2);
@@ -624,8 +647,47 @@ export class Three extends Rect implements Object3DRoot {
     }
   }
 
+  /**
+   * Lets `yield stage()` (and the renderer) wait for the runtime like it
+   * waits for an image. The layout is computed too, so a web font that is
+   * still loading is awaited as well: touching {@link rootGroup} or a
+   * child's `object3D()` right after the yield then finds everything ready.
+   */
+  protected override collectAsyncResources() {
+    this.three();
+    this.computedSize();
+    super.collectAsyncResources();
+  }
+
+  public override instantiate(props: ThreeProps = {}): this {
+    return super.instantiate({
+      onRender: this.onRender ?? undefined,
+      onUpdate: this.onUpdate ?? undefined,
+      ...props,
+    });
+  }
+
   protected override draw(context: CanvasRenderingContext2D) {
-    this.drawShape(context);
+    // The 3D image goes between fill and stroke, so an opaque `background`
+    // does not cover the inner half of the outline.
+    const path = this.getPath();
+    const rough = this.rough();
+    const hasStroke = !rough && this.lineWidth() > 0 && this.stroke() !== null;
+    const strokeLast = hasStroke && !this.strokeFirst();
+    if (rough) {
+      this.drawShape(context);
+    } else {
+      context.save();
+      this.applyStyle(context, this.getCacheBBox());
+      this.drawRipple(context);
+      if (hasStroke && !strokeLast) {
+        context.stroke(path);
+      }
+      if (this.fill() !== null) {
+        context.fill(path);
+      }
+      context.restore();
+    }
 
     const three = this.three();
     const size = this.computedSize();
@@ -645,11 +707,14 @@ export class Three extends Rect implements Object3DRoot {
       const w = Math.max(1, Math.round(size.width * q));
       const h = Math.max(1, Math.round(size.height * q));
       // Published before the sync so surfaces rasterize at the same scale.
-      // The setter is a no-op when unchanged, so steady frames stay cached.
-      this.renderScale(q);
+      // `zoom` magnifies the image, so surfaces need that many more texels
+      // to stay crisp (a zoom tween therefore re-rasterizes them, like a 2D
+      // Camera zoom does). The setter is a no-op when unchanged, so steady
+      // frames stay cached.
+      this.renderScale(q * Math.max(1e-3, this.zoom()));
 
-      const scene = this.sceneObject();
-      const camera = this.cameraObject();
+      const scene = this.syncScene();
+      const camera = this.syncCamera();
 
       const renderer = getSharedRenderer(three);
       const canvas = renderer.domElement;
@@ -677,7 +742,7 @@ export class Three extends Rect implements Object3DRoot {
       context.save();
       // Keep the image inside the rounded outline (matters once
       // `background` makes it opaque).
-      context.clip(this.getPath());
+      context.clip(path);
       context.imageSmoothingEnabled = true;
       context.drawImage(
         canvas,
@@ -693,8 +758,15 @@ export class Three extends Rect implements Object3DRoot {
       context.restore();
     }
 
+    if (strokeLast) {
+      context.save();
+      this.applyStyle(context, this.getCacheBBox());
+      context.stroke(path);
+      context.restore();
+    }
+
     if (this.clip()) {
-      context.clip(this.getPath());
+      context.clip(path);
     }
     this.drawChildren(context);
   }

@@ -4,11 +4,15 @@
  * @remarks
  * Every 3D node takes positions and sizes in pixels, like the rest of Motion
  * Canvas: a `300` px box next to a `300` px {@link Rect} reads the same size at
- * the camera target plane. Internally the whole scene sits in a group scaled by
- * `1 / PIXELS_PER_UNIT`, so Three.js sees metre-ish units: a glTF model
- * authored 1.8 units tall renders 180 px tall, point-light falloff and shadow
- * cameras behave like in any Three.js tutorial, and camera near/far planes
- * stay in a comfortable range.
+ * the camera target plane. Internally the 3D nodes sit in a group scaled by
+ * `1 / PIXELS_PER_UNIT`, so Three.js sees metre-ish units: point-light
+ * falloff and shadow cameras behave like in any Three.js tutorial, and camera
+ * near/far planes stay in a comfortable range.
+ *
+ * Objects you add to a raw `scene` yourself live outside that group, in
+ * world units: a glTF model authored 1.8 units tall renders 180 px tall
+ * there. The same model inside an {@link Object3D} node is in pixels, so it
+ * renders 1.8 px tall until you scale it by `PIXELS_PER_UNIT`.
  */
 export const PIXELS_PER_UNIT = 100;
 

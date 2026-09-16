@@ -53,6 +53,11 @@ export interface Object3DProps extends Object3DNodeProps {
  * `opacity` is applied to every material below the object (they are switched
  * to `transparent`); at `0` the object is hidden.
  *
+ * `create` and `update` survive {@link clone}, and the clone builds its own
+ * object. A supplied {@link object} is copied by reference instead: a
+ * Three.js object has one parent, so the node synced last takes it from the
+ * other. Give each clone its own `object` (e.g. `object.clone()`).
+ *
  * @example
  * ```tsx
  * const knot = createRef<Object3D>();
@@ -114,6 +119,14 @@ export class Object3D extends Object3DNode {
    */
   public raw(): THREE.Object3D | null {
     return this.object() ?? this.created;
+  }
+
+  public override instantiate(props: Object3DProps = {}): this {
+    return super.instantiate({
+      create: this.create ?? undefined,
+      update: this.update ?? undefined,
+      ...props,
+    });
   }
 
   protected override createObject(three: ThreeModule): THREE.Object3D {

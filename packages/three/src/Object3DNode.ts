@@ -1,5 +1,11 @@
 import {Node, NodeProps, computed, initial, signal} from '@motion-canvas/2d';
-import {BBox, SignalValue, SimpleSignal, Vector2} from '@motion-canvas/core';
+import {
+  BBox,
+  SignalValue,
+  SimpleSignal,
+  Vector2,
+  useLogger,
+} from '@motion-canvas/core';
 import type * as THREE from 'three';
 import {ThreeModule, getThree} from './loader';
 import {toRadians} from './units';
@@ -117,6 +123,7 @@ export abstract class Object3DNode extends Node {
   public declare readonly visible: SimpleSignal<boolean, this>;
 
   private instance: THREE.Object3D | null = null;
+  private warnedContent = false;
 
   /**
    * Create the Three.js object this node controls. Called once, lazily, after
@@ -155,16 +162,34 @@ export abstract class Object3DNode extends Node {
   }
 
   /**
+   * Whether 2D children are meaningful for this node ({@link Mesh3D} shows
+   * them on its surface). Elsewhere they are dropped with a warning.
+   */
+  protected acceptsContent(): boolean {
+    return false;
+  }
+
+  /**
    * The Three.js object, synced to the current signal values.
    *
    * @remarks
-   * Only valid once the runtime has loaded, i.e. from inside a rendering
-   * {@link Three} node. Mutating the returned object directly is allowed for
-   * anything the node has no signal for; the properties the node does own are
+   * Only valid once the runtime has loaded: from inside `onUpdate`, an
+   * `Object3D` `update` callback, or a signal function evaluated during
+   * rendering, or in generator code after `yield loadThree()`. Before that
+   * it throws. Mutating the returned object directly is allowed for anything
+   * the node has no signal for; the properties the node does own are
    * overwritten on every sync.
    */
-  @computed()
   public object3D(): THREE.Object3D {
+    getThree();
+    return this.syncObject();
+  }
+
+  /**
+   * @internal
+   */
+  @computed()
+  public syncObject(): THREE.Object3D {
     const three = getThree();
     if (!this.instance) {
       this.instance = this.createObject(three);
@@ -185,7 +210,26 @@ export abstract class Object3DNode extends Node {
 
     this.updateObject(three, object);
     syncObjectChildren(this, object);
+    this.checkContent();
     return object;
+  }
+
+  private checkContent() {
+    if (this.warnedContent || this.acceptsContent()) {
+      return;
+    }
+    const stray = this.children().find(
+      child => !(child instanceof Object3DNode),
+    );
+    if (stray) {
+      this.warnedContent = true;
+      useLogger().warn({
+        message: `${this.constructor.name}: 2D children are not rendered.`,
+        remarks:
+          'Only a Mesh3D shows 2D children (on its surface). Put labels next to the 3D nodes as children of the Three node and pin them with screenPosition().',
+        inspect: stray.key,
+      });
+    }
   }
 
   /**
@@ -203,14 +247,15 @@ export abstract class Object3DNode extends Node {
    * Returns zero until the runtime has loaded, and updates once it has: the
    * check goes through the root's runtime signal, so a label evaluated while
    * Three.js is still loading is re-evaluated after the load rather than
-   * staying cached at zero.
+   * staying cached at zero. In generator code, `yield stage()` on the
+   * {@link Three} node first, or the value is zero and a warning is logged.
    */
   public screenPosition(): Vector2 {
     const root = this.findAncestor(isObject3DRoot);
     if (!root || !root.three()) {
       return Vector2.zero;
     }
-    return root.projectObject(this.object3D());
+    return root.projectObject(this.syncObject());
   }
 
   /**
@@ -248,7 +293,7 @@ export function syncObjectChildren(node: Node, object: THREE.Object3D) {
   const wanted: THREE.Object3D[] = [];
   for (const child of node.children()) {
     if (child instanceof Object3DNode) {
-      wanted.push(child.object3D());
+      wanted.push(child.syncObject());
     }
   }
   for (const existing of [...object.children]) {

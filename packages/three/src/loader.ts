@@ -1,3 +1,4 @@
+import {createSignal} from '@motion-canvas/core';
 import type * as THREE from 'three';
 
 /**
@@ -8,6 +9,15 @@ export type ThreeModule = typeof THREE;
 let LOADED: ThreeModule | null = null;
 let PENDING: Promise<ThreeModule> | null = null;
 let LOAD: () => Promise<ThreeModule> = () => import('three');
+
+/**
+ * Flips to `true` once the runtime is available. Every access to the runtime
+ * reads it, so a computed or signal function that asked too early is marked
+ * dirty by the load and re-evaluates instead of staying cached at its failed
+ * value (a computed that throws before reading any signal would otherwise
+ * end up with no dependencies at all).
+ */
+const LOADED_SIGNAL = createSignal(false);
 
 export interface ThreeConfig {
   /**
@@ -41,19 +51,39 @@ export function configureThree(config: ThreeConfig) {
     LOAD = config.load;
   }
   if (config.module && !LOADED) {
-    LOADED = config.module;
+    setLoaded(config.module);
   }
+}
+
+function setLoaded(mod: ThreeModule) {
+  LOADED = mod;
+  LOADED_SIGNAL(true);
 }
 
 /**
  * Whether the Three.js runtime has finished loading.
+ *
+ * @remarks
+ * Reactive: a computed or signal function that reads it re-evaluates once
+ * the runtime arrives.
  */
 export function isThreeLoaded(): boolean {
-  return LOADED !== null;
+  return LOADED_SIGNAL() && LOADED !== null;
 }
 
 /**
  * Start (or join) loading the Three.js runtime.
+ *
+ * @remarks
+ * A {@link Three} node calls this when it first renders, so most scenes never
+ * need to. Generator code that reads 3D values (`screenPosition()`,
+ * `projectPoint()`, `rootGroup()`, `mesh()`) must wait for the runtime first:
+ * `yield stage()` on the Three node does that (and also waits for pending
+ * fonts), or yield this promise when no node is at hand:
+ * ```tsx
+ * yield loadThree();
+ * label().position(box().screenPosition());
+ * ```
  */
 export function loadThree(): Promise<ThreeModule> {
   if (LOADED) {
@@ -61,7 +91,7 @@ export function loadThree(): Promise<ThreeModule> {
   }
   if (!PENDING) {
     PENDING = LOAD().then(mod => {
-      LOADED = mod;
+      setLoaded(mod);
       return mod;
     });
   }
@@ -72,16 +102,18 @@ export function loadThree(): Promise<ThreeModule> {
  * Get the loaded Three.js runtime.
  *
  * @remarks
- * Throws if the runtime has not loaded yet. Nodes only reach for it after
- * {@link Three} has gated rendering on {@link loadThree}. Inside a signal or
- * computed the throw is caught by the signal system and logged, and the
- * stale value is kept, so check {@link isThreeLoaded} there instead.
+ * Throws if the runtime has not loaded yet. Inside a signal or computed the
+ * signal system catches and logs the throw and the value stays at its
+ * fallback; the read of the load state made here marks that context dirty,
+ * so it re-evaluates once the runtime arrives. Code that runs before the
+ * first render (scene setup, generator code) should `yield loadThree()`
+ * first or check {@link isThreeLoaded}.
  */
 export function getThree(): ThreeModule {
-  if (!LOADED) {
+  if (!isThreeLoaded()) {
     throw new Error(
-      'Three.js has not loaded yet. 3D nodes must be rendered inside a <Three> node, which loads the runtime.',
+      'Three.js has not loaded yet. Inside a scene, `yield loadThree()` before reading 3D objects, or read them from a signal function or onUpdate callback instead.',
     );
   }
-  return LOADED;
+  return LOADED!;
 }

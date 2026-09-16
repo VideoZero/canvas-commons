@@ -18,6 +18,7 @@ import {
   Vector2,
   endScene,
   startScene,
+  useLogger,
   useScene,
 } from '@motion-canvas/core';
 import type * as THREE from 'three';
@@ -34,8 +35,11 @@ const MAX_SURFACE_TEXELS = 4096;
 /**
  * Built-in primitive shapes. Every primitive is authored at unit size and
  * scaled to {@link Mesh3D.size}, so tweening the size does not rebuild the
- * geometry. A `box` with a `radius` is the exception: its corners must stay
- * spherical, so it is rebuilt (cheaply) whenever its proportions change.
+ * geometry. The exceptions are shapes whose proportions are part of the
+ * shape: a `box` with a `radius` (its corners must stay spherical) and
+ * `torus`, `torusKnot`, `capsule` and `ring` (their tube or inner diameter
+ * is a ratio of the outer one). Those are rebuilt whenever a size tween
+ * changes their aspect; scaling them uniformly is still free.
  */
 export type Mesh3DGeometry =
   | 'box'
@@ -182,8 +186,8 @@ export interface Mesh3DProps extends Object3DNodeProps {
 }
 
 interface TextureEntry {
-  texture: THREE.Texture;
-  promise: Promise<THREE.Texture>;
+  texture: THREE.Texture | null;
+  promise: Promise<THREE.Texture | null>;
   ready: boolean;
 }
 
@@ -365,7 +369,13 @@ export class Mesh3D extends Object3DNode {
 
   /**
    * URL of an image to wrap around the surface. Loads asynchronously; the
-   * renderer waits for it like it does for {@link Img}.
+   * renderer waits for it like it does for {@link Img}. A URL that fails to
+   * load is reported once and the mesh renders without it.
+   *
+   * @remarks
+   * While the mesh hosts 2D children the content replaces the image on the
+   * front face of a `box` (the other faces keep it) and on the whole
+   * surface of every other shape.
    */
   @initial(null)
   @signal()
@@ -386,9 +396,12 @@ export class Mesh3D extends Object3DNode {
 
   /**
    * Texels per pixel used to rasterize the surface content. `null` (the
-   * default) follows the resolution the enclosing {@link Three} renders at,
-   * so content stays crisp under Camera zoom and high-resolution exports.
-   * Lower it for large surfaces that are far from the camera.
+   * default) follows the resolution the enclosing {@link Three} renders at
+   * (its on-screen scale, `quality` and `zoom`), so content stays crisp
+   * under Camera zoom, viewport zoom and high-resolution exports. It does
+   * not account for the mesh's own `scale` or a positive `z` bringing it
+   * closer to the camera: set it explicitly (e.g. `2`) for a surface that
+   * is magnified that way. Lower it for large surfaces far from the camera.
    */
   @initial(null)
   @signal()
@@ -425,6 +438,18 @@ export class Mesh3D extends Object3DNode {
   public constructor(props?: Mesh3DProps) {
     super(props ?? {});
     this.scene2D = useScene();
+  }
+
+  protected override acceptsContent(): boolean {
+    return true;
+  }
+
+  /**
+   * Lets `yield mesh()` and the renderer wait for {@link map}.
+   */
+  protected override collectAsyncResources() {
+    this.texture();
+    super.collectAsyncResources();
   }
 
   protected override createObject(three: ThreeModule): THREE.Object3D {
@@ -645,7 +670,12 @@ export class Mesh3D extends Object3DNode {
       const loader = new three.TextureLoader();
       loader.setCrossOrigin('anonymous');
       const created: Partial<TextureEntry> = {ready: false};
-      created.promise = new Promise<THREE.Texture>((resolve, reject) => {
+      const logger = useLogger();
+      // A failure resolves to `null` (the mesh renders without the image)
+      // rather than rejecting: a rejection would surface as an unhandled
+      // promise from every mesh that shares the URL. The failed entry stays
+      // cached so the URL is not requested again on every re-evaluation.
+      created.promise = new Promise<THREE.Texture | null>(resolve => {
         created.texture = loader.load(
           url,
           () => {
@@ -653,7 +683,16 @@ export class Mesh3D extends Object3DNode {
             resolve(created.texture!);
           },
           undefined,
-          () => reject(new Error(`Failed to load texture: ${url}`)),
+          () => {
+            created.texture?.dispose();
+            created.texture = null;
+            created.ready = true;
+            logger.error({
+              message: `Mesh3D: failed to load texture "${url}".`,
+              inspect: this.key,
+            });
+            resolve(null);
+          },
         );
       });
       created.texture!.colorSpace = three.SRGBColorSpace;
@@ -831,7 +870,16 @@ export class Mesh3D extends Object3DNode {
     }
     if (!this.surfaceTexture) {
       const texture = new three.CanvasTexture(canvas);
-      texture.colorSpace = three.SRGBColorSpace;
+      if (canPremultiplySurface(three)) {
+        // Uploaded premultiplied (the canvas already stores its pixels that
+        // way) so mipmaps average the transparent margin correctly; the
+        // shader un-premultiplies and decodes sRGB itself, see
+        // premultipliedSurfaceShader.
+        texture.premultiplyAlpha = true;
+        texture.colorSpace = three.NoColorSpace;
+      } else {
+        texture.colorSpace = three.SRGBColorSpace;
+      }
       texture.anisotropy =
         getSharedRenderer(three).capabilities.getMaxAnisotropy();
       this.surfaceTexture = texture;
@@ -857,6 +905,9 @@ export class Mesh3D extends Object3DNode {
     if (!this.surfaceMaterial || this.surfaceMaterialKind !== kind) {
       this.disposeSurfaceMaterial();
       this.surfaceMaterial = createMaterial(three, kind);
+      if (canPremultiplySurface(three)) {
+        premultipliedSurfaceShader(three, this.surfaceMaterial);
+      }
       this.surfaceMaterialKind = kind;
     }
     const mat = this.surfaceMaterial as THREE.MeshStandardMaterial;
@@ -1146,6 +1197,54 @@ function createMaterial(
     case 'normal':
       return new three.MeshNormalMaterial();
   }
+}
+
+const MAP_SAMPLE = 'vec4 sampledDiffuseColor = texture2D( map, vMapUv );';
+
+/**
+ * Whether this Three.js version has the `map_fragment` chunk that
+ * {@link premultipliedSurfaceShader} patches. If a future version renames
+ * it, the surface falls back to a straight-alpha sRGB texture (correct
+ * colours, slightly dark edges when minified) instead of breaking.
+ */
+function canPremultiplySurface(three: ThreeModule): boolean {
+  return three.ShaderChunk.map_fragment.includes(MAP_SAMPLE);
+}
+
+/**
+ * Make a lit material read its `map` as premultiplied, sRGB-encoded
+ * texels: the surface texture is uploaded that way so that mipmaps of the
+ * transparent margin average correctly (straight-alpha mipmaps blend
+ * transparent black into every edge, which shows as a dark rim once the
+ * surface is minified). The sampled colour is un-premultiplied and decoded
+ * to linear here, where Three's own chunk expects a straight sRGB sample;
+ * lighting and blending are unchanged.
+ */
+function premultipliedSurfaceShader(
+  three: ThreeModule,
+  material: THREE.Material,
+) {
+  const chunk = three.ShaderChunk.map_fragment.replace(
+    MAP_SAMPLE,
+    MAP_SAMPLE +
+      `
+	sampledDiffuseColor.rgb /= max( sampledDiffuseColor.a, 1e-4 );
+	{
+		vec3 c = sampledDiffuseColor.rgb;
+		sampledDiffuseColor.rgb = mix(
+			pow( c * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ),
+			c * 0.0773993808,
+			vec3( lessThanEqual( c, vec3( 0.04045 ) ) )
+		);
+	}`,
+  );
+  material.onBeforeCompile = shader => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <map_fragment>',
+      chunk,
+    );
+  };
+  material.customProgramCacheKey = () => 'motion-canvas-surface';
 }
 
 /**

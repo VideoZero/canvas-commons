@@ -38,3 +38,10 @@ export function disposeSharedRenderer() {
     SHARED = null;
   }
 }
+
+// When this module is hot-replaced during development the next version
+// creates its own renderer; release this one so edits do not pile up WebGL
+// contexts until the browser starts dropping them.
+(import.meta as {hot?: {dispose(callback: () => void): void}}).hot?.dispose(
+  disposeSharedRenderer,
+);
