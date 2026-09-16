@@ -1,7 +1,7 @@
 import type * as THREE from 'three';
 import {ThreeModule} from './loader';
 
-let shared: THREE.WebGLRenderer | null = null;
+let SHARED: THREE.WebGLRenderer | null = null;
 
 /**
  * The single WebGL renderer shared by every {@link Three} node.
@@ -12,8 +12,8 @@ let shared: THREE.WebGLRenderer | null = null;
  * can serve any number of nodes. The canvas is resized on demand.
  */
 export function getSharedRenderer(three: ThreeModule): THREE.WebGLRenderer {
-  if (!shared) {
-    shared = new three.WebGLRenderer({
+  if (!SHARED) {
+    SHARED = new three.WebGLRenderer({
       canvas: document.createElement('canvas'),
       antialias: true,
       alpha: true,
@@ -21,20 +21,20 @@ export function getSharedRenderer(three: ThreeModule): THREE.WebGLRenderer {
       preserveDrawingBuffer: false,
       powerPreference: 'high-performance',
     });
-    shared.setPixelRatio(1);
-    shared.shadowMap.enabled = false;
-    shared.shadowMap.type = three.PCFShadowMap;
+    SHARED.setPixelRatio(1);
+    SHARED.shadowMap.enabled = false;
+    SHARED.shadowMap.type = three.PCFShadowMap;
   }
-  return shared;
+  return SHARED;
 }
 
 /**
  * Release the shared renderer and its WebGL context.
  */
 export function disposeSharedRenderer() {
-  if (shared) {
-    shared.dispose();
-    shared.forceContextLoss();
-    shared = null;
+  if (SHARED) {
+    SHARED.dispose();
+    SHARED.forceContextLoss();
+    SHARED = null;
   }
 }

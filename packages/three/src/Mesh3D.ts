@@ -33,7 +33,9 @@ const MAX_SURFACE_TEXELS = 4096;
 
 /**
  * Built-in primitive shapes. Every primitive is authored at unit size and
- * scaled to {@link Mesh3D.size}, so tweening the size never rebuilds geometry.
+ * scaled to {@link Mesh3D.size}, so tweening the size does not rebuild the
+ * geometry. A `box` with a `radius` is the exception: its corners must stay
+ * spherical, so it is rebuilt (cheaply) whenever its proportions change.
  */
 export type Mesh3DGeometry =
   | 'box'
@@ -185,7 +187,7 @@ interface TextureEntry {
   ready: boolean;
 }
 
-const textures = new Map<string, TextureEntry>();
+const TEXTURE_CACHE = new Map<string, TextureEntry>();
 
 /**
  * Expand a size shorthand to `[width, height, depth]`.
@@ -411,10 +413,12 @@ export class Mesh3D extends Object3DNode {
   private ownGeometryKey = '';
   private ownMaterial: THREE.Material | null = null;
   private ownMaterialKind: Mesh3DMaterial | null = null;
+  private innerMesh: THREE.Mesh | null = null;
   private surfaceMaterial: THREE.Material | null = null;
   private surfaceMaterialKind: Mesh3DMaterial | null = null;
   private surfaceCanvasElement: HTMLCanvasElement | null = null;
   private surfaceTexture: THREE.CanvasTexture | null = null;
+  private surfaceTextureSize = new Vector2();
   private surfaceView: View2D | null = null;
   private readonly scene2D: Scene;
 
@@ -424,20 +428,41 @@ export class Mesh3D extends Object3DNode {
   }
 
   protected override createObject(three: ThreeModule): THREE.Object3D {
-    return new three.Mesh();
+    // The node's object is a holder group; the mesh inside carries the
+    // `size` scale, so 3D children attached to the holder are not scaled by
+    // this mesh's dimensions.
+    const holder = new three.Group();
+    holder.name = 'Mesh3D';
+    this.innerMesh = new three.Mesh();
+    holder.add(this.innerMesh);
+    return holder;
   }
 
-  protected override updateObject(three: ThreeModule, object: THREE.Object3D) {
-    const mesh = object as THREE.Mesh;
+  protected override updateObject() {
+    const mesh = this.innerMesh!;
     mesh.geometry = this.resolvedGeometry();
     mesh.material = this.resolvedMaterials();
     mesh.castShadow = this.castShadow();
     mesh.receiveShadow = this.receiveShadow();
 
-    // Size is applied as scale on top of the node's own scale, so primitives
-    // stay unit-sized and tweening `size` never rebuilds geometry.
+    // Size is applied as the inner mesh's scale, so primitives stay
+    // unit-sized and tweening `size` does not rebuild their geometry (a
+    // rounded box is the exception, see resolvedGeometry).
     const [sx, sy, sz] = this.geometryScale();
-    object.scale.multiply(new three.Vector3(sx, sy, sz));
+    mesh.scale.set(sx, sy, sz);
+  }
+
+  /**
+   * The Three.js mesh itself (geometry, material, shadow flags).
+   *
+   * @remarks
+   * {@link object3D} returns the holder group that carries the node's
+   * transform and its 3D children; the mesh inside it carries the `size`
+   * scale. Only valid once the runtime has loaded, like {@link object3D}.
+   */
+  public mesh(): THREE.Mesh {
+    this.object3D();
+    return this.innerMesh!;
   }
 
   /**
@@ -501,7 +526,9 @@ export class Mesh3D extends Object3DNode {
       geometry === 'ring'
         ? round(h / width)
         : 0;
-    // A rounded box bakes all three proportions plus the corner radius.
+    // A rounded box bakes all three proportions plus the corner radius, so a
+    // size or radius tween rebuilds it every frame. That is a few thousand
+    // vertices and one upload; acceptable, but not free like the others.
     const rounded =
       geometry === 'box' && this.radius() > 0
         ? [round(h / width), round(d / width), round(this.radius() / width)]
@@ -613,26 +640,25 @@ export class Mesh3D extends Object3DNode {
       return null;
     }
     const three = getThree();
-    let entry = textures.get(url);
+    let entry = TEXTURE_CACHE.get(url);
     if (!entry) {
       const loader = new three.TextureLoader();
       loader.setCrossOrigin('anonymous');
-      let texture!: THREE.Texture;
-      const promise = new Promise<THREE.Texture>((resolve, reject) => {
-        texture = loader.load(
+      const created: Partial<TextureEntry> = {ready: false};
+      created.promise = new Promise<THREE.Texture>((resolve, reject) => {
+        created.texture = loader.load(
           url,
           () => {
             created.ready = true;
-            resolve(texture);
+            resolve(created.texture!);
           },
           undefined,
           () => reject(new Error(`Failed to load texture: ${url}`)),
         );
       });
-      texture.colorSpace = three.SRGBColorSpace;
-      const created: TextureEntry = {texture, promise, ready: false};
-      entry = created;
-      textures.set(url, entry);
+      created.texture!.colorSpace = three.SRGBColorSpace;
+      entry = created as TextureEntry;
+      TEXTURE_CACHE.set(url, entry);
     }
     if (entry.ready) {
       return entry.texture;
@@ -673,7 +699,10 @@ export class Mesh3D extends Object3DNode {
   /**
    * Maps surface space (pixels, centred) to texture space (texels, origin at
    * the top-left corner). Also what {@link localToWorld} returns while the
-   * mesh hosts content, so the children's world space is the texture.
+   * mesh hosts content, so the children's world space is the texture. As a
+   * consequence `absolutePosition()` of a content child is a texel position,
+   * not a scene position; use {@link screenPosition} on the mesh to pin
+   * scene-level nodes to it.
    */
   @computed()
   private surfaceMatrix(): DOMMatrix {
@@ -790,12 +819,23 @@ export class Mesh3D extends Object3DNode {
       return null;
     }
     const three = getThree();
+    // The GPU storage of a texture is allocated once, at the size of its
+    // first upload, so a canvas that changed size (mesh size tween, Camera
+    // zoom, quality change) needs a fresh texture.
+    if (
+      this.surfaceTexture &&
+      (this.surfaceTextureSize.x !== canvas.width ||
+        this.surfaceTextureSize.y !== canvas.height)
+    ) {
+      this.disposeSurfaceTexture();
+    }
     if (!this.surfaceTexture) {
       const texture = new three.CanvasTexture(canvas);
       texture.colorSpace = three.SRGBColorSpace;
       texture.anisotropy =
         getSharedRenderer(three).capabilities.getMaxAnisotropy();
       this.surfaceTexture = texture;
+      this.surfaceTextureSize = new Vector2(canvas.width, canvas.height);
     }
     // Re-evaluated only when the canvas was re-drawn, so this is exactly one
     // upload per content change.
@@ -881,6 +921,8 @@ export class Mesh3D extends Object3DNode {
     this.disposeOwnMaterial();
     this.disposeSurfaceMaterial();
     this.disposeSurfaceTexture();
+    this.innerMesh?.removeFromParent();
+    this.innerMesh = null;
     this.surfaceCanvasElement = null;
     this.surfaceView?.dispose();
     this.surfaceView = null;

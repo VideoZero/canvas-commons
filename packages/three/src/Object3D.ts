@@ -84,9 +84,21 @@ export class Object3D extends Object3DNode {
 
   private created: THREE.Object3D | null = null;
   private attached: THREE.Object3D | null = null;
-  private readonly materialDefaults = new WeakMap<
+  /**
+   * Per material: the opacity / transparency the user gave it (`base`) and
+   * what this node last wrote (`applied`). A value that no longer matches
+   * `applied` was changed by the user (in `update` or outside) and becomes
+   * the new base, so the node's opacity multiplies user edits instead of
+   * clobbering them.
+   */
+  private readonly materialState = new WeakMap<
     THREE.Material,
-    {opacity: number; transparent: boolean}
+    {
+      baseOpacity: number;
+      appliedOpacity: number;
+      baseTransparent: boolean;
+      appliedTransparent: boolean;
+    }
   >();
 
   public constructor(props?: Object3DProps) {
@@ -127,8 +139,9 @@ export class Object3D extends Object3DNode {
     if (!raw) {
       return;
     }
-    this.applyOpacity(raw, this.opacity3D());
+    // `update` first so edits made there are the base the opacity multiplies.
     this.update?.(raw, three);
+    this.applyOpacity(raw, this.opacity3D());
   }
 
   private applyOpacity(raw: THREE.Object3D, opacity: number) {
@@ -138,21 +151,30 @@ export class Object3D extends Object3DNode {
         return;
       }
       for (const mat of Array.isArray(material) ? material : [material]) {
-        let defaults = this.materialDefaults.get(mat);
-        if (!defaults) {
+        let state = this.materialState.get(mat);
+        if (!state) {
           if (opacity >= 1) {
             continue;
           }
-          defaults = {opacity: mat.opacity, transparent: mat.transparent};
-          this.materialDefaults.set(mat, defaults);
+          state = {
+            baseOpacity: mat.opacity,
+            appliedOpacity: mat.opacity,
+            baseTransparent: mat.transparent,
+            appliedTransparent: mat.transparent,
+          };
+          this.materialState.set(mat, state);
         }
-        if (opacity >= 1) {
-          mat.opacity = defaults.opacity;
-          setTransparent(mat, defaults.transparent);
-        } else {
-          mat.opacity = defaults.opacity * opacity;
-          setTransparent(mat, true);
+        if (mat.opacity !== state.appliedOpacity) {
+          state.baseOpacity = mat.opacity;
         }
+        if (mat.transparent !== state.appliedTransparent) {
+          state.baseTransparent = mat.transparent;
+        }
+        const transparent = opacity < 1 || state.baseTransparent;
+        mat.opacity = state.baseOpacity * opacity;
+        setTransparent(mat, transparent);
+        state.appliedOpacity = mat.opacity;
+        state.appliedTransparent = mat.transparent;
       }
     });
   }

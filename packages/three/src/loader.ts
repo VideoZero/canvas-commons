@@ -5,9 +5,9 @@ import type * as THREE from 'three';
  */
 export type ThreeModule = typeof THREE;
 
-let module: ThreeModule | null = null;
-let pending: Promise<ThreeModule> | null = null;
-let load: () => Promise<ThreeModule> = () => import('three');
+let LOADED: ThreeModule | null = null;
+let PENDING: Promise<ThreeModule> | null = null;
+let LOAD: () => Promise<ThreeModule> = () => import('three');
 
 export interface ThreeConfig {
   /**
@@ -38,10 +38,10 @@ export interface ThreeConfig {
  */
 export function configureThree(config: ThreeConfig) {
   if (config.load) {
-    load = config.load;
+    LOAD = config.load;
   }
-  if (config.module && !module) {
-    module = config.module;
+  if (config.module && !LOADED) {
+    LOADED = config.module;
   }
 }
 
@@ -49,23 +49,23 @@ export function configureThree(config: ThreeConfig) {
  * Whether the Three.js runtime has finished loading.
  */
 export function isThreeLoaded(): boolean {
-  return module !== null;
+  return LOADED !== null;
 }
 
 /**
  * Start (or join) loading the Three.js runtime.
  */
 export function loadThree(): Promise<ThreeModule> {
-  if (module) {
-    return Promise.resolve(module);
+  if (LOADED) {
+    return Promise.resolve(LOADED);
   }
-  if (!pending) {
-    pending = load().then(mod => {
-      module = mod;
+  if (!PENDING) {
+    PENDING = LOAD().then(mod => {
+      LOADED = mod;
       return mod;
     });
   }
-  return pending;
+  return PENDING;
 }
 
 /**
@@ -73,13 +73,15 @@ export function loadThree(): Promise<ThreeModule> {
  *
  * @remarks
  * Throws if the runtime has not loaded yet. Nodes only reach for it after
- * {@link Three} has gated rendering on {@link loadThree}.
+ * {@link Three} has gated rendering on {@link loadThree}. Inside a signal or
+ * computed the throw is caught by the signal system and logged, and the
+ * stale value is kept, so check {@link isThreeLoaded} there instead.
  */
 export function getThree(): ThreeModule {
-  if (!module) {
+  if (!LOADED) {
     throw new Error(
       'Three.js has not loaded yet. 3D nodes must be rendered inside a <Three> node, which loads the runtime.',
     );
   }
-  return module;
+  return LOADED;
 }

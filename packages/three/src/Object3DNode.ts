@@ -74,6 +74,9 @@ export interface Object3DNodeProps extends NodeProps {
  *   node instead — that fades the finished image.
  *
  * 3D nodes nest: children of a 3D node move with it, like Three.js objects.
+ * A parent's `size` is not inherited (it scales the parent's shape only),
+ * so a child at `y={-120}` under a `300 × 100` box sits 120 px above its
+ * pivot.
  */
 export abstract class Object3DNode extends Node {
   /**
@@ -126,7 +129,7 @@ export abstract class Object3DNode extends Node {
    * changes; the transform and children are already handled.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  protected updateObject(three: ThreeModule, object: THREE.Object3D): void {
+  protected updateObject(_three: ThreeModule, _object: THREE.Object3D): void {
     // Subclasses override.
   }
 
@@ -138,6 +141,17 @@ export abstract class Object3DNode extends Node {
     const parent = this.parent();
     const inherited = parent instanceof Object3DNode ? parent.opacity3D() : 1;
     return Math.max(0, Math.min(1, this.opacity())) * inherited;
+  }
+
+  /**
+   * A 3D node draws nothing on the 2D canvas, so it passes no opacity down
+   * to 2D descendants (the surface content of a {@link Mesh3D}); the
+   * material's opacity ({@link opacity3D}) and the enclosing {@link Three}
+   * node's own fade cover it. Keeping this at `1` means a fade of the mesh
+   * or the viewport does not re-rasterize the surface content every frame.
+   */
+  public override absoluteOpacity(): number {
+    return 1;
   }
 
   /**

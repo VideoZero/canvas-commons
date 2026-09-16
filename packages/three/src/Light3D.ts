@@ -1,5 +1,10 @@
 import {colorSignal, initial, nodeName, signal} from '@motion-canvas/2d';
-import {ColorSignal, PossibleColor, SignalValue, SimpleSignal} from '@motion-canvas/core';
+import {
+  ColorSignal,
+  PossibleColor,
+  SignalValue,
+  SimpleSignal,
+} from '@motion-canvas/core';
 import type * as THREE from 'three';
 import {Object3DNode, Object3DNodeProps} from './Object3DNode';
 import {ThreeModule} from './loader';
@@ -16,7 +21,12 @@ import {PIXELS_PER_UNIT, PossibleVector3, toRadians} from './units';
  * - `point`: a bulb radiating in all directions from its position.
  * - `spot`: a cone from the position toward {@link Light3D.target}.
  */
-export type Light3DKind = 'ambient' | 'hemisphere' | 'directional' | 'point' | 'spot';
+export type Light3DKind =
+  | 'ambient'
+  | 'hemisphere'
+  | 'directional'
+  | 'point'
+  | 'spot';
 
 export interface Light3DProps extends Object3DNodeProps {
   /**
@@ -174,6 +184,7 @@ export class Light3D extends Object3DNode {
     if (!this.light || this.lightKind !== kind) {
       if (this.light) {
         object.remove(this.light);
+        targetOf(this.light)?.removeFromParent();
         this.light.dispose();
       }
       this.light = createLight(three, kind);
@@ -189,14 +200,21 @@ export class Light3D extends Object3DNode {
       light.groundColor.set(this.groundColor().hex());
     }
 
-    if (light instanceof three.DirectionalLight || light instanceof three.SpotLight) {
+    if (
+      light instanceof three.DirectionalLight ||
+      light instanceof three.SpotLight
+    ) {
+      // `target` is given in the same space as the node's `position` (its
+      // parent's, in pixels). The target object lives inside the holder so
+      // it follows a transformed parent; express the point in holder space.
+      if (light.target.parent !== object) {
+        object.add(light.target);
+      }
       const [tx, ty, tz] = this.target();
-      light.target.position.set(
-        tx / PIXELS_PER_UNIT,
-        -ty / PIXELS_PER_UNIT,
-        tz / PIXELS_PER_UNIT,
-      );
-      light.target.updateMatrixWorld();
+      object.updateMatrix();
+      light.target.position
+        .set(tx, -ty, tz)
+        .applyMatrix4(object.matrix.clone().invert());
       light.castShadow = this.castShadow();
       light.shadow.mapSize.set(2048, 2048);
       light.shadow.bias = -0.0005;
@@ -232,10 +250,17 @@ export class Light3D extends Object3DNode {
   }
 
   public override dispose() {
-    this.light?.dispose();
-    this.light = null;
+    if (this.light) {
+      targetOf(this.light)?.removeFromParent();
+      this.light.dispose();
+      this.light = null;
+    }
     super.dispose();
   }
+}
+
+function targetOf(light: THREE.Light): THREE.Object3D | null {
+  return (light as THREE.DirectionalLight).target ?? null;
 }
 
 function createLight(three: ThreeModule, kind: Light3DKind): THREE.Light {

@@ -635,9 +635,15 @@ export class Three extends Rect implements Object3DRoot {
       const m = context.getTransform();
       const onScreen =
         Math.max(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d)) || 1;
-      const q = Math.max(0.05, this.quality() * onScreen);
-      const w = Math.min(4096, Math.max(1, Math.round(size.width * q)));
-      const h = Math.min(4096, Math.max(1, Math.round(size.height * q)));
+      // Capped so the largest edge stays within 4096 texels; surfaces
+      // rasterize at the same (capped) scale, so they match the image 1:1.
+      const q = Math.min(
+        Math.max(0.05, this.quality() * onScreen),
+        4096 / size.width,
+        4096 / size.height,
+      );
+      const w = Math.max(1, Math.round(size.width * q));
+      const h = Math.max(1, Math.round(size.height * q));
       // Published before the sync so surfaces rasterize at the same scale.
       // The setter is a no-op when unchanged, so steady frames stay cached.
       this.renderScale(q);
