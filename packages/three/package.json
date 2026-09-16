@@ -1,0 +1,32 @@
+{
+  "name": "@motion-canvas/three",
+  "version": "0.1.0",
+  "description": "Three.js 3D scenes as Motion Canvas nodes, driven by signals",
+  "main": "lib/index.js",
+  "types": "./lib/index.d.ts",
+  "author": "motion-canvas",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsc -w",
+    "build": "tsc"
+  },
+  "exports": {
+    ".": {"types": "./lib/index.d.ts", "import": "./lib/index.js"}
+  },
+  "sideEffects": false,
+  "files": [
+    "lib",
+    "src"
+  ],
+  "dependencies": {
+    "@motion-canvas/2d": "^3.18.0-alpha.0",
+    "@motion-canvas/core": "^3.18.0-alpha.0"
+  },
+  "peerDependencies": {
+    "three": ">=0.160.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "three": "^0.186.0"
+  }
+}

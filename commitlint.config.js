@@ -19,6 +19,7 @@ module.exports = {
         'rig',
         'd3-geo',
         'shiki',
+        'three',
         'ui',
         'vite-plugin',
       ],

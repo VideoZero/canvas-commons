@@ -26,6 +26,7 @@
     "player:build": "npm run build -w packages/player",
     "rig:dev": "npm run dev -w packages/rig",
     "rig:build": "npm run build -w packages/rig",
+    "three:build": "npm run build -w packages/three",
     "docs:dev": "npm run core:bundle && npm run 2d:bundle && npm run dev -w packages/docs",
     "docs:build": "npm run core:bundle && npm run 2d:bundle && npm run build -w packages/docs",
     "docs:blog": "npm run blog -w packages/docs",
