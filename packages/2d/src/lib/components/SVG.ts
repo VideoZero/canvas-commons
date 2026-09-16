@@ -13,10 +13,7 @@ import {
   all,
   clamp,
   clampRemap,
-  createSignal,
   delay,
-  easeInCubic,
-  easeInOutCubic,
   easeInOutSine,
   easeOutCubic,
   easeOutSine,
@@ -31,7 +28,7 @@ import {
   useRandom,
   waitFor,
 } from '@motion-canvas/core';
-import {computed, initial, signal} from '../decorators';
+import {computed, signal} from '../decorators';
 import {PathMorpher, defaultMorpher} from '../morphers';
 import {DesiredLength, PossibleCanvasStyle} from '../partials';
 import {Gradient} from '../partials/Gradient';
@@ -131,6 +128,22 @@ export interface SVGBuildOptions {
    * @defaultValue true
    */
   outline?: boolean;
+  /**
+   * The width of the line a fill-only child borrows, in that child's own
+   * units.
+   *
+   * @remarks
+   * A borrowed line is measured in the document's coordinates, not in pixels,
+   * so what one unit is worth on screen depends on the document. Artwork
+   * authored at roughly its display size draws about a pixel wide and needs
+   * nothing set here; a document whose coordinates are far from its display
+   * size — a typeset formula, whose glyph outlines are a thousand units to the
+   * em — would trace with an invisible hairline unless it says how wide its
+   * own pen should be.
+   *
+   * @defaultValue 1
+   */
+  outlineWidth?: number;
 }
 
 /** A curve's paint as the document declared it, before a build touched it. */
@@ -204,9 +217,7 @@ export class SVG extends Shape {
    */
   @computed()
   public orderedCurveDescendants(): Curve[] {
-    return this.wrapper.findAll(
-      (node): node is Curve => node instanceof Curve,
-    );
+    return this.wrapper.findAll((node): node is Curve => node instanceof Curve);
   }
 
   /**
@@ -296,7 +307,12 @@ export class SVG extends Shape {
     draw: boolean,
     duration: number,
     timingFunction: TimingFunction | undefined,
-    {overlap = 0.5, order = 'forward', outline = true}: SVGBuildOptions,
+    {
+      overlap = 0.5,
+      order = 'forward',
+      outline = true,
+      outlineWidth = 1,
+    }: SVGBuildOptions,
   ): ThreadGenerator {
     const curves = this.orderedCurveDescendants();
     const n = curves.length;
@@ -353,12 +369,20 @@ export class SVG extends Shape {
           const fillDur = hasFill && !fillOnly ? perChild * 0.3 : perChild;
 
           function* strokePhase(): ThreadGenerator {
-            if (borrowed) curve.lineWidth(1);
+            if (borrowed) curve.lineWidth(outlineWidth);
             if (draw) {
-              yield curve.end(1, strokeDur, hasFill ? traceEasing : curveEasing);
+              yield curve.end(
+                1,
+                strokeDur,
+                hasFill ? traceEasing : curveEasing,
+              );
               yield* waitFor(strokeDur);
             } else {
-              yield* curve.end(0, strokeDur, hasFill ? traceEasing : curveEasing);
+              yield* curve.end(
+                0,
+                strokeDur,
+                hasFill ? traceEasing : curveEasing,
+              );
             }
           }
 
@@ -374,7 +398,8 @@ export class SVG extends Shape {
             yield* tween(fillDur, t => {
               const progress = draw ? easeOutSine(t) : 1 - easeOutSine(t);
               curve.fill(fade.alpha(alpha * progress));
-              if (borrowed) curve.lineWidth(Math.max(0, 1 - progress));
+              if (borrowed)
+                curve.lineWidth(Math.max(0, outlineWidth * (1 - progress)));
             });
             curve.fill(draw ? fill : null);
           }
@@ -1083,14 +1108,14 @@ export class SVG extends Shape {
         1,
         inheritedStyle.lineWidth,
       ),
-      lineCap:
-        this.parseLineCap(cs.strokeLinecap) ?? inheritedStyle.lineCap,
+      lineCap: this.parseLineCap(cs.strokeLinecap) ?? inheritedStyle.lineCap,
       lineJoin:
         this.parseLineJoin(cs.strokeLinejoin) ?? inheritedStyle.lineJoin,
       lineDash:
         this.parseLineDash(cs.strokeDasharray) ?? inheritedStyle.lineDash,
       lineDashOffset:
-        this.parseDashOffset(cs.strokeDashoffset) ?? inheritedStyle.lineDashOffset,
+        this.parseDashOffset(cs.strokeDashoffset) ??
+        inheritedStyle.lineDashOffset,
       opacity: this.parseOpacity(cs.opacity) ?? inheritedStyle.opacity,
       layout: false,
     };
