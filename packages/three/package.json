@@ -11,7 +11,10 @@
     "build": "tsc"
   },
   "exports": {
-    ".": {"types": "./lib/index.d.ts", "import": "./lib/index.js"}
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    }
   },
   "sideEffects": false,
   "files": [
@@ -23,10 +26,16 @@
     "@motion-canvas/core": "^3.18.0-alpha.0"
   },
   "peerDependencies": {
-    "three": ">=0.160.0"
+    "three": ">=0.160.0",
+    "@types/three": ">=0.160.0"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",
     "three": "^0.186.0"
+  },
+  "peerDependenciesMeta": {
+    "@types/three": {
+      "optional": true
+    }
   }
 }
