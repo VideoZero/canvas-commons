@@ -6,7 +6,7 @@ objects tween, chain and compose exactly like 2D nodes.
 ```tsx
 import {Txt, makeScene2D} from '@motion-canvas/2d';
 import {all, createRef} from '@motion-canvas/core';
-import {Mesh3D, Three} from '@motion-canvas/three';
+import {Light3D, Mesh3D, Three} from '@motion-canvas/three';
 
 export default makeScene2D(function* (view) {
   const stage = createRef<Three>();
@@ -22,6 +22,14 @@ export default makeScene2D(function* (view) {
       cameraYaw={-25}
       shadows
     >
+      <Light3D kind="hemisphere" intensity={0.8} />
+      <Light3D
+        kind="directional"
+        position={[-400, -600]}
+        z={700}
+        intensity={2.5}
+        castShadow
+      />
       <Mesh3D ref={cube} geometry="box" size={220} color="#38bdf8" />
       <Mesh3D
         geometry="plane"
@@ -152,8 +160,15 @@ nodes reuse that instance instead of importing a second copy.
 - **2D on top.** Ordinary 2D children of `<Three>` draw over the 3D image. Pin
   them with `node.screenPosition()` or `stage.projectPoint([x, y, z])`.
 - **Lighting just works.** No `Light3D` in the scene → a neutral default rig.
-  Add lights to art-direct; `shadows` on `<Three>` plus `castShadow` on a light.
+  Add lights to art-direct (the rig then steps aside, so add a fill too).
+  Shadows need `shadows` on `<Three>` plus `castShadow` on a light; the default
+  rig casts none.
+- **2D children belong to `Three` or `Mesh3D`.** Under `Group3D`, `Light3D` or
+  `Object3D` they are dropped with a warning.
 - **Deterministic.** Everything is a pure function of signals; no clocks.
+- **Cloning.** `clone()` keeps `onUpdate`, `onRender`, `create` and `update`. A
+  raw `scene`, `camera` or `object` is copied by reference, and a Three.js
+  object has one parent, so give each clone its own.
 
 ## Recipes
 
@@ -190,11 +205,21 @@ nodes reuse that instance instead of importing a second copy.
     }}
   />
   ```
-- **Escape hatches need the runtime.** `stage.sceneObject()`, `mesh.object3D()`
-  and friends throw before Three.js has loaded; call them from `onUpdate`, an
-  `Object3D` `update`, or a signal function, not at setup. Inside a signal the
-  throw is caught and logged, and the stale value is kept, so check
-  `isThreeLoaded()` there.
+- **Escape hatches need the runtime.** `stage.sceneObject()`,
+  `stage.rootGroup()`, `mesh.object3D()`, `mesh.mesh()` and friends throw until
+  Three.js has loaded, which happens when the first `<Three>` renders. Inside
+  `onUpdate`, an `Object3D` `update` or a signal function they are always safe.
+  To use them in generator code, wait for the node first:
+  ```tsx
+  view.add(<Three ref={stage}>...</Three>);
+  yield stage(); // loads the runtime (and any pending fonts)
+  stage().rootGroup().add(myObject);
+  ```
+  `yield loadThree()` does the same without a ref. The same applies to values
+  derived from 3D, such as `screenPosition()` and `projectPoint()`: they are
+  zero and log a warning when read in generator code before the load. Reading
+  them from a signal function (`position={() => box().screenPosition()}`) needs
+  no wait.
 
 ## 2D content on a surface
 
@@ -204,26 +229,32 @@ texture and mapped onto the mesh, so they get perspective, occlusion and
 lighting like any other geometry.
 
 ```tsx
-const progress = createSignal(0);
-view.add(
-  <Three width={960} height={540} cameraPitch={15} cameraYaw={-20}>
-    <Mesh3D
-      geometry="box"
-      radius={34}
-      size={[320, 660, 22]}
-      contentMaterial="basic"
-    >
-      <Rect size={[320, 660]} fill="#0f172a" radius={34} />
-      <Txt y={-270} text="Nova" fontSize={40} fill="#fff" />
-      <Txt
-        text={() => `${Math.round(progress())} %`}
-        fontSize={48}
-        fill="#fff"
-      />
-    </Mesh3D>
-  </Three>,
-);
-yield * progress(100, 2);
+import {Rect, Txt, makeScene2D} from '@motion-canvas/2d';
+import {createSignal} from '@motion-canvas/core';
+import {Mesh3D, Three} from '@motion-canvas/three';
+
+export default makeScene2D(function* (view) {
+  const progress = createSignal(0);
+  view.add(
+    <Three width={960} height={540} cameraPitch={15} cameraYaw={-20}>
+      <Mesh3D
+        geometry="box"
+        radius={34}
+        size={[320, 660, 22]}
+        contentMaterial="basic"
+      >
+        <Rect size={[320, 660]} fill="#0f172a" radius={34} />
+        <Txt y={-270} text="Nova" fontSize={40} fill="#fff" />
+        <Txt
+          text={() => `${Math.round(progress())} %`}
+          fontSize={48}
+          fill="#fff"
+        />
+      </Mesh3D>
+    </Three>,
+  );
+  yield* progress(100, 2);
+});
 ```
 
 - **Coordinates.** The surface is the local space of the children: `(0, 0)` is
@@ -231,7 +262,8 @@ yield * progress(100, 2);
   mesh's `size`. On a `box` (rounded or not) the content covers the front face
   and the other faces keep the body material; on every other primitive it wraps
   the whole surface and replaces the body material, so a sphere with a small
-  label shows only the label. `map` is ignored while a mesh hosts content.
+  label shows only the label. The content also replaces `map` where it covers
+  the mesh: the other faces of a box keep the image.
 - **Shading.** `contentMaterial="basic"` makes the content glow like a screen;
   the default follows `material`, so a card is lit and shadowed by the scene. On
   a box the content is drawn over the lit body of the front face, so transparent
@@ -242,16 +274,20 @@ yield * progress(100, 2);
   node or any `Layout` around it, so a `<Layout layout>` inside works as usual
   and the surface is unaffected by a flex parent of the viewport.
 - **Resolution.** Content is rasterized at the resolution the `Three` node
-  renders at (on-screen scale times `quality`, capped at 4096 texels), so it
-  stays crisp under Camera zoom and 2x exports. `contentScale` overrides that
-  per mesh; lower it for large surfaces far from the camera. Changing the size
-  or scale re-creates the texture.
+  renders at (on-screen scale times `quality` times `zoom`, capped at 4096
+  texels), so it stays crisp under Camera zoom, viewport `zoom` and 2x exports.
+  That does not account for a mesh's own `scale` or a positive `z` bringing it
+  closer to the camera: set `contentScale` (e.g. `2`) on a surface magnified
+  that way, and lower it for large surfaces far from the camera. Changing the
+  texture size re-creates the texture. Minified content is filtered in sRGB
+  space like a 2D canvas, so text keeps its 2D weight and transparent edges stay
+  clean.
 - **Cost.** The texture is re-drawn and re-uploaded only when a signal the
-  content depends on changes. Camera moves, mesh transforms and opacity tweens
-  of the mesh or the `Three` node are free; a mesh `size` tween or a counter
-  ticking every frame costs one 2D render of the content plus one upload per
-  frame (roughly 5–10 ms for a phone screen under headless SwiftShader,
-  invisible on a GPU).
+  content depends on changes. Camera orbits, mesh transforms and opacity tweens
+  of the mesh or the `Three` node are free; a mesh `size` tween, a `zoom` tween
+  or a counter ticking every frame costs one 2D render of the content plus one
+  upload per frame (roughly 5–10 ms for a phone screen under headless
+  SwiftShader, invisible on a GPU).
 - **What works inside.** Anything that renders on the 2D canvas, including
   `Video`, `Img`, `Txt` with web fonts, layouts and cached nodes (opacity,
   filters, shadows). Shader-driven nodes are untested. `absolutePosition()` of a
@@ -282,13 +318,14 @@ function. Lengths are pixels, angles degrees, colours anything `Color` accepts.
 | `fogNear`, `fogFar` | `number \| null`                    | `null`    | Fog range from the camera; default `cameraDistance` and 3× it                |
 | `quality`           | `number`                            | `1`       | Supersampling; `2` renders at twice the on-screen resolution                 |
 | `scene`, `camera`   | `THREE.Scene`, `THREE.Camera`       | `null`    | Raw mode; orbit props are ignored when `camera` is set                       |
-| `onUpdate`          | `() => void`                        |           | Signal-tracked; mutate raw objects here                                      |
+| `onUpdate`          | `(scene, camera, three) => void`    |           | Signal-tracked; mutate raw objects here                                      |
 | `onRender`          | `(renderer, scene, camera) => void` |           | Replaces the default `renderer.render` call, for post-processing             |
 
 Methods: `projectPoint([x, y, z])`, `projectObject(object)`,
 `projectWorld(vector)` → `Vector2` in the node's space; `sceneObject()`,
-`cameraObject()`, `rootGroup()` → live Three.js objects (after load); `three()`
-→ the runtime or `null`.
+`cameraObject()`, `rootGroup()` → live Three.js objects (throw before the
+runtime has loaded; `yield stage()` first in generator code); `three()` → the
+runtime or `null`.
 
 ### Shared by `Mesh3D`, `Group3D`, `Light3D`, `Object3D`
 
@@ -304,32 +341,32 @@ The Node transform signals (`position`, `x`, `y`, `rotation`, `scale`,
 | `visible`   | `boolean`        | `true`  | Hides the object and its 3D children    |
 
 Methods: `screenPosition()` → `Vector2` in the `Three` node's space (zero until
-the runtime has loaded); `object3D()` → the live Three.js object; `opacity3D()`
-→ opacity accumulated through 3D ancestors.
+the runtime has loaded); `object3D()` → the live Three.js object (throws before
+the load); `opacity3D()` → opacity accumulated through 3D ancestors.
 
 ### `Mesh3D`
 
-| Prop                | Type                                                                                   | Default      | Notes                                                                 |
-| ------------------- | -------------------------------------------------------------------------------------- | ------------ | --------------------------------------------------------------------- |
-| `geometry`          | primitive name \| `THREE.BufferGeometry`                                               | `'box'`      | See the primitive list below                                          |
-| `size`              | `number \| [w, h] \| [w, h, d]`                                                        | `200`        | Missing dimensions repeat the width; diameter for round shapes        |
-| `radius`            | `number`                                                                               | `0`          | Rounded edges for `box`, clamped to half the smallest dimension       |
-| `origin`            | `'center' \| 'top' \| 'bottom' \| 'left' \| 'right' \| 'front' \| 'back' \| [x, y, z]` | `'center'`   | Pivot on the shape; tuple in `-1..1`                                  |
-| `segments`          | `number`                                                                               | `48`         | Tessellation of curved primitives                                     |
-| `material`          | material name \| `THREE.Material`                                                      | `'standard'` | `standard`, `physical`, `phong`, `lambert`, `toon`, `basic`, `normal` |
-| `color`             | color                                                                                  | `'#ffffff'`  | Alpha multiplies `opacity`                                            |
-| `emissive`          | color                                                                                  | `'#000000'`  | Self-illumination                                                     |
-| `emissiveIntensity` | `number`                                                                               | `1`          |                                                                       |
-| `metalness`         | `number`                                                                               | `0.1`        | `standard` / `physical` only                                          |
-| `roughness`         | `number`                                                                               | `0.55`       | `standard` / `physical` only                                          |
-| `wireframe`         | `boolean`                                                                              | `false`      |                                                                       |
-| `flatShading`       | `boolean`                                                                              | `false`      |                                                                       |
-| `side`              | `'front' \| 'back' \| 'double'`                                                        | `'front'`    | `double` for planes seen from behind                                  |
-| `map`               | `string \| null`                                                                       | `null`       | Image URL wrapped around the surface; ignored while hosting content   |
-| `contentMaterial`   | material name \| `null`                                                                | `null`       | Shading of the surface content; `null` follows `material`             |
-| `contentScale`      | `number \| null`                                                                       | `null`       | Texels per pixel for the content; `null` follows the viewport         |
-| `castShadow`        | `boolean`                                                                              | `true`       |                                                                       |
-| `receiveShadow`     | `boolean`                                                                              | `true`       |                                                                       |
+| Prop                | Type                                                                                   | Default      | Notes                                                                    |
+| ------------------- | -------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------ |
+| `geometry`          | primitive name \| `THREE.BufferGeometry`                                               | `'box'`      | See the primitive list below                                             |
+| `size`              | `number \| [w, h] \| [w, h, d]`                                                        | `200`        | Missing dimensions repeat the width; diameter for round shapes           |
+| `radius`            | `number`                                                                               | `0`          | Rounded edges for `box`, clamped to half the smallest dimension          |
+| `origin`            | `'center' \| 'top' \| 'bottom' \| 'left' \| 'right' \| 'front' \| 'back' \| [x, y, z]` | `'center'`   | Pivot on the shape; tuple in `-1..1`                                     |
+| `segments`          | `number`                                                                               | `48`         | Tessellation of curved primitives                                        |
+| `material`          | material name \| `THREE.Material`                                                      | `'standard'` | `standard`, `physical`, `phong`, `lambert`, `toon`, `basic`, `normal`    |
+| `color`             | color                                                                                  | `'#ffffff'`  | Alpha multiplies `opacity`                                               |
+| `emissive`          | color                                                                                  | `'#000000'`  | Self-illumination                                                        |
+| `emissiveIntensity` | `number`                                                                               | `1`          |                                                                          |
+| `metalness`         | `number`                                                                               | `0.1`        | `standard` / `physical` only                                             |
+| `roughness`         | `number`                                                                               | `0.55`       | `standard` / `physical` only                                             |
+| `wireframe`         | `boolean`                                                                              | `false`      |                                                                          |
+| `flatShading`       | `boolean`                                                                              | `false`      |                                                                          |
+| `side`              | `'front' \| 'back' \| 'double'`                                                        | `'front'`    | `double` for planes seen from behind                                     |
+| `map`               | `string \| null`                                                                       | `null`       | Image URL wrapped around the surface; a failed load is logged, not fatal |
+| `contentMaterial`   | material name \| `null`                                                                | `null`       | Shading of the surface content; `null` follows `material`                |
+| `contentScale`      | `number \| null`                                                                       | `null`       | Texels per pixel for the content; `null` follows the viewport and `zoom` |
+| `castShadow`        | `boolean`                                                                              | `true`       |                                                                          |
+| `receiveShadow`     | `boolean`                                                                              | `true`       |                                                                          |
 
 Methods: `mesh()` → the inner `THREE.Mesh` (geometry, material); `surfaceSize()`
 → the content area in pixels; `hasSurface()`.
@@ -364,7 +401,9 @@ Primitives: `box` (with `radius`), `sphere`, `plane`, `circle`, `cylinder`,
 | `update` | `(object, three) => void`   |         | Signal-tracked; runs before the node applies its opacity |
 
 `raw()` returns the wrapped object. The node's `opacity` multiplies each
-material's own opacity; edits made in `update` are respected.
+material's own opacity; edits made in `update` are respected. A clone reuses
+`create` and `update` and builds its own object; a shared `object` moves to
+whichever node synced last.
 
 ### `Group3D`
 
@@ -372,11 +411,16 @@ Transform only. Use it to rotate or move a set of nodes together.
 
 ## Limitations
 
-- A rounded `box` (`radius > 0`) rebuilds its geometry whenever `size` or
-  `radius` changes, because the corners must stay spherical. A tween costs a few
-  thousand vertices per frame; fine for one bar, noticeable for hundreds.
-- Content on non-box primitives replaces the body material, and `map` is ignored
-  on any mesh with content.
+- Shapes whose proportions are part of the geometry rebuild it when a `size`
+  tween changes their aspect: a rounded `box` (also on `radius`), `torus`,
+  `torusKnot`, `capsule` and `ring`. Uniform scaling and every other primitive
+  are free. A rebuild is a few thousand vertices per frame (a `torusKnot` more);
+  fine for one bar, noticeable for hundreds.
+- Content on non-box primitives replaces the body material and `map`; on a box
+  only the front face is replaced.
+- Escape hatches throw until the runtime has loaded; `yield stage()` first in
+  generator code (see Recipes).
+- 2D children of `Group3D`, `Light3D` and `Object3D` are not rendered.
 - Transparent parts of surface content still cast full shadows.
 - `absolutePosition()` and the editor overlay of content children are in texel
   space.
