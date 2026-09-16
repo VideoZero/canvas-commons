@@ -134,9 +134,12 @@ export default makeScene2D(function* (view) {
 
 In raw mode every mutation must happen inside `onUpdate` (it is signal-tracked)
 and derive from signals, never from clocks or cached state, or seeking breaks.
-`zoom` still applies; the other camera props are ignored and the node warns. If
-the scene imports `three` itself, `configureThree({module: THREE})` makes the
-nodes reuse that instance instead of importing a second copy.
+An error thrown in `onUpdate` is logged and the scene renders without that
+update. Several `Three` nodes may render the same raw scene; each shows only its
+own 3D children. `zoom` still applies; the other camera props are ignored and
+the node warns. If the scene imports `three` itself,
+`configureThree({module: THREE})` makes the nodes reuse that instance instead of
+importing a second copy.
 
 ## Conventions
 
@@ -165,6 +168,12 @@ nodes reuse that instance instead of importing a second copy.
   rig casts none.
 - **2D children belong to `Three` or `Mesh3D`.** Under `Group3D`, `Light3D` or
   `Object3D` they are dropped with a warning.
+- **Colours keep their alpha.** On a `Mesh3D` `color` alpha multiplies
+  `opacity`; `emissive` alpha scales the glow; a light's `color` alpha scales
+  its `intensity`; `background` alpha is a translucent backdrop and `fog` alpha
+  thins the fog. Tweening from a transparent colour fades each in.
+- **3D nodes need a `Three`.** One placed anywhere else renders nothing and logs
+  a warning.
 - **Deterministic.** Everything is a pure function of signals; no clocks.
 - **Cloning.** `clone()` keeps `onUpdate`, `onRender`, `create` and `update`. A
   raw `scene`, `camera` or `object` is copied by reference, and a Three.js
@@ -180,7 +189,8 @@ nodes reuse that instance instead of importing a second copy.
   inside it for the screen (see below).
 - **Fog and backdrop.** `fog="#1e1b4b" fogNear={1200} fogFar={3000}` (pixels
   from the camera; defaults are the camera distance and three times it) with
-  `background="#1e1b4b"` or the same `fill`.
+  `background="#1e1b4b"` or the same `fill`. Tween `fog` from `"#1e1b4b00"` to
+  fade the fog in.
 - **Fade a shot.** Tween the `Three` node's `opacity`: it fades the finished
   image. Per-object `opacity` makes materials transparent, which is right for
   thin or convex shapes but shows the far side of a knot or a model through its
@@ -313,12 +323,12 @@ function. Lengths are pixels, angles degrees, colours anything `Color` accepts.
 | `orthographic`      | `boolean`                           | `false`   | No perspective; pixels are exact at every depth                              |
 | `shadows`           | `boolean`                           | `false`   | Enables shadow maps; needs `castShadow` on a light                           |
 | `defaultLights`     | `boolean`                           | `true`    | Neutral rig when the scene has no `Light3D`                                  |
-| `background`        | `color \| null`                     | `null`    | Opaque backdrop inside the node (otherwise `fill` shows through)             |
-| `fog`               | `color \| null`                     | `null`    | Fog colour; enables fog                                                      |
+| `background`        | `color \| null`                     | `null`    | Backdrop of the 3D image; alpha lets `fill` show through                     |
+| `fog`               | `color \| null`                     | `null`    | Fog colour; enables fog. Alpha thins it (≈ `alpha` strength at `fogFar`)     |
 | `fogNear`, `fogFar` | `number \| null`                    | `null`    | Fog range from the camera; default `cameraDistance` and 3× it                |
 | `quality`           | `number`                            | `1`       | Supersampling; `2` renders at twice the on-screen resolution                 |
 | `scene`, `camera`   | `THREE.Scene`, `THREE.Camera`       | `null`    | Raw mode; orbit props are ignored when `camera` is set                       |
-| `onUpdate`          | `(scene, camera, three) => void`    |           | Signal-tracked; mutate raw objects here                                      |
+| `onUpdate`          | `(scene, camera, three) => void`    |           | Signal-tracked; mutate raw objects here. Errors are logged, not rethrown     |
 | `onRender`          | `(renderer, scene, camera) => void` |           | Replaces the default `renderer.render` call, for post-processing             |
 
 Methods: `projectPoint([x, y, z])`, `projectObject(object)`,
@@ -355,7 +365,7 @@ the load); `opacity3D()` → opacity accumulated through 3D ancestors.
 | `segments`          | `number`                                                                               | `48`         | Tessellation of curved primitives                                        |
 | `material`          | material name \| `THREE.Material`                                                      | `'standard'` | `standard`, `physical`, `phong`, `lambert`, `toon`, `basic`, `normal`    |
 | `color`             | color                                                                                  | `'#ffffff'`  | Alpha multiplies `opacity`                                               |
-| `emissive`          | color                                                                                  | `'#000000'`  | Self-illumination                                                        |
+| `emissive`          | color                                                                                  | `'#000000'`  | Self-illumination; alpha multiplies `emissiveIntensity`                  |
 | `emissiveIntensity` | `number`                                                                               | `1`          |                                                                          |
 | `metalness`         | `number`                                                                               | `0.1`        | `standard` / `physical` only                                             |
 | `roughness`         | `number`                                                                               | `0.55`       | `standard` / `physical` only                                             |
@@ -382,9 +392,9 @@ Primitives: `box` (with `radius`), `sphere`, `plane`, `circle`, `cylinder`,
 | Prop          | Type                                                              | Default         | Notes                                                   |
 | ------------- | ----------------------------------------------------------------- | --------------- | ------------------------------------------------------- |
 | `kind`        | `'ambient' \| 'hemisphere' \| 'directional' \| 'point' \| 'spot'` | `'directional'` |                                                         |
-| `color`       | color                                                             | `'#ffffff'`     |                                                         |
+| `color`       | color                                                             | `'#ffffff'`     | Alpha multiplies `intensity`                            |
 | `intensity`   | `number`                                                          | `1`             | Sunlight-strength directionals sit around 2–3           |
-| `groundColor` | color                                                             | `'#444444'`     | `hemisphere` only                                       |
+| `groundColor` | color                                                             | `'#444444'`     | `hemisphere` only; alpha dims the ground light          |
 | `target`      | `[x, y, z]`                                                       | `[0,0,0]`       | `directional` / `spot`; in the same space as `position` |
 | `angle`       | `number`                                                          | `30`            | `spot` cone half-angle                                  |
 | `penumbra`    | `number`                                                          | `0.3`           | `spot` edge softness, 0–1                               |
@@ -403,7 +413,9 @@ Primitives: `box` (with `radius`), `sphere`, `plane`, `circle`, `cylinder`,
 `raw()` returns the wrapped object. The node's `opacity` multiplies each
 material's own opacity; edits made in `update` are respected. A clone reuses
 `create` and `update` and builds its own object; a shared `object` moves to
-whichever node synced last.
+whichever node synced last. An object built by `create` has its geometries and
+materials disposed with the node; a supplied `object` is left alone, and its
+materials get their own opacity back when the scene replays.
 
 ### `Group3D`
 
