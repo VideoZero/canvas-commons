@@ -656,8 +656,17 @@ export class Node implements Promisable<Node> {
     return new DOMMatrix();
   }
 
+  /**
+   * The view this node is rendered into.
+   *
+   * @remarks
+   * Resolved through the parent chain, so a node that draws its children
+   * somewhere other than the scene canvas (an off-screen surface) can present
+   * a view of its own by overriding this method.
+   */
+  @computed()
   public view(): View2D {
-    return this.view2D;
+    return this.parent()?.view() ?? this.view2D;
   }
 
   /**
