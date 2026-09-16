@@ -7,6 +7,7 @@ import {
 } from '@motion-canvas/core';
 import type * as THREE from 'three';
 import {Object3DNode, Object3DNodeProps} from './Object3DNode';
+import {applyColor} from './color';
 import {ThreeModule} from './loader';
 import {PIXELS_PER_UNIT, PossibleVector3, toRadians} from './units';
 
@@ -99,7 +100,7 @@ export class Light3D extends Object3DNode {
   public declare readonly kind: SimpleSignal<Light3DKind, this>;
 
   /**
-   * Light colour.
+   * Light colour. Alpha multiplies {@link intensity}.
    */
   @initial('#ffffff')
   @colorSignal()
@@ -114,7 +115,8 @@ export class Light3D extends Object3DNode {
   public declare readonly intensity: SimpleSignal<number, this>;
 
   /**
-   * `hemisphere` only: the colour bounced up from below.
+   * `hemisphere` only: the colour bounced up from below. Alpha scales how
+   * much of it reaches the objects (`transparent` means no ground light).
    */
   @initial('#444444')
   @colorSignal()
@@ -193,11 +195,14 @@ export class Light3D extends Object3DNode {
     }
 
     const light = this.light;
-    light.color.set(this.color().hex());
-    light.intensity = this.intensity() * this.opacity3D();
+    const alpha = applyColor(three, light.color, this.color());
+    light.intensity = this.intensity() * alpha * this.opacity3D();
 
     if (light instanceof three.HemisphereLight) {
-      light.groundColor.set(this.groundColor().hex());
+      // One intensity drives both colours, so the ground alpha darkens the
+      // ground colour instead.
+      const ground = applyColor(three, light.groundColor, this.groundColor());
+      light.groundColor.multiplyScalar(ground);
     }
 
     if (

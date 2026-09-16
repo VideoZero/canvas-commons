@@ -124,6 +124,7 @@ export abstract class Object3DNode extends Node {
 
   private instance: THREE.Object3D | null = null;
   private warnedContent = false;
+  private warnedRoot = false;
 
   /**
    * Create the Three.js object this node controls. Called once, lazily, after
@@ -264,7 +265,20 @@ export abstract class Object3DNode extends Node {
    * 2D children they use as surface content).
    */
   public override render() {
-    // Intentionally empty.
+    // Nothing to draw. Reaching this outside a Three node means the node
+    // will never show, which is otherwise silent.
+    if (this.warnedRoot || isObject3DRoot(this.parent())) {
+      return;
+    }
+    if (!this.findAncestor(isObject3DRoot)) {
+      this.warnedRoot = true;
+      useLogger().warn({
+        message: `${this.constructor.name} is not inside a Three node and is not rendered.`,
+        remarks:
+          'Wrap 3D nodes in <Three width={...} height={...}>, which renders them.',
+        inspect: this.key,
+      });
+    }
   }
 
   /**

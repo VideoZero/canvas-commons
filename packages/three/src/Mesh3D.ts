@@ -1,4 +1,5 @@
 import {
+  Layout,
   Node,
   View2D,
   colorSignal,
@@ -23,6 +24,7 @@ import {
 } from '@motion-canvas/core';
 import type * as THREE from 'three';
 import {Object3DNode, Object3DNodeProps, isObject3DRoot} from './Object3DNode';
+import {applyColor} from './color';
 import {ThreeModule, getThree} from './loader';
 import {getSharedRenderer} from './renderer';
 
@@ -318,7 +320,8 @@ export class Mesh3D extends Object3DNode {
   public declare readonly color: ColorSignal<this>;
 
   /**
-   * Self-illumination colour (glows regardless of lights).
+   * Self-illumination colour (glows regardless of lights). Alpha multiplies
+   * {@link emissiveIntensity}, so a tween from transparent fades the glow in.
    */
   @initial('#000000')
   @colorSignal()
@@ -445,10 +448,19 @@ export class Mesh3D extends Object3DNode {
   }
 
   /**
-   * Lets `yield mesh()` and the renderer wait for {@link map}.
+   * Lets `yield mesh()` (and `yield stage()` on the {@link Three} node) wait
+   * for {@link map} and for web fonts used by the surface content, which is
+   * laid out in the surface's own view rather than the scene's.
    */
   protected override collectAsyncResources() {
     this.texture();
+    for (const child of this.surfaceChildren()) {
+      if (child instanceof Layout) {
+        // Reading the size lays the content out, which registers a pending
+        // font with the surface view.
+        child.width();
+      }
+    }
     super.collectAsyncResources();
   }
 
@@ -619,11 +631,11 @@ export class Mesh3D extends Object3DNode {
     const color = this.color();
     const opacity = this.opacity3D() * color.alpha();
     if ('color' in mat) {
-      mat.color.set(color.hex());
+      applyColor(three, mat.color, color);
     }
     if ('emissive' in mat) {
-      mat.emissive.set(this.emissive().hex());
-      mat.emissiveIntensity = this.emissiveIntensity();
+      const glow = applyColor(three, mat.emissive, this.emissive());
+      mat.emissiveIntensity = this.emissiveIntensity() * glow;
     }
     if ('metalness' in mat) {
       mat.metalness = this.metalness();

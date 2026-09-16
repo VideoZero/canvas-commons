@@ -20,6 +20,7 @@ import {
 import type * as THREE from 'three';
 import {Light3D} from './Light3D';
 import {Object3DRoot, syncObjectChildren} from './Object3DNode';
+import {applyColor} from './color';
 import {ThreeModule, getThree, isThreeLoaded, loadThree} from './loader';
 import {getSharedRenderer} from './renderer';
 import {PIXELS_PER_UNIT, PossibleVector3, toRadians} from './units';
@@ -208,13 +209,15 @@ export class Three extends Rect implements Object3DRoot {
   public declare readonly camera: SimpleSignal<THREE.Camera | null, this>;
 
   /**
-   * Opaque background colour of the 3D image, or `null` (default) for a
-   * transparent image over the node's `fill`.
+   * Background colour of the 3D image, or `null` (default) for a transparent
+   * image over the node's `fill`.
    *
    * @remarks
-   * `fill` already gives you a backdrop with `radius` and alpha; set
-   * `background` when the scene itself should be opaque, e.g. so
-   * {@link fog} has something to fade into at the far plane.
+   * Alpha is kept: a translucent background tints the image and lets the
+   * `fill` (and anything behind the node) show through. With a raw
+   * {@link scene} it replaces the scene's own `background`. `fill` gives you
+   * the same backdrop with `radius`; set `background` when the 3D image
+   * itself should carry it, e.g. so {@link fog} matches what is behind.
    */
   @initial(null)
   @parser(nullableColor)
@@ -226,6 +229,11 @@ export class Three extends Rect implements Object3DRoot {
    * Fog colour, or `null` (default) for no fog. Objects fade into this colour
    * between {@link fogNear} and {@link fogFar}. Use the same colour as
    * {@link background} (or `fill`) so distant objects dissolve into it.
+   *
+   * @remarks
+   * Alpha thins the fog (Three.js fog has no strength of its own, so the fade
+   * is stretched): at `fogFar` it is about `alpha` strong, and a tween from a
+   * transparent colour fades the fog in.
    */
   @initial(null)
   @parser(nullableColor)
@@ -335,7 +343,9 @@ export class Three extends Rect implements Object3DRoot {
 
   private ownScene: THREE.Scene | null = null;
   private ownFog: THREE.Fog | null = null;
+  private fogScene: THREE.Scene | null = null;
   private ownBackground: THREE.Color | null = null;
+  private lastRenderError: string | null = null;
   /**
    * Texels per pixel of the last render (on-screen scale times
    * {@link quality}). Updated by {@link draw}; surface content inside
@@ -395,6 +405,7 @@ export class Three extends Rect implements Object3DRoot {
     if (!this.root) {
       this.root = new three.Group();
       this.root.name = 'motion-canvas-root';
+      this.root.userData.motionCanvasRoot = true;
       this.root.scale.setScalar(1 / PIXELS_PER_UNIT);
     }
     const scene = this.scene() ?? (this.ownScene ??= new three.Scene());
@@ -406,7 +417,20 @@ export class Three extends Rect implements Object3DRoot {
     this.syncDefaultLights(three, scene, this.root);
     this.syncEnvironment(three, scene);
     const camera = this.syncCamera();
-    this.onUpdate?.(scene, camera, three);
+    if (this.onUpdate) {
+      try {
+        this.onUpdate(scene, camera, three);
+      } catch (e) {
+        // Rethrowing would leave this computed without a scene on its first
+        // run and take the whole render down with it; the scene is still
+        // valid, only the user's changes are missing.
+        useLogger().error({
+          message: `onUpdate threw: ${errorMessage(e)}`,
+          stack: e instanceof Error ? e.stack : undefined,
+          inspect: this.key,
+        });
+      }
+    }
     scene.updateMatrixWorld(true);
     // A camera moved inside onUpdate must project correctly right away.
     camera.updateMatrixWorld(true);
@@ -414,27 +438,36 @@ export class Three extends Rect implements Object3DRoot {
   }
 
   private syncEnvironment(three: ThreeModule, scene: THREE.Scene) {
-    const background = this.background();
-    if (background) {
-      this.ownBackground ??= new three.Color();
-      this.ownBackground.set(new Color(background).hex());
-      scene.background = this.ownBackground;
-    } else if (scene.background === this.ownBackground) {
-      scene.background = null;
+    // `background` is not stored on the scene: it is the renderer's clear
+    // colour (see draw()), which is the only way to keep its alpha.
+    if (this.fogScene && this.fogScene !== scene) {
+      // The raw scene was swapped; do not leave our fog on the old one.
+      if (this.fogScene.fog === this.ownFog) {
+        this.fogScene.fog = null;
+      }
+      this.fogScene = null;
     }
 
     const fog = this.fog();
-    if (fog) {
+    const color = fog ? new Color(fog) : null;
+    const strength = color ? color.alpha() : 0;
+    if (color && strength > 0) {
       const distance = Math.max(1, this.cameraDistance());
       const near = (this.fogNear() ?? distance) / PIXELS_PER_UNIT;
       const far = (this.fogFar() ?? distance * 3) / PIXELS_PER_UNIT;
+      // Three.js fog has no strength, so alpha stretches the fade instead:
+      // at `fogFar` the fog is roughly `alpha` strong, and a tween from
+      // transparent fades it in smoothly.
+      const span = Math.max(1e-3, far - near) / strength;
       this.ownFog ??= new three.Fog(0x000000, near, far);
-      this.ownFog.color.set(new Color(fog).hex());
+      applyColor(three, this.ownFog.color, color);
       this.ownFog.near = near;
-      this.ownFog.far = Math.max(near + 1e-3, far);
+      this.ownFog.far = near + span;
       scene.fog = this.ownFog;
+      this.fogScene = scene;
     } else if (scene.fog === this.ownFog) {
       scene.fog = null;
+      this.fogScene = null;
     }
   }
 
@@ -626,7 +659,7 @@ export class Three extends Rect implements Object3DRoot {
     const wanted =
       this.defaultLights() &&
       this.findAll(node => node instanceof Light3D).length === 0 &&
-      !hasLight(scene, this.rig);
+      !hasLight(scene);
     if (wanted && !this.rig) {
       const rig = new three.Group();
       rig.name = 'default-lights';
@@ -715,47 +748,11 @@ export class Three extends Rect implements Object3DRoot {
 
       const scene = this.syncScene();
       const camera = this.syncCamera();
-
-      const renderer = getSharedRenderer(three);
-      const canvas = renderer.domElement;
-      if (canvas.width !== w || canvas.height !== h) {
-        renderer.setSize(w, h, false);
+      // A sync that threw has already been logged; it yields no scene on its
+      // first run, and rendering nothing beats crashing the whole frame.
+      if (scene && camera) {
+        this.renderImage(context, three, scene, camera, w, h, size);
       }
-      const shadows = this.shadows();
-      renderer.shadowMap.enabled = shadows;
-      if (this.lastShadows !== null && this.lastShadows !== shadows) {
-        // Three bakes the shadow-map flag into each compiled program and only
-        // recompiles on a material or lights change, so flipping it alone
-        // would leave every material on its old program.
-        recompileMaterials(scene);
-      }
-      this.lastShadows = shadows;
-      renderer.setViewport(0, 0, w, h);
-      renderer.setClearColor(0x000000, 0);
-      renderer.clear();
-      if (this.onRender) {
-        this.onRender(renderer, scene, camera);
-      } else {
-        renderer.render(scene, camera);
-      }
-
-      context.save();
-      // Keep the image inside the rounded outline (matters once
-      // `background` makes it opaque).
-      context.clip(path);
-      context.imageSmoothingEnabled = true;
-      context.drawImage(
-        canvas,
-        0,
-        0,
-        w,
-        h,
-        -size.width / 2,
-        -size.height / 2,
-        size.width,
-        size.height,
-      );
-      context.restore();
     }
 
     if (strokeLast) {
@@ -771,9 +768,120 @@ export class Three extends Rect implements Object3DRoot {
     this.drawChildren(context);
   }
 
+  private renderImage(
+    context: CanvasRenderingContext2D,
+    three: ThreeModule,
+    scene: THREE.Scene,
+    camera: THREE.Camera,
+    w: number,
+    h: number,
+    size: {width: number; height: number},
+  ) {
+    const path = this.getPath();
+    const renderer = getSharedRenderer(three);
+    const canvas = renderer.domElement;
+    if (canvas.width !== w || canvas.height !== h) {
+      renderer.setSize(w, h, false);
+    }
+    const shadows = this.shadows();
+    renderer.shadowMap.enabled = shadows;
+    if (this.lastShadows !== null && this.lastShadows !== shadows) {
+      // Three bakes the shadow-map flag into each compiled program and only
+      // recompiles on a material or lights change, so flipping it alone
+      // would leave every material on its old program.
+      recompileMaterials(scene);
+    }
+    this.lastShadows = shadows;
+    renderer.setViewport(0, 0, w, h);
+    const background = this.background();
+    if (background) {
+      this.ownBackground ??= new three.Color();
+      const alpha = applyColor(
+        three,
+        this.ownBackground,
+        new Color(background),
+      );
+      renderer.setClearColor(this.ownBackground, alpha);
+    } else {
+      renderer.setClearColor(0x000000, 0);
+    }
+    renderer.clear();
+
+    // `background` replaces a raw scene's own background for this node.
+    const sceneBackground = scene.background;
+    if (background) {
+      scene.background = null;
+    }
+    // Another Three node rendering the same raw scene keeps its 3D
+    // children in its own root group; hide those while this node renders.
+    const hidden: THREE.Object3D[] = [];
+    for (const child of scene.children) {
+      if (
+        child !== this.root &&
+        child.userData.motionCanvasRoot &&
+        child.visible
+      ) {
+        child.visible = false;
+        hidden.push(child);
+      }
+    }
+    try {
+      if (this.onRender) {
+        this.onRender(renderer, scene, camera);
+      } else {
+        renderer.render(scene, camera);
+      }
+      this.lastRenderError = null;
+    } catch (e) {
+      // Logged once per distinct error: draw() runs every frame.
+      const message = errorMessage(e);
+      if (message !== this.lastRenderError) {
+        this.lastRenderError = message;
+        useLogger().error({
+          message: `${this.onRender ? 'onRender' : 'Rendering'} threw: ${message}`,
+          stack: e instanceof Error ? e.stack : undefined,
+          inspect: this.key,
+        });
+      }
+    } finally {
+      scene.background = sceneBackground;
+      for (const child of hidden) {
+        child.visible = true;
+      }
+    }
+
+    context.save();
+    // Keep the image inside the rounded outline (matters once
+    // `background` makes it opaque).
+    context.clip(path);
+    context.imageSmoothingEnabled = true;
+    context.drawImage(
+      canvas,
+      0,
+      0,
+      w,
+      h,
+      -size.width / 2,
+      -size.height / 2,
+      size.width,
+      size.height,
+    );
+    context.restore();
+  }
+
   public override dispose() {
     this.root?.removeFromParent();
+    // Directional lights own shadow-map render targets.
+    this.rig?.traverse(object => {
+      if ((object as THREE.Light).isLight) {
+        (object as THREE.Light).dispose();
+      }
+    });
     this.rig = null;
+    if (this.fogScene?.fog === this.ownFog) {
+      this.fogScene!.fog = null;
+    }
+    this.fogScene = null;
     this.ownScene = null;
     this.ownFog = null;
     this.ownBackground = null;
@@ -812,15 +920,21 @@ function recompileMaterials(scene: THREE.Scene) {
   });
 }
 
-function hasLight(
-  object: THREE.Object3D,
-  ignore: THREE.Object3D | null,
-): boolean {
-  if (object === ignore) {
+/**
+ * Whether the user put a light into the scene. The root groups of Three
+ * nodes are skipped: their lights are Light3D nodes (counted separately) or
+ * a default rig, and another node sharing a raw scene must not count.
+ */
+function hasLight(object: THREE.Object3D): boolean {
+  if (object.userData.motionCanvasRoot) {
     return false;
   }
   if ((object as THREE.Light).isLight) {
     return true;
   }
-  return object.children.some(child => hasLight(child, ignore));
+  return object.children.some(hasLight);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

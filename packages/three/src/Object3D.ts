@@ -5,6 +5,26 @@ import {setTransparent} from './Mesh3D';
 import {Object3DNode, Object3DNodeProps} from './Object3DNode';
 import {ThreeModule} from './loader';
 
+interface MaterialState {
+  baseOpacity: number;
+  appliedOpacity: number;
+  baseTransparent: boolean;
+  appliedTransparent: boolean;
+}
+
+/**
+ * Per material: the opacity / transparency the user gave it (`base`) and
+ * what an Object3D node last wrote (`applied`). A value that no longer
+ * matches `applied` was changed by the user (in `update` or outside) and
+ * becomes the new base, so the node's opacity multiplies user edits instead
+ * of clobbering them.
+ *
+ * Kept per material rather than per node: a prebuilt `object` outlives the
+ * node (scenes are rebuilt on every seek back and replay), and the next node
+ * must recognise the faded value as its own doing, not as the user's base.
+ */
+const MATERIAL_STATE = new WeakMap<THREE.Material, MaterialState>();
+
 export interface Object3DFactory {
   (three: ThreeModule): THREE.Object3D;
 }
@@ -54,7 +74,8 @@ export interface Object3DProps extends Object3DNodeProps {
  * to `transparent`); at `0` the object is hidden.
  *
  * `create` and `update` survive {@link clone}, and the clone builds its own
- * object. A supplied {@link object} is copied by reference instead: a
+ * object. An object built by `create` is disposed (geometries and materials)
+ * with the node; a supplied `object` is not. A supplied {@link object} is copied by reference instead: a
  * Three.js object has one parent, so the node synced last takes it from the
  * other. Give each clone its own `object` (e.g. `object.clone()`).
  *
@@ -89,23 +110,6 @@ export class Object3D extends Object3DNode {
 
   private created: THREE.Object3D | null = null;
   private attached: THREE.Object3D | null = null;
-  /**
-   * Per material: the opacity / transparency the user gave it (`base`) and
-   * what this node last wrote (`applied`). A value that no longer matches
-   * `applied` was changed by the user (in `update` or outside) and becomes
-   * the new base, so the node's opacity multiplies user edits instead of
-   * clobbering them.
-   */
-  private readonly materialState = new WeakMap<
-    THREE.Material,
-    {
-      baseOpacity: number;
-      appliedOpacity: number;
-      baseTransparent: boolean;
-      appliedTransparent: boolean;
-    }
-  >();
-
   public constructor(props?: Object3DProps) {
     const {create, update, ...rest} = props ?? {};
     super(rest);
@@ -164,7 +168,7 @@ export class Object3D extends Object3DNode {
         return;
       }
       for (const mat of Array.isArray(material) ? material : [material]) {
-        let state = this.materialState.get(mat);
+        let state = MATERIAL_STATE.get(mat);
         if (!state) {
           if (opacity >= 1) {
             continue;
@@ -175,7 +179,7 @@ export class Object3D extends Object3DNode {
             baseTransparent: mat.transparent,
             appliedTransparent: mat.transparent,
           };
-          this.materialState.set(mat, state);
+          MATERIAL_STATE.set(mat, state);
         }
         if (mat.opacity !== state.appliedOpacity) {
           state.baseOpacity = mat.opacity;
@@ -197,6 +201,18 @@ export class Object3D extends Object3DNode {
       this.attached.removeFromParent();
       this.attached = null;
     }
+    // The node built this object, so it owns its GPU resources; a supplied
+    // `object` belongs to the caller and is left alone.
+    this.created?.traverse(child => {
+      const mesh = child as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const material = mesh.material;
+      if (material) {
+        for (const mat of Array.isArray(material) ? material : [material]) {
+          mat.dispose();
+        }
+      }
+    });
     this.created = null;
     super.dispose();
   }
