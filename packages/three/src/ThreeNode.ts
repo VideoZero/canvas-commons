@@ -25,7 +25,11 @@ import {getSharedRenderer} from './renderer';
 import {PIXELS_PER_UNIT, PossibleVector3, toRadians} from './units';
 
 export interface ThreeRenderCallback {
-  (renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera): void;
+  (
+    renderer: THREE.WebGLRenderer,
+    scene: THREE.Scene,
+    camera: THREE.Camera,
+  ): void;
 }
 
 export interface ThreeUpdateCallback {
@@ -212,10 +216,7 @@ export class Three extends Rect implements Object3DRoot {
   @parser(nullableColor)
   @interpolation(Color.lerp)
   @signal()
-  public declare readonly background: SimpleSignal<
-    PossibleColor | null,
-    this
-  >;
+  public declare readonly background: SimpleSignal<PossibleColor | null, this>;
 
   /**
    * Fog colour, or `null` (default) for no fog. Objects fade into this colour
@@ -331,6 +332,17 @@ export class Three extends Rect implements Object3DRoot {
   private ownScene: THREE.Scene | null = null;
   private ownFog: THREE.Fog | null = null;
   private ownBackground: THREE.Color | null = null;
+  /**
+   * Texels per pixel of the last render (on-screen scale times
+   * {@link quality}). Updated by {@link draw}; surface content inside
+   * {@link Mesh3D} rasterizes at this scale.
+   *
+   * @internal
+   */
+  @initial(1)
+  @signal()
+  public declare readonly renderScale: SimpleSignal<number, this>;
+
   private warnedCamera = false;
   private lastShadows: boolean | null = null;
   private root: THREE.Group | null = null;
@@ -487,8 +499,7 @@ export class Three extends Rect implements Object3DRoot {
     } else {
       const cam = (this.perspective ??= new three.PerspectiveCamera());
       const fov = this.fov();
-      cam.fov =
-        fov ?? (2 * Math.atan(height / 2 / distance) * 180) / Math.PI;
+      cam.fov = fov ?? (2 * Math.atan(height / 2 / distance) * 180) / Math.PI;
       cam.aspect = width / height;
       cam.near = near;
       cam.far = far;
@@ -619,9 +630,6 @@ export class Three extends Rect implements Object3DRoot {
     const three = this.three();
     const size = this.computedSize();
     if (three && size.width > 0 && size.height > 0) {
-      const scene = this.sceneObject();
-      const camera = this.cameraObject();
-
       // Render at the on-screen resolution (accounts for Camera zoom and
       // cached rasterization) times the requested supersampling.
       const m = context.getTransform();
@@ -630,6 +638,12 @@ export class Three extends Rect implements Object3DRoot {
       const q = Math.max(0.05, this.quality() * onScreen);
       const w = Math.min(4096, Math.max(1, Math.round(size.width * q)));
       const h = Math.min(4096, Math.max(1, Math.round(size.height * q)));
+      // Published before the sync so surfaces rasterize at the same scale.
+      // The setter is a no-op when unchanged, so steady frames stay cached.
+      this.renderScale(q);
+
+      const scene = this.sceneObject();
+      const camera = this.cameraObject();
 
       const renderer = getSharedRenderer(three);
       const canvas = renderer.domElement;
@@ -696,7 +710,9 @@ function nullableColor(value: PossibleColor | null): Color | null {
   return value === null || value === undefined ? null : new Color(value);
 }
 
-function isPerspective(camera: THREE.Camera): camera is THREE.PerspectiveCamera {
+function isPerspective(
+  camera: THREE.Camera,
+): camera is THREE.PerspectiveCamera {
   return (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true;
 }
 
@@ -718,7 +734,10 @@ function recompileMaterials(scene: THREE.Scene) {
   });
 }
 
-function hasLight(object: THREE.Object3D, ignore: THREE.Object3D | null): boolean {
+function hasLight(
+  object: THREE.Object3D,
+  ignore: THREE.Object3D | null,
+): boolean {
   if (object === ignore) {
     return false;
   }

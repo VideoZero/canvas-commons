@@ -92,7 +92,8 @@ the nodes reuse that instance instead of importing a second copy.
   `<Mesh3D geometry="box" origin="bottom" y={floorY} size={() => [80, h(), 80]} />`
   then tween `h`. Label the top with
   `stage.projectPoint([x, floorY - h(), 0])`.
-- **Rounded slab / phone / card.** `<Mesh3D geometry="box" radius={24} size={[300, 600, 24]} />`.
+- **Rounded slab / phone / card.** `<Mesh3D geometry="box" radius={24} size={[300, 600, 24]} />`;
+  put 2D nodes inside it for the screen (see below).
 - **Fog and backdrop.** `fog="#1e1b4b" fogNear={1200} fogFar={3000}` (pixels
   from the camera; defaults are the camera distance and three times it) with
   `background="#1e1b4b"` or the same `fill`.
@@ -108,12 +109,54 @@ the nodes reuse that instance instead of importing a second copy.
   from `onUpdate`, an `Object3D` `update`, or a signal function, not at
   setup.
 
+## 2D content on a surface
+
+Put ordinary 2D nodes inside a `Mesh3D` and they become its surface: a
+phone screen, a floating card, a chart on a wall. The children are
+rasterized into a texture and mapped onto the mesh, so they get
+perspective, occlusion and lighting like any other geometry.
+
+```tsx
+<Mesh3D geometry="box" radius={34} size={[320, 660, 22]} contentMaterial="basic">
+  <Rect size={[320, 660]} fill={'#0f172a'} radius={34} />
+  <Txt y={-270} text="Nova" fontSize={40} fill={'#fff'} />
+  <Txt text={() => `${Math.round(progress())} %`} fontSize={48} fill={'#fff'} />
+</Mesh3D>
+```
+
+- **Coordinates.** The surface is the local space of the children: `(0, 0)`
+  is the centre of the face, its edges are at `±width / 2` and
+  `±height / 2` of the mesh's `size`. On a `box` (rounded or not) the
+  content covers the front face and the other faces keep the body
+  material; on every other primitive it wraps the whole surface.
+- **Shading.** `contentMaterial="basic"` makes the content glow like a
+  screen; the default follows `material`, so a card is lit and shadowed by
+  the scene. On a box the content is drawn over the lit body of the front
+  face, so transparent areas (a margin around the screen, a rounded edge)
+  show the body; on a plane they show what is behind, so a translucent
+  panel is just a `Rect` with alpha.
+- **Resolution.** Content is rasterized at the resolution the `Three` node
+  renders at (on-screen scale times `quality`), so it stays crisp under
+  Camera zoom and 2x exports. `contentScale` overrides that per mesh;
+  lower it for large surfaces far from the camera. Texture edges are
+  capped at 4096 texels.
+- **Cost.** The texture is re-drawn and re-uploaded only when a signal the
+  content depends on changes. A camera or mesh move is free; a counter
+  ticking every frame costs one 2D render of the content plus one upload
+  per frame (roughly 5–10 ms for a phone screen under headless
+  SwiftShader, invisible on a GPU). A tween of the mesh's own `opacity`
+  also re-draws the content, so fade the `Three` node for a cheap fade.
+- **What works inside.** Anything that renders on the 2D canvas, including
+  `Video`, `Img`, layouts and cached nodes (opacity, filters, shadows).
+  2D children of the `Three` node itself are still drawn as a crisp
+  overlay on top of the image, as before.
+
 ## Nodes
 
 | Node | What it is | Key props |
 |------|------------|-----------|
 | `Three` | The viewport (a `Rect`) | camera props, `shadows`, `fog`, `background`, `quality`, `defaultLights`, `scene`, `camera`, `onUpdate`, `onRender` |
-| `Mesh3D` | A primitive solid | `geometry`, `size`, `origin`, `radius`, `color`, `material`, `metalness`, `roughness`, `emissive`, `wireframe`, `flatShading`, `map`, `side` |
+| `Mesh3D` | A primitive solid; 2D children become its surface | `geometry`, `size`, `origin`, `radius`, `color`, `material`, `metalness`, `roughness`, `emissive`, `wireframe`, `flatShading`, `map`, `side`, `contentMaterial`, `contentScale` |
 | `Group3D` | Empty transform node | transform signals only |
 | `Object3D` | Any Three.js object as a node | `object`, `create`, `update` |
 | `Light3D` | A light | `kind`, `color`, `intensity`, `target`, `castShadow`, `angle`, `penumbra`, `decay` |

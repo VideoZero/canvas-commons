@@ -1,4 +1,6 @@
 import {
+  Node,
+  View2D,
   colorSignal,
   computed,
   initial,
@@ -10,12 +12,24 @@ import {
   ColorSignal,
   DependencyContext,
   PossibleColor,
+  Scene,
   SignalValue,
   SimpleSignal,
+  Vector2,
+  endScene,
+  startScene,
+  useScene,
 } from '@motion-canvas/core';
 import type * as THREE from 'three';
-import {Object3DNode, Object3DNodeProps} from './Object3DNode';
+import {Object3DNode, Object3DNodeProps, isObject3DRoot} from './Object3DNode';
 import {ThreeModule, getThree} from './loader';
+import {getSharedRenderer} from './renderer';
+
+/**
+ * Largest surface texture edge in texels. Above this the content is
+ * rasterized at a lower scale rather than clipped.
+ */
+const MAX_SURFACE_TEXELS = 4096;
 
 /**
  * Built-in primitive shapes. Every primitive is authored at unit size and
@@ -81,7 +95,10 @@ export type Mesh3DSide = 'front' | 'back' | 'double';
  * Size in pixels: a single number, `[width, height]` or
  * `[width, height, depth]`. Missing dimensions repeat the width.
  */
-export type PossibleMesh3DSize = number | [number, number] | [number, number, number];
+export type PossibleMesh3DSize =
+  | number
+  | [number, number]
+  | [number, number, number];
 
 export interface Mesh3DProps extends Object3DNodeProps {
   /**
@@ -144,6 +161,14 @@ export interface Mesh3DProps extends Object3DNodeProps {
    * {@inheritDoc Mesh3D.map}
    */
   map?: SignalValue<string | null>;
+  /**
+   * {@inheritDoc Mesh3D.contentMaterial}
+   */
+  contentMaterial?: SignalValue<Mesh3DMaterial | null>;
+  /**
+   * {@inheritDoc Mesh3D.contentScale}
+   */
+  contentScale?: SignalValue<number | null>;
   /**
    * {@inheritDoc Mesh3D.castShadow}
    */
@@ -345,6 +370,29 @@ export class Mesh3D extends Object3DNode {
   public declare readonly map: SimpleSignal<string | null, this>;
 
   /**
+   * Shading of the surface content (the 2D children), when it should differ
+   * from {@link material}. `'basic'` makes a screen that glows on its own
+   * instead of being lit by the scene. `null` (the default) follows
+   * {@link material}.
+   */
+  @initial(null)
+  @signal()
+  public declare readonly contentMaterial: SimpleSignal<
+    Mesh3DMaterial | null,
+    this
+  >;
+
+  /**
+   * Texels per pixel used to rasterize the surface content. `null` (the
+   * default) follows the resolution the enclosing {@link Three} renders at,
+   * so content stays crisp under Camera zoom and high-resolution exports.
+   * Lower it for large surfaces that are far from the camera.
+   */
+  @initial(null)
+  @signal()
+  public declare readonly contentScale: SimpleSignal<number | null, this>;
+
+  /**
    * Whether this mesh casts shadows (needs `shadows` on the {@link Three}
    * node and a shadow-casting light).
    */
@@ -363,9 +411,16 @@ export class Mesh3D extends Object3DNode {
   private ownGeometryKey = '';
   private ownMaterial: THREE.Material | null = null;
   private ownMaterialKind: Mesh3DMaterial | null = null;
+  private surfaceMaterial: THREE.Material | null = null;
+  private surfaceMaterialKind: Mesh3DMaterial | null = null;
+  private surfaceCanvasElement: HTMLCanvasElement | null = null;
+  private surfaceTexture: THREE.CanvasTexture | null = null;
+  private surfaceView: View2D | null = null;
+  private readonly scene2D: Scene;
 
   public constructor(props?: Mesh3DProps) {
     super(props ?? {});
+    this.scene2D = useScene();
   }
 
   protected override createObject(three: ThreeModule): THREE.Object3D {
@@ -375,7 +430,7 @@ export class Mesh3D extends Object3DNode {
   protected override updateObject(three: ThreeModule, object: THREE.Object3D) {
     const mesh = object as THREE.Mesh;
     mesh.geometry = this.resolvedGeometry();
-    mesh.material = this.resolvedMaterial();
+    mesh.material = this.resolvedMaterials();
     mesh.castShadow = this.castShadow();
     mesh.receiveShadow = this.receiveShadow();
 
@@ -461,9 +516,36 @@ export class Mesh3D extends Object3DNode {
     const unit = rounded
       ? createRoundedBox(three, 1, rounded[0], rounded[1], rounded[2], segments)
       : createUnitGeometry(three, geometry, segments, ratio);
+    if (geometry === 'box') {
+      addSurfaceGroup(unit);
+    }
     this.ownGeometry = applyOrigin(three, unit, origin);
     this.ownGeometryKey = key;
     return this.ownGeometry;
+  }
+
+  /**
+   * The material(s) for the mesh: the body material, or, when 2D children
+   * provide surface content, the content material on the front face of a
+   * box and on the whole surface of any other shape.
+   *
+   * @remarks
+   * On a box the front face is drawn twice: once with the body material
+   * (group 4) and once more with the content on top (the extra group added
+   * by {@link addSurfaceGroup}), so transparent areas of the content show
+   * the lit body rather than the inside of the box.
+   */
+  @computed()
+  private resolvedMaterials(): THREE.Material | THREE.Material[] {
+    const body = this.resolvedMaterial();
+    const surface = this.resolvedSurfaceMaterial();
+    if (!surface) {
+      return body;
+    }
+    if (this.geometry() === 'box') {
+      return [body, body, body, body, body, body, surface];
+    }
+    return surface;
   }
 
   @computed()
@@ -558,6 +640,230 @@ export class Mesh3D extends Object3DNode {
     return DependencyContext.collectPromise(entry.promise, null).value;
   }
 
+  // ─── Surface content: 2D children rendered into a texture ────────────────
+
+  /**
+   * The 2D children that make up the surface content, in draw order.
+   */
+  @computed()
+  protected surfaceChildren(): Node[] {
+    return this.sortedChildren().filter(
+      child => !(child instanceof Object3DNode),
+    );
+  }
+
+  /**
+   * Whether this mesh shows 2D children on its surface.
+   */
+  public hasSurface(): boolean {
+    return this.surfaceChildren().length > 0;
+  }
+
+  /**
+   * Size of the surface in pixels: the mesh's width and height. The surface
+   * is the local space of the 2D children — `(0, 0)` is its centre, the
+   * texture edge is at `±width / 2` and `±height / 2`.
+   */
+  @computed()
+  public surfaceSize(): Vector2 {
+    const [w, h] = this.size3();
+    return new Vector2(Math.max(w, 1), Math.max(h, 1));
+  }
+
+  /**
+   * Maps surface space (pixels, centred) to texture space (texels, origin at
+   * the top-left corner). Also what {@link localToWorld} returns while the
+   * mesh hosts content, so the children's world space is the texture.
+   */
+  @computed()
+  private surfaceMatrix(): DOMMatrix {
+    const size = this.surfaceSize();
+    let scale = this.contentScale();
+    if (scale === null) {
+      const root = this.findAncestor(isObject3DRoot);
+      scale = root?.renderScale() ?? 1;
+    }
+    scale = Math.max(0.05, scale);
+    const limit = MAX_SURFACE_TEXELS / Math.max(size.x, size.y);
+    scale = Math.min(scale, limit);
+    const width = Math.max(1, Math.round(size.x * scale));
+    const height = Math.max(1, Math.round(size.y * scale));
+    return new DOMMatrix([
+      width / size.x,
+      0,
+      0,
+      height / size.y,
+      width / 2,
+      height / 2,
+    ]);
+  }
+
+  @computed()
+  public override localToWorld(): DOMMatrix {
+    return this.hasSurface() ? this.surfaceMatrix() : super.localToWorld();
+  }
+
+  protected override compositeRoot(): Node | null {
+    return this.hasSurface() ? this : super.compositeRoot();
+  }
+
+  /**
+   * While hosting content, the children see a view the size of the surface
+   * instead of the scene view, so cached children (opacity, filters,
+   * shadows) are clipped to the texture rather than to the scene bounds and
+   * layout roots measure against the surface.
+   */
+  public override view(): View2D {
+    if (!this.hasSurface()) {
+      return super.view();
+    }
+    if (!this.surfaceView) {
+      const real = super.view();
+      // Node construction needs the scene context, which is not active
+      // during rendering.
+      startScene(this.scene2D);
+      try {
+        this.surfaceView = new View2D({
+          assetHash: real.assetHash(),
+          size: () => this.surfaceSize(),
+          scale: () => {
+            const m = this.surfaceMatrix();
+            return new Vector2(m.a, m.d);
+          },
+          position: () => {
+            const m = this.surfaceMatrix();
+            return new Vector2(m.e, m.f);
+          },
+        });
+        // Mirror the real view so videos, images and asset reloads inside
+        // the content behave as they do on the scene canvas.
+        this.surfaceView
+          .assetHash(() => real.assetHash())
+          .playbackState(() => real.playbackState())
+          .globalTime(() => real.globalTime());
+      } finally {
+        endScene(this.scene2D);
+      }
+    }
+    return this.surfaceView;
+  }
+
+  /**
+   * The surface content rasterized into a canvas. Re-drawn only when a
+   * signal it depends on changes (a child's props, the surface size or the
+   * render scale); camera and mesh transforms do not touch it.
+   */
+  @computed()
+  private surfaceCanvas(): HTMLCanvasElement | null {
+    const children = this.surfaceChildren();
+    if (children.length === 0) {
+      return null;
+    }
+    const m = this.surfaceMatrix();
+    const width = Math.round(m.e * 2);
+    const height = Math.round(m.f * 2);
+    const canvas = (this.surfaceCanvasElement ??=
+      document.createElement('canvas'));
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Could not create a surface canvas');
+    }
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    } else {
+      context.resetTransform();
+      context.clearRect(0, 0, width, height);
+    }
+    context.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+    for (const child of children) {
+      child.render(context);
+    }
+    return canvas;
+  }
+
+  @computed()
+  private resolvedSurfaceTexture(): THREE.CanvasTexture | null {
+    const canvas = this.surfaceCanvas();
+    if (!canvas) {
+      this.disposeSurfaceTexture();
+      return null;
+    }
+    const three = getThree();
+    if (!this.surfaceTexture) {
+      const texture = new three.CanvasTexture(canvas);
+      texture.colorSpace = three.SRGBColorSpace;
+      texture.anisotropy =
+        getSharedRenderer(three).capabilities.getMaxAnisotropy();
+      this.surfaceTexture = texture;
+    }
+    // Re-evaluated only when the canvas was re-drawn, so this is exactly one
+    // upload per content change.
+    this.surfaceTexture.needsUpdate = true;
+    return this.surfaceTexture;
+  }
+
+  @computed()
+  private resolvedSurfaceMaterial(): THREE.Material | null {
+    const texture = this.resolvedSurfaceTexture();
+    if (!texture) {
+      this.disposeSurfaceMaterial();
+      return null;
+    }
+    const three = getThree();
+    const body = this.material();
+    const kind =
+      this.contentMaterial() ?? (typeof body === 'string' ? body : 'standard');
+    if (!this.surfaceMaterial || this.surfaceMaterialKind !== kind) {
+      this.disposeSurfaceMaterial();
+      this.surfaceMaterial = createMaterial(three, kind);
+      this.surfaceMaterialKind = kind;
+    }
+    const mat = this.surfaceMaterial as THREE.MeshStandardMaterial;
+    const opacity = this.opacity3D();
+    if ('color' in mat) {
+      // White so the content keeps its own colours; `color` is the body.
+      mat.color.set(0xffffff);
+    }
+    if ('metalness' in mat) {
+      mat.metalness = this.metalness();
+      mat.roughness = this.roughness();
+    }
+    if ('map' in mat && mat.map !== texture) {
+      mat.map = texture;
+      mat.needsUpdate = true;
+    }
+    const side = this.side();
+    mat.side =
+      side === 'double'
+        ? three.DoubleSide
+        : side === 'back'
+          ? three.BackSide
+          : three.FrontSide;
+    // Content may have transparent areas (a floating card, a label), so the
+    // surface always blends.
+    setTransparent(mat, true);
+    mat.opacity = opacity;
+    // On a box the surface is drawn over the body's front face at the same
+    // depth; nudge it toward the camera so it wins the depth test cleanly.
+    const onBox = this.geometry() === 'box';
+    mat.polygonOffset = onBox;
+    mat.polygonOffsetFactor = onBox ? -1 : 0;
+    mat.polygonOffsetUnits = onBox ? -1 : 0;
+    return mat;
+  }
+
+  private disposeSurfaceTexture() {
+    this.surfaceTexture?.dispose();
+    this.surfaceTexture = null;
+  }
+
+  private disposeSurfaceMaterial() {
+    this.surfaceMaterial?.dispose();
+    this.surfaceMaterial = null;
+    this.surfaceMaterialKind = null;
+  }
+
   private disposeOwnGeometry() {
     this.ownGeometry?.dispose();
     this.ownGeometry = null;
@@ -573,6 +879,11 @@ export class Mesh3D extends Object3DNode {
   public override dispose() {
     this.disposeOwnGeometry();
     this.disposeOwnMaterial();
+    this.disposeSurfaceMaterial();
+    this.disposeSurfaceTexture();
+    this.surfaceCanvasElement = null;
+    this.surfaceView?.dispose();
+    this.surfaceView = null;
     super.dispose();
   }
 }
@@ -668,7 +979,61 @@ function createRoundedBox(
   }
   geometry.attributes.position.needsUpdate = true;
   geometry.attributes.normal.needsUpdate = true;
+  // The subdivisions all end up in the rounded edges, so the box's uniform
+  // UV grid would squeeze the whole flat face into one cell. Re-derive UVs
+  // from the final positions so a texture (surface content) covers each
+  // face edge to edge, with the rounded band as its outer margin.
+  remapBoxUvs(geometry, width, height, depth);
   return geometry;
+}
+
+/**
+ * Adds a seventh group to a box that covers the same triangles as the front
+ * face (group 4, `+z`). With a material array the front face is then drawn
+ * twice: the body first, the surface content on top.
+ */
+function addSurfaceGroup(geometry: THREE.BufferGeometry) {
+  const front = geometry.groups[4];
+  if (front) {
+    geometry.addGroup(front.start, front.count, 6);
+  }
+}
+
+/**
+ * Rebuild the UVs of a (possibly deformed) box from its vertex positions,
+ * face by face, following `BoxGeometry`'s own conventions per face:
+ * `[uAxis, vAxis, uDir, vDir, uSize, vSize]`.
+ */
+function remapBoxUvs(
+  geometry: THREE.BufferGeometry,
+  width: number,
+  height: number,
+  depth: number,
+) {
+  const faces: [number, number, number, number, number, number][] = [
+    [2, 1, -1, -1, depth, height], // +x
+    [2, 1, 1, -1, depth, height], // -x
+    [0, 2, 1, 1, width, depth], // +y
+    [0, 2, 1, -1, width, depth], // -y
+    [0, 1, 1, -1, width, height], // +z
+    [0, 1, -1, -1, width, height], // -z
+  ];
+  const positions = geometry.attributes.position.array as Float32Array;
+  const uvs = geometry.attributes.uv.array as Float32Array;
+  for (const group of geometry.groups) {
+    const face = faces[group.materialIndex ?? 0];
+    if (!face) {
+      continue;
+    }
+    const [ua, va, udir, vdir, usize, vsize] = face;
+    for (let i = group.start; i < group.start + group.count; i++) {
+      const pu = positions[i * 3 + ua] * udir;
+      const pv = positions[i * 3 + va] * vdir;
+      uvs[i * 2] = Math.min(1, Math.max(0, (pu + usize / 2) / usize));
+      uvs[i * 2 + 1] = Math.min(1, Math.max(0, 1 - (pv + vsize / 2) / vsize));
+    }
+  }
+  geometry.attributes.uv.needsUpdate = true;
 }
 
 function originVector(origin: Mesh3DOrigin): [number, number, number] {
@@ -719,7 +1084,10 @@ function applyOrigin(
   return geometry;
 }
 
-function createMaterial(three: ThreeModule, kind: Mesh3DMaterial): THREE.Material {
+function createMaterial(
+  three: ThreeModule,
+  kind: Mesh3DMaterial,
+): THREE.Material {
   switch (kind) {
     case 'standard':
       return new three.MeshStandardMaterial();

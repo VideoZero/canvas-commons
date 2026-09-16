@@ -1,5 +1,5 @@
 import {Node, NodeProps, computed, initial, signal} from '@motion-canvas/2d';
-import {SignalValue, SimpleSignal, Vector2} from '@motion-canvas/core';
+import {BBox, SignalValue, SimpleSignal, Vector2} from '@motion-canvas/core';
 import type * as THREE from 'three';
 import {ThreeModule, getThree} from './loader';
 import {toRadians} from './units';
@@ -13,6 +13,11 @@ import {toRadians} from './units';
 export interface Object3DRoot {
   three(): ThreeModule | null;
   projectObject(object: THREE.Object3D): Vector2;
+  /**
+   * Texels per pixel the root currently renders at (its on-screen scale times
+   * `quality`). Off-screen surfaces rasterize at this scale to stay crisp.
+   */
+  renderScale(): number;
 }
 
 export function isObject3DRoot(node: unknown): node is Node & Object3DRoot {
@@ -192,6 +197,23 @@ export abstract class Object3DNode extends Node {
       return Vector2.zero;
     }
     return root.projectObject(this.object3D());
+  }
+
+  /**
+   * 3D nodes are drawn by the enclosing {@link Three} root through Three.js,
+   * never onto the 2D canvas, so the regular render pass skips them (and any
+   * 2D children they use as surface content).
+   */
+  public override render() {
+    // Intentionally empty.
+  }
+
+  /**
+   * Nothing is drawn in 2D space, so the node contributes no area to the
+   * cache bounding box of a cached ancestor.
+   */
+  public override cacheBBox(): BBox {
+    return new BBox();
   }
 
   public override dispose() {
