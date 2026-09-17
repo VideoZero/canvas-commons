@@ -23,6 +23,11 @@ export type {
 } from './ThreeNode';
 export {configureThree, getThree, isThreeLoaded, loadThree} from './loader';
 export type {ThreeConfig, ThreeModule} from './loader';
-export {disposeSharedRenderer, getSharedRenderer} from './renderer';
+export {
+  disposeSharedRenderer,
+  getRendererAntialias,
+  getSharedRenderer,
+  setRendererAntialias,
+} from './renderer';
 export {PIXELS_PER_UNIT, toRadians} from './units';
 export type {PossibleVector3} from './units';

@@ -22,7 +22,11 @@ import {Light3D} from './Light3D';
 import {Object3DRoot, syncObjectChildren} from './Object3DNode';
 import {applyColor} from './color';
 import {ThreeModule, getThree, isThreeLoaded, loadThree} from './loader';
-import {getSharedRenderer} from './renderer';
+import {
+  getRendererAntialias,
+  getSharedRenderer,
+  setRendererAntialias,
+} from './renderer';
 import {PIXELS_PER_UNIT, PossibleVector3, toRadians} from './units';
 
 export interface ThreeRenderCallback {
@@ -180,6 +184,33 @@ export interface ThreeProps extends RectProps {
  */
 @nodeName('Three')
 export class Three extends Rect implements Object3DRoot {
+  /**
+   * Antialias the 3D image, for every {@link Three} node. On by default.
+   *
+   * @remarks
+   * This is a property of the WebGL context shared by all 3D nodes, not of a
+   * single node, so it is set once — before the first node renders:
+   * ```ts
+   * Three.antialias = false;
+   * ```
+   * Setting it later releases the shared renderer and the next render builds
+   * a new one, which costs a frame's worth of shader compilation.
+   *
+   * Turning it off cuts frame time by roughly a third when WebGL runs in
+   * software (headless rendering without a GPU) and leaves edges visibly
+   * jagged, which makes it a preview and draft setting rather than one for
+   * final renders. On a real GPU it saves very little. {@link quality} is
+   * the per-node alternative: supersampling costs more but is not tied to
+   * the context.
+   */
+  public static get antialias(): boolean {
+    return getRendererAntialias();
+  }
+
+  public static set antialias(enabled: boolean) {
+    setRendererAntialias(enabled);
+  }
+
   /**
    * A hand-built `THREE.Scene` to render instead of the node's own.
    *

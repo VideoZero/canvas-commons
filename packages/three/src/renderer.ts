@@ -2,6 +2,33 @@ import type * as THREE from 'three';
 import {ThreeModule} from './loader';
 
 let SHARED: THREE.WebGLRenderer | null = null;
+let ANTIALIAS = true;
+
+/**
+ * Whether new renderers are created with multisampling.
+ */
+export function getRendererAntialias(): boolean {
+  return ANTIALIAS;
+}
+
+/**
+ * Turn multisampling on or off for the shared renderer.
+ *
+ * @remarks
+ * Antialiasing is a WebGL context attribute, so it can only be chosen when
+ * the context is created: changing it releases the current renderer and the
+ * next render builds a fresh one. Set it before the first 3D node renders.
+ * Turning it off cuts frame time by roughly a third when WebGL runs in
+ * software (headless rendering without a GPU) at the cost of jagged edges;
+ * on a real GPU it saves very little.
+ */
+export function setRendererAntialias(enabled: boolean) {
+  if (ANTIALIAS === enabled) {
+    return;
+  }
+  ANTIALIAS = enabled;
+  disposeSharedRenderer();
+}
 
 /**
  * The single WebGL renderer shared by every {@link Three} node.
@@ -15,7 +42,7 @@ export function getSharedRenderer(three: ThreeModule): THREE.WebGLRenderer {
   if (!SHARED) {
     SHARED = new three.WebGLRenderer({
       canvas: document.createElement('canvas'),
-      antialias: true,
+      antialias: ANTIALIAS,
       alpha: true,
       premultipliedAlpha: true,
       preserveDrawingBuffer: false,

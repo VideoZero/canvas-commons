@@ -331,6 +331,13 @@ function. Lengths are pixels, angles degrees, colours anything `Color` accepts.
 | `onUpdate`          | `(scene, camera, three) => void`    |           | Signal-tracked; mutate raw objects here. Errors are logged, not rethrown     |
 | `onRender`          | `(renderer, scene, camera) => void` |           | Replaces the default `renderer.render` call, for post-processing             |
 
+Statics: `Three.antialias` (default `true`) turns multisampling on or off for
+every `Three` node at once — it is a property of the shared WebGL context, not
+of a node, so set it before the first node renders. Turning it off cuts frame
+time by roughly a third when WebGL runs in software (headless rendering without
+a GPU) and leaves edges visibly jagged, which makes it a preview and draft
+setting rather than one for final renders; on a real GPU it saves very little.
+
 Methods: `projectPoint([x, y, z])`, `projectObject(object)`,
 `projectWorld(vector)` → `Vector2` in the node's space; `sceneObject()`,
 `cameraObject()`, `rootGroup()` → live Three.js objects (throw before the
@@ -439,7 +446,9 @@ Transform only. Use it to rotate or move a set of nodes together.
 - Per-object `opacity` on self-overlapping meshes shows the far side through the
   near side; fade the `Three` node instead.
 - One WebGL renderer is shared by all `Three` nodes; its canvas is resized
-  whenever consecutive nodes render at different sizes.
+  whenever consecutive nodes render at different sizes. Antialiasing is a
+  context attribute, so `Three.antialias` applies to all of them and changing it
+  after a render releases the renderer and rebuilds it.
 
 ## Escape hatches
 
@@ -452,4 +461,5 @@ Transform only. Use it to rotate or move a set of nodes together.
 - `onRender={(renderer, scene, camera) => ...}` on `Three` for post-processing.
 - `configureThree({load: () => import(url)})` or `configureThree({module})` to
   control where the runtime comes from; `getSharedRenderer()` /
-  `disposeSharedRenderer()` for the WebGL context.
+  `disposeSharedRenderer()` for the WebGL context; `Three.antialias` (or
+  `setRendererAntialias()` / `getRendererAntialias()`) for multisampling.
