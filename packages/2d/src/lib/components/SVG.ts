@@ -4,6 +4,7 @@ import {
   Matrix2D,
   PossibleColor,
   PossibleSpacing,
+  RAD2DEG,
   SerializedVector2,
   SignalValue,
   SimpleSignal,
@@ -576,6 +577,7 @@ export class SVG extends Shape {
     yield from.position(to.position(), duration, timing);
     yield from.scale(to.scale(), duration, timing);
     yield from.rotation(to.rotation(), duration, timing);
+    yield from.skew(to.skew(), duration, timing);
     if (
       from instanceof Path &&
       to instanceof Path &&
@@ -905,28 +907,32 @@ export class SVG extends Shape {
   }
 
   /**
-   * Get position, rotation and scale from Matrix transformation as Shape properties
+   * Get position, rotation, scale and skew from Matrix transformation as Shape
+   * properties.
+   *
+   * A node applies skew last, so a QR decomposition keeps the shear.
+   *
    * @param transform - Matrix transformation
    * @returns MotionCanvas Shape properties
    */
   protected static getMatrixTransformation(transform: DOMMatrix): ShapeProps {
-    const matrix2 = new Matrix2D(transform);
+    const matrix = new Matrix2D(transform);
+    const scaleX = matrix.x.magnitude;
+    const degenerate = scaleX === 0;
 
-    const position = matrix2.translation;
-    const rotation = matrix2.rotation;
-    // matrix.scaling can give incorrect result when matrix contain skew operation
-    const scale = {
-      x: matrix2.x.magnitude,
-      y: matrix2.y.magnitude,
-    };
-    if (matrix2.determinant < 0) {
-      if (matrix2.values[0] < matrix2.values[3]) scale.x = -scale.x;
-      else scale.y = -scale.y;
-    }
     return {
-      position,
-      rotation,
-      scale,
+      position: matrix.translation,
+      rotation: matrix.rotation,
+      scale: {
+        x: scaleX,
+        y: degenerate ? matrix.y.magnitude : matrix.determinant / scaleX,
+      },
+      skew: {
+        x: degenerate
+          ? 0
+          : Math.atan(matrix.x.dot(matrix.y) / (scaleX * scaleX)) * RAD2DEG,
+        y: 0,
+      },
     };
   }
 
