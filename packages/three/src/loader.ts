@@ -28,6 +28,9 @@ export interface ThreeConfig {
    * separate chunk that is only fetched when the first {@link Three} node
    * renders. Hosts that vendor Three.js elsewhere can point this at their own
    * copy, e.g. `() => import('https://cdn.example.com/three.module.js')`.
+   *
+   * A namespace that keeps the runtime under `default` is unwrapped, so an
+   * interop build works as well as the plain ESM one.
    */
   load?: () => Promise<ThreeModule>;
   /**
@@ -91,8 +94,14 @@ export function loadThree(): Promise<ThreeModule> {
   }
   if (!PENDING) {
     PENDING = LOAD().then(mod => {
-      setLoaded(mod);
-      return mod;
+      // A custom `load` may hand back a namespace that keeps the runtime under
+      // `default` — a CDN interop build, or a build-time stub aliased over the
+      // bare `three` specifier. The real ESM build has no default export, so
+      // reading it there is undefined and the namespace itself is used.
+      const runtime = ((mod as {default?: ThreeModule})?.default ??
+        mod) as ThreeModule;
+      setLoaded(runtime);
+      return runtime;
     });
   }
   return PENDING;
