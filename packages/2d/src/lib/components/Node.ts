@@ -62,6 +62,7 @@ import {
   ShaderConfig,
   parseShader,
 } from '../partials/ShaderConfig';
+import type {Scene2D} from '../scenes/Scene2D';
 import {useScene2D} from '../scenes/useScene2D';
 import {drawLine} from '../utils';
 import type {View2D} from './View2D';
@@ -512,6 +513,7 @@ export class Node implements Promisable<Node> {
   }
 
   protected view2D: View2D;
+  private readonly scene2D: Scene2D;
   private stateStack: NodeState[] = [];
   protected realChildren: Node[] = [];
   protected hasSpawnedChildren = false;
@@ -524,6 +526,7 @@ export class Node implements Promisable<Node> {
   public constructor({children, spawner, key, ...rest}: NodeProps) {
     const scene = useScene2D();
     [this.key, this.unregister] = scene.registerNode(this, key);
+    this.scene2D = scene;
     this.view2D = scene.getView();
     this.creationStack = new Error().stack;
     initializeSignals(this, rest);
@@ -1783,7 +1786,9 @@ export class Node implements Promisable<Node> {
   public async toPromise(): Promise<this> {
     do {
       await DependencyContext.consumePromises();
-      this.collectAsyncResources();
+      // The caller awaits this outside the scene, and a collected resource
+      // can create nodes.
+      this.scene2D.execute(() => this.collectAsyncResources());
     } while (DependencyContext.hasPromises());
     return this;
   }
