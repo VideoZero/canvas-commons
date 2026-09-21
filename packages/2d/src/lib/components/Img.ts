@@ -330,6 +330,7 @@ about working with images.`,
       this.opacity(currentOpacity * (1 - timingFunction(v)));
     });
     this.src.context.setter(newSrc);
+    yield this;
     yield* tween(halfTime, v => {
       this.opacity(currentOpacity * timingFunction(v));
     });
