@@ -21,7 +21,13 @@ export type {
   ThreeRenderCallback,
   ThreeUpdateCallback,
 } from './ThreeNode';
-export {configureThree, getThree, isThreeLoaded, loadThree} from './loader';
+export {
+  configureThree,
+  getThree,
+  isThreeLoaded,
+  isThreeLoading,
+  loadThree,
+} from './loader';
 export type {ThreeConfig, ThreeModule} from './loader';
 export {
   disposeSharedRenderer,

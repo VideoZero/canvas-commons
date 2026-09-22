@@ -14,5 +14,6 @@
     "jsxImportSource": "@motion-canvas/2d/src",
     "strict": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/testScene.ts"]
 }

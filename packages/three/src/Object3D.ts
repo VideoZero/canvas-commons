@@ -4,6 +4,7 @@ import type * as THREE from 'three';
 import {setTransparent} from './Mesh3D';
 import {Object3DNode, Object3DNodeProps} from './Object3DNode';
 import {ThreeModule} from './loader';
+import {reportCallbackError} from './report';
 
 interface MaterialState {
   baseOpacity: number;
@@ -73,11 +74,32 @@ export interface Object3DProps extends Object3DNodeProps {
  * `opacity` is applied to every material below the object (they are switched
  * to `transparent`); at `0` the object is hidden.
  *
+ * An error thrown by `create` or `update` is logged against the node and
+ * the sync carries on: a failed `create` leaves the node empty, a failed
+ * `update` leaves the object as it was. Neither takes the other nodes in the
+ * {@link Three} down.
+ *
  * `create` and `update` survive {@link clone}, and the clone builds its own
  * object. An object built by `create` is disposed (geometries and materials)
- * with the node; a supplied `object` is not. A supplied {@link object} is copied by reference instead: a
- * Three.js object has one parent, so the node synced last takes it from the
- * other. Give each clone its own `object` (e.g. `object.clone()`).
+ * with the node; a supplied `object` is not. A supplied {@link object} is
+ * copied by reference instead: a Three.js object has one parent, so the node
+ * synced last takes it from the other. Give each clone its own `object`.
+ * Note that `object.clone()` shares geometries and materials with the
+ * original, and the node writes its `opacity` to the materials, so two nodes
+ * at different opacities would overwrite each other on every sync. Clone the
+ * materials as well, or build the object with `create`, which gives every
+ * clone its own:
+ * ```ts
+ * const copy = object.clone();
+ * copy.traverse(child => {
+ *   const mesh = child as THREE.Mesh;
+ *   if (mesh.material) {
+ *     mesh.material = Array.isArray(mesh.material)
+ *       ? mesh.material.map(m => m.clone())
+ *       : mesh.material.clone();
+ *   }
+ * });
+ * ```
  *
  * @example
  * ```tsx
@@ -109,7 +131,9 @@ export class Object3D extends Object3DNode {
   public readonly update: Object3DUpdate | null;
 
   private created: THREE.Object3D | null = null;
+  private createFailed = false;
   private attached: THREE.Object3D | null = null;
+
   public constructor(props?: Object3DProps) {
     const {create, update, ...rest} = props ?? {};
     super(rest);
@@ -141,9 +165,17 @@ export class Object3D extends Object3DNode {
 
   protected override updateObject(three: ThreeModule, holder: THREE.Object3D) {
     let raw = this.object();
-    if (!raw && this.create) {
-      raw = this.created ??= this.create(three);
+    if (!raw && this.create && !this.created && !this.createFailed) {
+      try {
+        this.created = this.create(three);
+      } catch (e) {
+        // Not retried: the factory takes no signals, so running it again on
+        // the next sync would only repeat the same error.
+        this.createFailed = true;
+        reportCallbackError(this, 'Object3D create', e);
+      }
     }
+    raw ??= this.created;
     if (this.attached !== raw) {
       if (this.attached) {
         holder.remove(this.attached);
@@ -157,7 +189,13 @@ export class Object3D extends Object3DNode {
       return;
     }
     // `update` first so edits made there are the base the opacity multiplies.
-    this.update?.(raw, three);
+    if (this.update) {
+      try {
+        this.update(raw, three);
+      } catch (e) {
+        reportCallbackError(this, 'Object3D update', e);
+      }
+    }
     this.applyOpacity(raw, this.opacity3D());
   }
 
@@ -214,6 +252,7 @@ export class Object3D extends Object3DNode {
       }
     });
     this.created = null;
+    this.createFailed = false;
     super.dispose();
   }
 }

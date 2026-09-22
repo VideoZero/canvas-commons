@@ -8,7 +8,8 @@
   "license": "MIT",
   "scripts": {
     "dev": "tsc -w",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest"
   },
   "exports": {
     ".": {
@@ -31,7 +32,9 @@
   },
   "devDependencies": {
     "@types/three": "^0.186.0",
-    "three": "^0.186.0"
+    "jsdom": "^22.1.0",
+    "three": "^0.186.0",
+    "vitest": "^0.34.6"
   },
   "peerDependenciesMeta": {
     "@types/three": {

@@ -177,7 +177,9 @@ importing a second copy.
 - **Deterministic.** Everything is a pure function of signals; no clocks.
 - **Cloning.** `clone()` keeps `onUpdate`, `onRender`, `create` and `update`. A
   raw `scene`, `camera` or `object` is copied by reference, and a Three.js
-  object has one parent, so give each clone its own.
+  object has one parent, so give each clone its own. `object.clone()` still
+  shares the materials, which the node writes its `opacity` to, so clone those
+  too (or build the object with `create`, which gives each clone its own).
 
 ## Recipes
 
@@ -226,10 +228,11 @@ importing a second copy.
   stage().rootGroup().add(myObject);
   ```
   `yield loadThree()` does the same without a ref. The same applies to values
-  derived from 3D, such as `screenPosition()` and `projectPoint()`: they are
-  zero and log a warning when read in generator code before the load. Reading
-  them from a signal function (`position={() => box().screenPosition()}`) needs
-  no wait.
+  derived from 3D, such as `screenPosition()` and `projectPoint()`: read in
+  generator code before the load has even started they are zero and log a
+  warning (once per node). Reading them from a signal function
+  (`position={() => box().screenPosition()}`) needs no wait and never warns: the
+  load is under way by then and the function re-evaluates once it lands.
 
 ## 2D content on a surface
 
@@ -312,24 +315,24 @@ function. Lengths are pixels, angles degrees, colours anything `Color` accepts.
 
 ### `Three` (extends `Rect`)
 
-| Prop                | Type                                | Default   | Notes                                                                        |
-| ------------------- | ----------------------------------- | --------- | ---------------------------------------------------------------------------- |
-| `cameraDistance`    | `number`                            | `1600`    | Distance from `cameraTarget`; sets the perspective when `fov` is unset       |
-| `cameraYaw`         | `number`                            | `0`       | Orbit around the vertical axis                                               |
-| `cameraPitch`       | `number`                            | `0`       | Orbit above (`+`) or below the target                                        |
-| `cameraTarget`      | `[x, y, z]`                         | `[0,0,0]` | The point the camera looks at                                                |
-| `fov`               | `number \| null`                    | `null`    | Vertical field of view; `null` derives it so the target plane fills the node |
-| `zoom`              | `number`                            | `1`       | `2` shows half the area at twice the size; also applies to raw cameras       |
-| `orthographic`      | `boolean`                           | `false`   | No perspective; pixels are exact at every depth                              |
-| `shadows`           | `boolean`                           | `false`   | Enables shadow maps; needs `castShadow` on a light                           |
-| `defaultLights`     | `boolean`                           | `true`    | Neutral rig when the scene has no `Light3D`                                  |
-| `background`        | `color \| null`                     | `null`    | Backdrop of the 3D image; alpha lets `fill` show through                     |
-| `fog`               | `color \| null`                     | `null`    | Fog colour; enables fog. Alpha thins it (≈ `alpha` strength at `fogFar`)     |
-| `fogNear`, `fogFar` | `number \| null`                    | `null`    | Fog range from the camera; default `cameraDistance` and 3× it                |
-| `quality`           | `number`                            | `1`       | Supersampling; `2` renders at twice the on-screen resolution                 |
-| `scene`, `camera`   | `THREE.Scene`, `THREE.Camera`       | `null`    | Raw mode; orbit props are ignored when `camera` is set                       |
-| `onUpdate`          | `(scene, camera, three) => void`    |           | Signal-tracked; mutate raw objects here. Errors are logged, not rethrown     |
-| `onRender`          | `(renderer, scene, camera) => void` |           | Replaces the default `renderer.render` call, for post-processing             |
+| Prop                | Type                                | Default   | Notes                                                                                                                                                                                                                                            |
+| ------------------- | ----------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cameraDistance`    | `number`                            | `1600`    | Distance from `cameraTarget`; sets the perspective when `fov` is unset                                                                                                                                                                           |
+| `cameraYaw`         | `number`                            | `0`       | Orbit around the vertical axis                                                                                                                                                                                                                   |
+| `cameraPitch`       | `number`                            | `0`       | Orbit above (`+`) or below the target                                                                                                                                                                                                            |
+| `cameraTarget`      | `[x, y, z]`                         | `[0,0,0]` | The point the camera looks at                                                                                                                                                                                                                    |
+| `fov`               | `number \| null`                    | `null`    | Vertical field of view; `null` derives it so the target plane fills the node                                                                                                                                                                     |
+| `zoom`              | `number`                            | `1`       | `2` shows half the area at twice the size; also applies to raw cameras                                                                                                                                                                           |
+| `orthographic`      | `boolean`                           | `false`   | No perspective; pixels are exact at every depth                                                                                                                                                                                                  |
+| `shadows`           | `boolean`                           | `false`   | Enables shadow maps; needs `castShadow` on a light                                                                                                                                                                                               |
+| `defaultLights`     | `boolean`                           | `true`    | Neutral rig when the scene has no `Light3D`                                                                                                                                                                                                      |
+| `background`        | `color \| null`                     | `null`    | Backdrop of the 3D image; alpha lets `fill` show through                                                                                                                                                                                         |
+| `fog`               | `color \| null`                     | `null`    | Fog colour; enables fog. Alpha thins it (≈ `alpha` strength at `fogFar`)                                                                                                                                                                         |
+| `fogNear`, `fogFar` | `number \| null`                    | `null`    | Fog range from the camera; default `cameraDistance` and 3× it                                                                                                                                                                                    |
+| `quality`           | `number`                            | `1`       | Supersampling on top of the scale the node is drawn at, which already includes the project's resolution scale: a 4K export at resolution scale `2` renders the 3D image (and its surface content) at twice the pixels with `quality` left at `1` |
+| `scene`, `camera`   | `THREE.Scene`, `THREE.Camera`       | `null`    | Raw mode; orbit props are ignored when `camera` is set                                                                                                                                                                                           |
+| `onUpdate`          | `(scene, camera, three) => void`    |           | Signal-tracked; mutate raw objects here. Errors are logged, not rethrown                                                                                                                                                                         |
+| `onRender`          | `(renderer, scene, camera) => void` |           | Replaces the default `renderer.render` call, for post-processing                                                                                                                                                                                 |
 
 Statics: `Three.antialias` (default `true`) turns multisampling on or off for
 every `Three` node at once — it is a property of the shared WebGL context, not
@@ -411,18 +414,26 @@ Primitives: `box` (with `radius`), `sphere`, `plane`, `circle`, `cylinder`,
 
 ### `Object3D`
 
-| Prop     | Type                        | Default | Notes                                                    |
-| -------- | --------------------------- | ------- | -------------------------------------------------------- |
-| `object` | `THREE.Object3D \| null`    | `null`  | A ready-made object; replacing it swaps it               |
-| `create` | `(three) => THREE.Object3D` |         | Builds the object lazily once the runtime has loaded     |
-| `update` | `(object, three) => void`   |         | Signal-tracked; runs before the node applies its opacity |
+| Prop     | Type                        | Default | Notes                                                                                                  |
+| -------- | --------------------------- | ------- | ------------------------------------------------------------------------------------------------------ |
+| `object` | `THREE.Object3D \| null`    | `null`  | A ready-made object; replacing it swaps it                                                             |
+| `create` | `(three) => THREE.Object3D` |         | Builds the object lazily once the runtime has loaded. An error is logged once and the node stays empty |
+| `update` | `(object, three) => void`   |         | Signal-tracked; runs before the node applies its opacity. Errors are logged, not rethrown              |
 
 `raw()` returns the wrapped object. The node's `opacity` multiplies each
 material's own opacity; edits made in `update` are respected. A clone reuses
 `create` and `update` and builds its own object; a shared `object` moves to
 whichever node synced last. An object built by `create` has its geometries and
 materials disposed with the node; a supplied `object` is left alone, and its
-materials get their own opacity back when the scene replays.
+materials get their own opacity back when the scene replays. A failing `create`
+or `update` is logged against the node and never blanks the other nodes in the
+`Three`.
+
+`object.clone()` shares geometries and materials with the original. The node's
+`opacity` is written to the materials, so two nodes showing clones at different
+opacities would overwrite each other on every sync: clone the materials as well
+(`copy.traverse(c => c.material &&= c.material.clone())` for single materials)
+or build the object with `create`, which gives every clone its own.
 
 ### `Group3D`
 

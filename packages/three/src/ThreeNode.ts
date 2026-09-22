@@ -21,12 +21,19 @@ import type * as THREE from 'three';
 import {Light3D} from './Light3D';
 import {Object3DRoot, syncObjectChildren} from './Object3DNode';
 import {applyColor} from './color';
-import {ThreeModule, getThree, isThreeLoaded, loadThree} from './loader';
+import {
+  ThreeModule,
+  getThree,
+  isThreeLoaded,
+  isThreeLoading,
+  loadThree,
+} from './loader';
 import {
   getRendererAntialias,
   getSharedRenderer,
   setRendererAntialias,
 } from './renderer';
+import {errorMessage, reportCallbackError, warnReadBeforeLoad} from './report';
 import {PIXELS_PER_UNIT, PossibleVector3, toRadians} from './units';
 
 export interface ThreeRenderCallback {
@@ -291,6 +298,13 @@ export class Three extends Rect implements Object3DRoot {
   /**
    * Supersampling factor. `2` renders at twice the on-screen resolution for
    * smoother edges at a higher cost.
+   *
+   * @remarks
+   * Multiplies the scale the node is drawn at, which already includes the
+   * project's resolution scale (a 4K export at `resolutionScale: 2` renders
+   * the 3D image, and rasterizes surface content, at twice the pixels with
+   * `quality` left at `1`), a preview scale below `1`, a 2D `Camera` zoom and
+   * cached ancestors.
    */
   @initial(1)
   @signal()
@@ -389,6 +403,7 @@ export class Three extends Rect implements Object3DRoot {
   public declare readonly renderScale: SimpleSignal<number, this>;
 
   private warnedCamera = false;
+  private warnedEarlyRead = false;
   private lastShadows: boolean | null = null;
   private root: THREE.Group | null = null;
   private rig: THREE.Group | null = null;
@@ -455,11 +470,7 @@ export class Three extends Rect implements Object3DRoot {
         // Rethrowing would leave this computed without a scene on its first
         // run and take the whole render down with it; the scene is still
         // valid, only the user's changes are missing.
-        useLogger().error({
-          message: `onUpdate threw: ${errorMessage(e)}`,
-          stack: e instanceof Error ? e.stack : undefined,
-          inspect: this.key,
-        });
+        reportCallbackError(this, 'onUpdate', e);
       }
     }
     scene.updateMatrixWorld(true);
@@ -612,7 +623,7 @@ export class Three extends Rect implements Object3DRoot {
    * or {@link projectWorld} (Three.js world units).
    */
   public projectPoint(point: PossibleVector3): Vector2 {
-    if (!this.three()) {
+    if (this.readBeforeLoad('projectPoint()') || !this.three()) {
       return Vector2.zero;
     }
     const three = getThree();
@@ -629,7 +640,7 @@ export class Three extends Rect implements Object3DRoot {
    * Project the origin of a Three.js object to this node's local 2D space.
    */
   public projectObject(object: THREE.Object3D): Vector2 {
-    if (!this.three()) {
+    if (this.readBeforeLoad('projectObject()') || !this.three()) {
       return Vector2.zero;
     }
     const three = getThree();
@@ -645,7 +656,7 @@ export class Three extends Rect implements Object3DRoot {
    * modified in place.
    */
   public projectWorld(v: THREE.Vector3): Vector2 {
-    if (!this.three()) {
+    if (this.readBeforeLoad('projectWorld()') || !this.three()) {
       return Vector2.zero;
     }
     // Runs onUpdate first so a camera moved there projects correctly.
@@ -654,6 +665,22 @@ export class Three extends Rect implements Object3DRoot {
     const size = this.computedSize();
     v.project(camera);
     return new Vector2((v.x * size.width) / 2, (-v.y * size.height) / 2);
+  }
+
+  /**
+   * Whether the runtime is neither loaded nor loading, i.e. the caller is
+   * generator code running before the first render. Such a read can never
+   * update on its own, so it is reported once per node.
+   */
+  private readBeforeLoad(method: string): boolean {
+    if (isThreeLoaded() || isThreeLoading()) {
+      return false;
+    }
+    if (!this.warnedEarlyRead) {
+      this.warnedEarlyRead = true;
+      warnReadBeforeLoad(this, method);
+    }
+    return true;
   }
 
   private warnIgnoredOrbit() {
@@ -964,8 +991,4 @@ function hasLight(object: THREE.Object3D): boolean {
     return true;
   }
   return object.children.some(hasLight);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

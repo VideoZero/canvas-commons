@@ -75,6 +75,19 @@ export function isThreeLoaded(): boolean {
 }
 
 /**
+ * Whether a load of the runtime has been started and is still in flight.
+ *
+ * @remarks
+ * Not reactive. Together with {@link isThreeLoaded} it tells generator code
+ * apart from signal functions: a value read while nothing has started
+ * loading (before the first {@link Three} node rendered) will never update
+ * on its own, so the nodes warn about that read.
+ */
+export function isThreeLoading(): boolean {
+  return PENDING !== null && LOADED === null;
+}
+
+/**
  * Start (or join) loading the Three.js runtime.
  *
  * @remarks

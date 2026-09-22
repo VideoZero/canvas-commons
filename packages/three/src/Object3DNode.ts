@@ -7,7 +7,8 @@ import {
   useLogger,
 } from '@motion-canvas/core';
 import type * as THREE from 'three';
-import {ThreeModule, getThree} from './loader';
+import {ThreeModule, getThree, isThreeLoaded, isThreeLoading} from './loader';
+import {warnReadBeforeLoad} from './report';
 import {toRadians} from './units';
 
 /**
@@ -125,6 +126,7 @@ export abstract class Object3DNode extends Node {
   private instance: THREE.Object3D | null = null;
   private warnedContent = false;
   private warnedRoot = false;
+  private warnedEarlyRead = false;
 
   /**
    * Create the Three.js object this node controls. Called once, lazily, after
@@ -249,11 +251,22 @@ export abstract class Object3DNode extends Node {
    * check goes through the root's runtime signal, so a label evaluated while
    * Three.js is still loading is re-evaluated after the load rather than
    * staying cached at zero. In generator code, `yield stage()` on the
-   * {@link Three} node first, or the value is zero and a warning is logged.
+   * {@link Three} node first: a read before any load has started (before the
+   * first render) returns zero and logs a warning, once per node.
    */
   public screenPosition(): Vector2 {
     const root = this.findAncestor(isObject3DRoot);
-    if (!root || !root.three()) {
+    if (!root) {
+      return Vector2.zero;
+    }
+    if (!isThreeLoaded() && !isThreeLoading()) {
+      if (!this.warnedEarlyRead) {
+        this.warnedEarlyRead = true;
+        warnReadBeforeLoad(this, 'screenPosition()');
+      }
+      return Vector2.zero;
+    }
+    if (!root.three()) {
       return Vector2.zero;
     }
     return root.projectObject(this.syncObject());
@@ -307,7 +320,13 @@ export function syncObjectChildren(node: Node, object: THREE.Object3D) {
   const wanted: THREE.Object3D[] = [];
   for (const child of node.children()) {
     if (child instanceof Object3DNode) {
-      wanted.push(child.syncObject());
+      // A sync that threw has been logged and has no object yet (the computed
+      // returns `undefined` until it succeeds). Skip it so one broken node
+      // does not take its siblings and the whole viewport down with it.
+      const object = child.syncObject() as THREE.Object3D | undefined;
+      if (object) {
+        wanted.push(object);
+      }
     }
   }
   for (const existing of [...object.children]) {
