@@ -220,6 +220,12 @@ export class TxtLeaf extends Shape {
 
     this.requestLayoutUpdate();
     const el = this.element;
+    // Measure without ligatures: each TxtChar draws its grapheme standalone,
+    // but inside a ligature ("fi", "fl", "ff") the browser splits the single
+    // glyph's advance evenly across its characters, so a centred "f" lands on
+    // top of the "i" and leaves a gap before it.
+    const prevLigatures = el.style.fontVariantLigatures;
+    el.style.fontVariantLigatures = 'none';
     const parentRect = el.getBoundingClientRect();
     const {width, height} = this.size();
 
@@ -255,6 +261,7 @@ export class TxtLeaf extends Shape {
       }
     }
 
+    el.style.fontVariantLigatures = prevLigatures;
     return infos;
   }
 
