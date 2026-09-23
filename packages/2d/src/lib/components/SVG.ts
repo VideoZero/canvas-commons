@@ -1027,7 +1027,7 @@ export class SVG extends Shape {
    * @param svgRoot - Root SVG element, used to resolve `url(#id)` paint
    *   references (linear/radial gradients) declared in `<defs>`.
    */
-  private static getElementStyle(
+  protected static getElementStyle(
     element: SVGGraphicsElement,
     inheritedStyle: ShapeProps,
     svgRoot: Element,
@@ -1040,6 +1040,10 @@ export class SVG extends Shape {
     // for us. Falls back to `inheritedStyle` when computed-style returns
     // a missing/none value so an unset child doesn't override the parent.
     const cs = window.getComputedStyle(element);
+    // Whether the element sets a property itself, through its `style` or a
+    // presentation attribute.
+    const own = (name: string) =>
+      element.style.getPropertyValue(name) || element.getAttribute(name);
 
     // SVG paint values that mean "no paint" should not fall through to the
     // inherited value — the SVG explicitly opted out. We treat them as
@@ -1096,21 +1100,11 @@ export class SVG extends Shape {
     };
 
     return {
-      fill: paint(
-        cs.fill,
-        element.getAttribute('fill'),
-        'rgb(0, 0, 0)',
-        inheritedStyle.fill,
-      ),
-      stroke: paint(
-        cs.stroke,
-        element.getAttribute('stroke'),
-        'none',
-        inheritedStyle.stroke,
-      ),
+      fill: paint(cs.fill, own('fill'), 'rgb(0, 0, 0)', inheritedStyle.fill),
+      stroke: paint(cs.stroke, own('stroke'), 'none', inheritedStyle.stroke),
       lineWidth: numAttr(
         cs.strokeWidth,
-        element.getAttribute('stroke-width'),
+        own('stroke-width'),
         1,
         inheritedStyle.lineWidth,
       ),
