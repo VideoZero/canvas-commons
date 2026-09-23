@@ -56,6 +56,7 @@ import {
   LengthLimit,
   TextWrap,
 } from '../partials';
+import {requestFontLoad} from '../text/fontLoading';
 import {resolveFontFamily} from '../text/fontRegistry';
 import {drawLine, drawPivot, roundPx} from '../utils';
 import {Node, NodeProps} from './Node';
@@ -1204,7 +1205,9 @@ export class Layout extends Node {
       DependencyContext.collectPromise(fonts.ready);
     }
 
-    this.element.style.fontFamily = resolveFontFamily(this.fontFamily());
+    const fontFamily = resolveFontFamily(this.fontFamily());
+    requestFontLoad(fontFamily, this.fontWeight(), this.fontStyle());
+    this.element.style.fontFamily = fontFamily;
     this.element.style.fontSize = `${this.fontSize()}px`;
     this.element.style.fontStyle = this.fontStyle();
 
