@@ -11,7 +11,7 @@
  */
 export const fontRegistry: Record<string, string> = {};
 
-const CSS_GENERIC_FAMILIES = new Set([
+export const CSS_GENERIC_FAMILIES = new Set([
   'serif',
   'sans-serif',
   'monospace',

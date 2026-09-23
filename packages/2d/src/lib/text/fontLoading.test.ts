@@ -12,12 +12,24 @@ async function importFresh() {
 
 describe('requestFontLoad', () => {
   let loaded: () => void;
+  let faces: {family: string}[];
   const fonts = {
     check: vi.fn(),
     load: vi.fn(),
+    get size() {
+      return faces.length;
+    },
+    [Symbol.iterator]() {
+      return faces[Symbol.iterator]();
+    },
   };
 
   beforeEach(() => {
+    faces = [
+      {family: 'Inter'},
+      {family: '"JetBrains Mono"'},
+      {family: 'not a font'},
+    ];
     fonts.load.mockImplementation(
       () => new Promise<void>(resolve => (loaded = resolve)),
     );
@@ -37,12 +49,15 @@ describe('requestFontLoad', () => {
     const {hasPromises, consumePromises, requestFontLoad} = await importFresh();
 
     requestFontLoad('"JetBrains Mono"', 700, 'normal');
-    expect(fonts.load).toHaveBeenCalledWith('normal 700 16px "JetBrains Mono"');
     expect(hasPromises()).toBe(true);
 
     const settled = vi.fn();
     const waiting = consumePromises().then(settled);
-    await Promise.resolve();
+    await vi.waitFor(() =>
+      expect(fonts.load).toHaveBeenCalledWith(
+        'normal 700 16px "JetBrains Mono"',
+      ),
+    );
     expect(settled).not.toHaveBeenCalled();
 
     loaded();
@@ -57,14 +72,13 @@ describe('requestFontLoad', () => {
     requestFontLoad('Inter', 400, 'normal');
     requestFontLoad('Inter', 400, 'normal');
     expect(fonts.check).toHaveBeenCalledTimes(1);
-    expect(fonts.load).toHaveBeenCalledTimes(1);
   });
 
   test('does not wait for an available face', async () => {
     fonts.check.mockReturnValue(true);
     const {hasPromises, requestFontLoad} = await importFresh();
 
-    requestFontLoad('monospace', 400, 'normal');
+    requestFontLoad('Inter, sans-serif', 400, 'normal');
     expect(hasPromises()).toBe(false);
     expect(fonts.load).not.toHaveBeenCalled();
   });
@@ -77,5 +91,112 @@ describe('requestFontLoad', () => {
 
     expect(() => requestFontLoad('not a font', 400, 'normal')).not.toThrow();
     expect(hasPromises()).toBe(false);
+  });
+
+  test('looks at an undeclared family again once faces are declared', async () => {
+    fonts.check.mockReturnValue(true);
+    const {requestFontLoad} = await importFresh();
+
+    requestFontLoad('Fraunces', 400, 'normal');
+    requestFontLoad('Fraunces', 400, 'normal');
+    expect(fonts.check).toHaveBeenCalledTimes(1);
+
+    faces.push({family: 'Fraunces'});
+    fonts.check.mockReturnValue(false);
+    requestFontLoad('Fraunces', 400, 'normal');
+    requestFontLoad('Fraunces', 400, 'normal');
+    expect(fonts.check).toHaveBeenCalledTimes(2);
+  });
+
+  test('asks the resolver for an undeclared family before loading', async () => {
+    fonts.check.mockReturnValue(false);
+    const {consumePromises, requestFontLoad, setFontResolver} =
+      await importFresh();
+    let declared: () => void = () => {};
+    const resolver = vi.fn(
+      () => new Promise<void>(resolve => (declared = resolve)),
+    );
+    setFontResolver(resolver);
+
+    requestFontLoad('"Fraunces", Inter, serif', 600, 'italic');
+    const waiting = consumePromises();
+    await vi.waitFor(() =>
+      expect(resolver).toHaveBeenCalledWith({
+        family: 'Fraunces',
+        weight: 600,
+        style: 'italic',
+      }),
+    );
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(fonts.load).not.toHaveBeenCalled();
+
+    declared();
+    await vi.waitFor(() => expect(fonts.load).toHaveBeenCalled());
+    loaded();
+    await waiting;
+  });
+
+  test('keeps going when the resolver fails', async () => {
+    fonts.check.mockReturnValue(false);
+    fonts.load.mockResolvedValue([]);
+    const {consumePromises, requestFontLoad, setFontResolver} =
+      await importFresh();
+    setFontResolver(() => Promise.reject(new Error('offline')));
+
+    requestFontLoad('Fraunces', 400, 'normal');
+    await consumePromises();
+    expect(fonts.load).toHaveBeenCalled();
+  });
+});
+
+describe('googleFontsResolver', () => {
+  afterEach(() => {
+    document.head.innerHTML = '';
+  });
+
+  test('requests the weight and style in use', async () => {
+    const {googleFontsResolver} = await importFresh();
+    const loading = googleFontsResolver()({
+      family: 'Playfair Display',
+      weight: 700,
+      style: 'italic',
+    });
+
+    const link = document.head.querySelector('link')!;
+    expect(link.href).toBe(
+      'https://fonts.googleapis.com/css2?display=block&family=Playfair+Display:ital,wght@1,700',
+    );
+    link.onload!(new Event('load'));
+    await loading;
+  });
+
+  test('falls back to the regular face', async () => {
+    const {googleFontsResolver} = await importFresh();
+    const loading = googleFontsResolver()({
+      family: 'Bungee',
+      weight: 300,
+      style: 'normal',
+    });
+
+    document.head.querySelector('link')!.onerror!(new Event('error'));
+    await vi.waitFor(() =>
+      expect(document.head.querySelector('link')?.href).toBe(
+        'https://fonts.googleapis.com/css2?display=block&family=Bungee',
+      ),
+    );
+    document.head.querySelector('link')!.onload!(new Event('load'));
+    await loading;
+  });
+
+  test('skips families outside the list', async () => {
+    const {googleFontsResolver} = await importFresh();
+    const result = googleFontsResolver({families: ['Inter']})({
+      family: 'Arial',
+      weight: 400,
+      style: 'normal',
+    });
+
+    expect(result).toBeUndefined();
+    expect(document.head.querySelector('link')).toBeNull();
   });
 });

@@ -6,4 +6,6 @@ export * from './jsx-runtime';
 export * from './morphers';
 export * from './partials';
 export * from './scenes';
+export {googleFontsResolver, setFontResolver} from './text/fontLoading';
+export type {FontFaceRequest, FontResolver} from './text/fontLoading';
 export * from './utils';

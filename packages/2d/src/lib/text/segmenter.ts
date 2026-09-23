@@ -17,8 +17,8 @@ interface SegmenterLike {
 
 interface SegmenterCtor {
   new (
-      locale: string | undefined,
-      options: {granularity: SegmentGranularity},
+    locale: string | undefined,
+    options: {granularity: SegmentGranularity},
   ): SegmenterLike;
 }
 
@@ -26,9 +26,9 @@ interface SegmenterCtor {
 type IntlWithSegmenter = typeof Intl & {Segmenter: SegmenterCtor};
 
 const IntlSegmenter: SegmenterCtor | null =
-    typeof Intl !== 'undefined' && 'Segmenter' in Intl
-        ? ((Intl as IntlWithSegmenter).Segmenter ?? null)
-        : null;
+  typeof Intl !== 'undefined' && 'Segmenter' in Intl
+    ? ((Intl as IntlWithSegmenter).Segmenter ?? null)
+    : null;
 
 const Cache = new Map<SegmentGranularity, SegmenterLike>();
 
@@ -83,8 +83,8 @@ function fallbackSentences(input: string): Segment[] {
  * is a word-like run vs whitespace/punctuation.
  */
 export function segment(
-    input: string,
-    granularity: SegmentGranularity,
+  input: string,
+  granularity: SegmentGranularity,
 ): Segment[] {
   const s = getSegmenter(granularity);
   if (s) return Array.from(s.segment(input));
