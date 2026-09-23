@@ -5,6 +5,7 @@ import {
   linear,
   waitFor,
 } from '@motion-canvas/core';
+import 'geometry-polyfill';
 import {describe, expect, it} from 'vitest';
 import {Path} from '../Path';
 import {SVG} from '../SVG';
