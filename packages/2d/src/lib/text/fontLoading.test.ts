@@ -12,7 +12,7 @@ async function importFresh() {
 
 describe('requestFontLoad', () => {
   let loaded: () => void;
-  let faces: {family: string}[];
+  let faces: {family: string; weight?: string; style?: string}[];
   const fonts = {
     check: vi.fn(),
     load: vi.fn(),
@@ -136,6 +136,29 @@ describe('requestFontLoad', () => {
     await waiting;
   });
 
+  test('asks the resolver again for a weight its faces do not cover', async () => {
+    fonts.check.mockReturnValue(false);
+    fonts.load.mockResolvedValue([]);
+    const {consumePromises, requestFontLoad, setFontResolver} =
+      await importFresh();
+    const resolver = vi.fn(() => {
+      faces.push({family: 'Fraunces', weight: '400 500', style: 'normal'});
+    });
+    setFontResolver(resolver);
+
+    requestFontLoad('Fraunces', 450, 'normal');
+    await consumePromises();
+    expect(resolver).toHaveBeenCalledTimes(1);
+
+    requestFontLoad('Fraunces', 475.5, 'normal');
+    expect(resolver).toHaveBeenCalledTimes(1);
+
+    requestFontLoad('Fraunces', 450, 'italic');
+    requestFontLoad('Fraunces', 700, 'normal');
+    await consumePromises();
+    expect(resolver).toHaveBeenCalledTimes(3);
+  });
+
   test('keeps going when the resolver fails', async () => {
     fonts.check.mockReturnValue(false);
     fonts.load.mockResolvedValue([]);
@@ -167,6 +190,40 @@ describe('googleFontsResolver', () => {
       'https://fonts.googleapis.com/css2?display=block&family=Playfair+Display:ital,wght@1,700',
     );
     link.onload!(new Event('load'));
+    await loading;
+  });
+
+  test('requests a weight between hundreds as a range', async () => {
+    const {googleFontsResolver} = await importFresh();
+    const loading = googleFontsResolver()({
+      family: 'Inter',
+      weight: 437.5,
+      style: 'normal',
+    });
+
+    const link = document.head.querySelector('link')!;
+    expect(link.href).toBe(
+      'https://fonts.googleapis.com/css2?display=block&family=Inter:ital,wght@0,400..500',
+    );
+    link.onload!(new Event('load'));
+    await loading;
+  });
+
+  test('falls back to the nearest hundred without the range', async () => {
+    const {googleFontsResolver} = await importFresh();
+    const loading = googleFontsResolver()({
+      family: 'Lato',
+      weight: 680,
+      style: 'normal',
+    });
+
+    document.head.querySelector('link')!.onerror!(new Event('error'));
+    await vi.waitFor(() =>
+      expect(document.head.querySelector('link')?.href).toBe(
+        'https://fonts.googleapis.com/css2?display=block&family=Lato:ital,wght@0,700',
+      ),
+    );
+    document.head.querySelector('link')!.onload!(new Event('load'));
     await loading;
   });
 
