@@ -31,6 +31,7 @@ export {
 export type {ThreeConfig, ThreeModule} from './loader';
 export {
   disposeSharedRenderer,
+  getContextLossCount,
   getRendererAntialias,
   getSharedRenderer,
   setRendererAntialias,

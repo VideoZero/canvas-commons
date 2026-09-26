@@ -1,8 +1,13 @@
+import {useLogger} from '@motion-canvas/core';
 import type * as THREE from 'three';
 import {ThreeModule} from './loader';
 
 let SHARED: THREE.WebGLRenderer | null = null;
 let ANTIALIAS = true;
+/** The shared renderer's context was lost; the next render replaces it. */
+let LOST = false;
+let DISPOSING = false;
+let LOSSES = 0;
 
 /**
  * Whether new renderers are created with multisampling.
@@ -39,9 +44,35 @@ export function setRendererAntialias(enabled: boolean) {
  * can serve any number of nodes. The canvas is resized on demand.
  */
 export function getSharedRenderer(three: ThreeModule): THREE.WebGLRenderer {
+  if (SHARED && LOST) {
+    // Three.js itself only waits for `webglcontextrestored`, and until then
+    // every render returns silently — a long headless export would carry on
+    // with blank 3D frames. Build a fresh renderer (and context) instead:
+    // geometry, materials and textures are plain Three objects that
+    // re-upload to whichever renderer draws them. If no new context can be
+    // created, the constructor throws and the frame fails loudly.
+    disposeSharedRenderer();
+    useLogger().warn({
+      message: `WebGL context lost; rebuilt the shared 3D renderer (${LOSSES} loss${LOSSES === 1 ? '' : 'es'} so far).`,
+    });
+  }
   if (!SHARED) {
+    const canvas = document.createElement('canvas');
+    canvas.addEventListener(
+      'webglcontextlost',
+      event => {
+        // Only a loss we did not cause, on the renderer still in use.
+        if (DISPOSING || SHARED?.domElement !== canvas) {
+          return;
+        }
+        event.preventDefault();
+        LOST = true;
+        LOSSES++;
+      },
+      false,
+    );
     SHARED = new three.WebGLRenderer({
-      canvas: document.createElement('canvas'),
+      canvas,
       antialias: ANTIALIAS,
       alpha: true,
       premultipliedAlpha: true,
@@ -60,10 +91,26 @@ export function getSharedRenderer(three: ThreeModule): THREE.WebGLRenderer {
  */
 export function disposeSharedRenderer() {
   if (SHARED) {
-    SHARED.dispose();
-    SHARED.forceContextLoss();
-    SHARED = null;
+    DISPOSING = true;
+    try {
+      SHARED.dispose();
+      if (!LOST) {
+        SHARED.forceContextLoss();
+      }
+    } finally {
+      DISPOSING = false;
+      SHARED = null;
+      LOST = false;
+    }
   }
+}
+
+/**
+ * How many times the shared renderer's WebGL context has been lost (and
+ * rebuilt on the next render) since the page loaded.
+ */
+export function getContextLossCount(): number {
+  return LOSSES;
 }
 
 // When this module is hot-replaced during development the next version
