@@ -436,11 +436,13 @@ export class Mesh3D extends Object3DNode {
   private surfaceTexture: THREE.CanvasTexture | null = null;
   private surfaceTextureSize = new Vector2();
   private surfaceView: View2D | null = null;
-  private readonly scene2D: Scene;
+  // Not `scene2D`: that is Node's own private field, and redeclaring it
+  // makes Mesh3D unassignable to Node (not a valid JSX element).
+  private readonly surfaceScene: Scene;
 
   public constructor(props?: Mesh3DProps) {
     super(props ?? {});
-    this.scene2D = useScene();
+    this.surfaceScene = useScene();
   }
 
   protected override acceptsContent(): boolean {
@@ -801,7 +803,7 @@ export class Mesh3D extends Object3DNode {
       const real = super.view();
       // Node construction needs the scene context, which is not active
       // during rendering.
-      startScene(this.scene2D);
+      startScene(this.surfaceScene);
       try {
         this.surfaceView = new View2D({
           assetHash: real.assetHash(),
@@ -822,7 +824,7 @@ export class Mesh3D extends Object3DNode {
           .playbackState(() => real.playbackState())
           .globalTime(() => real.globalTime());
       } finally {
-        endScene(this.scene2D);
+        endScene(this.surfaceScene);
       }
     }
     return this.surfaceView;
