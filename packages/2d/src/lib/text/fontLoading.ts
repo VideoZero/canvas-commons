@@ -64,17 +64,20 @@ export function setFontResolver(resolver: FontResolver | null) {
  * Google Fonts does not serve, like a system font, costs a few failed requests
  * per face; pass `families` to request only the ones that it serves.
  *
- * @param options - The families to request; every undeclared family if omitted.
+ * @param options - The families to request, every undeclared family if
+ * omitted, and the `css2` endpoint to request them from, for a proxy in front
+ * of Google Fonts; `https://fonts.googleapis.com/css2` if omitted.
  */
 export function googleFontsResolver(
-  options: {families?: string[]} = {},
+  options: {families?: string[]; baseUrl?: string} = {},
 ): FontResolver {
+  const endpoint = options.baseUrl ?? 'https://fonts.googleapis.com/css2';
   return ({family, weight, style}) => {
     if (options.families && !options.families.includes(family)) return;
 
     const name = encodeURIComponent(family).replace(/%20/g, '+');
     const italic = style === 'normal' ? 0 : 1;
-    const base = `https://fonts.googleapis.com/css2?display=block&family=${name}`;
+    const base = `${endpoint}?display=block&family=${name}`;
     // Google Fonts rejects fractional weights and ranges that reach past the
     // axis of the family, whose bounds are hundreds for its variable fonts.
     const value = Math.min(Math.max(cssWeight(weight), 1), 1000);

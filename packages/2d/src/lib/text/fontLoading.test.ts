@@ -193,6 +193,20 @@ describe('googleFontsResolver', () => {
     await loading;
   });
 
+  test('requests from a proxy when given a base URL', async () => {
+    const {googleFontsResolver} = await importFresh();
+    const loading = googleFontsResolver({
+      baseUrl: 'https://engine.example/fonts/css2',
+    })({family: 'Lato', weight: 400, style: 'normal'});
+
+    const link = document.head.querySelector('link')!;
+    expect(link.href).toBe(
+      'https://engine.example/fonts/css2?display=block&family=Lato:ital,wght@0,400',
+    );
+    link.onload!(new Event('load'));
+    await loading;
+  });
+
   test('requests a weight between hundreds as a range', async () => {
     const {googleFontsResolver} = await importFresh();
     const loading = googleFontsResolver()({
