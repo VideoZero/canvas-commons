@@ -1,7 +1,6 @@
 import {
   BBox,
   DependencyContext,
-  DetailedError,
   PlaybackState,
   SerializedVector2,
   SignalValue,
@@ -191,26 +190,23 @@ export class Video extends Rect {
 
     if (video.readyState < 2) {
       DependencyContext.collectPromise(
-        new Promise<void>((resolve, reject) => {
-          // A video that fails to load settles the wait too, or the scene
-          // would wait for it forever.
-          const failed = () =>
-            new DetailedError({
-              message: `Failed to load a video`,
-              remarks: `\
-The <code>src</code> property was set to:
-<pre><code>${src}</code></pre>
-Make sure that source is correct and that the video exists.`,
-              inspect: this.key,
-            });
+        new Promise<void>(resolve => {
+          // A video that fails to load (one still being uploaded or
+          // generated) settles the wait too: the scene plays on with it blank,
+          // where waiting would hold it forever and failing would lose the
+          // whole scene. It isn't pooled, so the next load asks for it again.
+          const failed = () => {
+            console.warn(`[Video] failed to load ${src}; drawn blank`);
+            resolve();
+          };
           if (video.error) {
-            reject(failed());
+            failed();
             return;
           }
           const settle = (event: Event) => {
             video.removeEventListener('canplay', settle);
             video.removeEventListener('error', settle);
-            if (event.type === 'error') reject(failed());
+            if (event.type === 'error') failed();
             else resolve();
           };
           video.addEventListener('canplay', settle);

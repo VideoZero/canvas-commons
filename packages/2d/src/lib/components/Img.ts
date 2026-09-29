@@ -2,7 +2,6 @@ import {
   BBox,
   Color,
   DependencyContext,
-  DetailedError,
   PossibleVector2,
   SerializedVector2,
   SignalValue,
@@ -193,24 +192,20 @@ export class Img extends Rect {
 
     if (!image.complete) {
       DependencyContext.collectPromise(
-        new Promise((resolve, reject) => {
-          image.addEventListener('load', resolve);
-          image.addEventListener('error', () =>
-            reject(
-              new DetailedError({
-                message: `Failed to load an image`,
-                remarks: `\
-The <code>src</code> property was set to:
-<pre><code>${rawSrc}</code></pre>
-...which resolved to the following url:
-<pre><code>${src}</code></pre>
-Make sure that source is correct and that the image exists.<br/>
-<a target='_blank' href='https://motioncanvas.io/docs/media#images'>Learn more</a>
-about working with images.`,
-                inspect: this.key,
-              }),
-            ),
-          );
+        new Promise<void>(resolve => {
+          // An image that fails to load (one still being uploaded or
+          // generated) settles the wait too: the scene plays on with it blank
+          // instead of failing. It isn't pooled, so the next load asks again.
+          const settle = (event: Event) => {
+            image.removeEventListener('load', settle);
+            image.removeEventListener('error', settle);
+            if (event.type === 'error') {
+              console.warn(`[Img] failed to load ${src}; drawn blank`);
+            }
+            resolve();
+          };
+          image.addEventListener('load', settle);
+          image.addEventListener('error', settle);
         }),
       );
     }
@@ -237,7 +232,8 @@ about working with images.`,
     context.canvas.width = image.naturalWidth;
     context.canvas.height = image.naturalHeight;
     context.imageSmoothingEnabled = this.smoothing();
-    context.drawImage(image, 0, 0);
+    // A broken image (it failed to load) can't be drawn: left empty.
+    if (image.naturalWidth > 0) context.drawImage(image, 0, 0);
 
     return context;
   }
