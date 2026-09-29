@@ -181,6 +181,12 @@ export class Img extends Rect {
     if (!image) {
       image = document.createElement('img');
       image.crossOrigin = 'anonymous';
+      // Pool only what loads: an image that doesn't exist yet (still being
+      // uploaded or generated) is asked for again by the next project load.
+      const created = image;
+      created.addEventListener('error', () => {
+        if (Img.pool[key] === created) delete Img.pool[key];
+      });
       image.src = src;
       Img.pool[key] = image;
     }

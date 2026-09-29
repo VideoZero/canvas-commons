@@ -1,6 +1,7 @@
 import {
   BBox,
   DependencyContext,
+  DetailedError,
   PlaybackState,
   SerializedVector2,
   SignalValue,
@@ -178,18 +179,42 @@ export class Video extends Rect {
     if (!video) {
       video = document.createElement('video');
       video.crossOrigin = 'anonymous';
+      // Pool only what loads: a video that doesn't exist yet (still being
+      // uploaded or generated) is asked for again by the next project load.
+      const created = video;
+      created.addEventListener('error', () => {
+        if (Video.pool[key] === created) delete Video.pool[key];
+      });
       video.src = src;
       Video.pool[key] = video;
     }
 
     if (video.readyState < 2) {
       DependencyContext.collectPromise(
-        new Promise<void>(resolve => {
-          const listener = () => {
-            resolve();
-            video.removeEventListener('canplay', listener);
+        new Promise<void>((resolve, reject) => {
+          // A video that fails to load settles the wait too, or the scene
+          // would wait for it forever.
+          const failed = () =>
+            new DetailedError({
+              message: `Failed to load a video`,
+              remarks: `\
+The <code>src</code> property was set to:
+<pre><code>${src}</code></pre>
+Make sure that source is correct and that the video exists.`,
+              inspect: this.key,
+            });
+          if (video.error) {
+            reject(failed());
+            return;
+          }
+          const settle = (event: Event) => {
+            video.removeEventListener('canplay', settle);
+            video.removeEventListener('error', settle);
+            if (event.type === 'error') reject(failed());
+            else resolve();
           };
-          video.addEventListener('canplay', listener);
+          video.addEventListener('canplay', settle);
+          video.addEventListener('error', settle);
         }),
       );
     }
