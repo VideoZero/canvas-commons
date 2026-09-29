@@ -47,6 +47,11 @@ export interface VideoProps extends RectProps {
 @nodeName('Video')
 export class Video extends Rect {
   private static readonly pool: Record<string, HTMLVideoElement> = {};
+  /**
+   * Sources whose last load failed, until one loads: their duration is
+   * unknown, so timing that depends on it isn't final yet.
+   */
+  public static readonly unavailable = new Set<string>();
 
   /**
    * The source of this video.
@@ -183,7 +188,11 @@ export class Video extends Rect {
       const created = video;
       created.addEventListener('error', () => {
         if (Video.pool[key] === created) delete Video.pool[key];
+        Video.unavailable.add(src);
       });
+      created.addEventListener('loadedmetadata', () =>
+        Video.unavailable.delete(src),
+      );
       video.src = src;
       Video.pool[key] = video;
     }
