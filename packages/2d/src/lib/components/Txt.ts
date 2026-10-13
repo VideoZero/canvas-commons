@@ -265,11 +265,12 @@ export class Txt extends Shape {
   }
 
   protected setText(value: SignalValue<string>) {
-    // Empty text draws nothing: count the node as shown once it gets text.
+    // New text is new content: count the node as shown from now on (empty
+    // text draws nothing, and a swap is usually followed by an entrance).
     if (
       Node.warnVisibleBeforeEntrance &&
       this.parent() &&
-      !this.innerText().trim()
+      (typeof value === 'function' ? value() : value) !== this.text()
     ) {
       Node.markAttached(this);
     }

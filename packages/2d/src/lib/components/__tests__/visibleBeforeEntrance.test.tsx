@@ -144,16 +144,46 @@ describe('Node.warnVisibleBeforeEntrance', () => {
     });
   });
 
-  it('warns for a first fade-in of a visible node', () => {
+  it('ignores fades from a deliberate dim', () => {
     const node = (<Node opacity={0.2} />) as Node;
     play(function* () {
       view().add(node);
       yield* waitFor(1);
       yield* node.opacity(1, 0.5);
     });
-    expect(warn.mock.calls[0][0].message).toBe(
-      'Node is already visible when its opacity(1) fade-in starts at 1.0s (added at 0.0s).',
-    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('ignores fades of a node hidden by scale', () => {
+    const node = (<Node scale={0} />) as Node;
+    play(function* () {
+      view().add(node);
+      yield* waitFor(1);
+      yield* all(node.scale(1, 0.4), node.opacity(1, 0.4));
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('accepts an entrance right after the text was swapped', () => {
+    const txt = (<Txt opacity={0}>A</Txt>) as Txt;
+    play(function* () {
+      view().add(txt);
+      yield* txt.fadeUp();
+      yield* waitFor(1);
+      txt.text('B');
+      yield* txt.typewriter();
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('labels nodes by their own node name or class name', () => {
+    class Img2 extends Node {}
+    class Transform3D extends Node {}
+    const label = (node: Node) => (node as any).warningLabel();
+    expect(label(new Img2({}))).toBe('Img');
+    expect(label(new Transform3D({}))).toBe('Transform3D');
+    expect(label((<Node />) as Node)).toBe('Node');
+    expect(label((<Txt>Hi</Txt>) as Txt)).toBe('Txt "Hi"');
   });
 
   it('ignores later and instant opacity changes', () => {

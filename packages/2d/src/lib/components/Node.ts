@@ -438,16 +438,25 @@ export class Node implements Promisable<Node> {
       Node.tweenedOpacity.add(this);
       const from = this.opacity();
       const to = clamp(0, 1, unwrap(value));
-      const via = `opacity(${+to.toFixed(2)}) fade-in`;
-      if (time > 0 && from >= 0.05 && to > from + 0.01) {
-        this.warnVisibleBeforeEntrance(via);
-      } else if (
+      // The scale along the way up (rotation doesn't matter for a zero test).
+      let scale = this.scale();
+      for (let node = this.parent(); node; node = node.parent()) {
+        scale = scale.mul(node.scale());
+      }
+      // A fade to the opacity the node never left. Partial opacities are
+      // deliberate dims, and a node at scale 0 is hidden another way.
+      if (
         time > 0 &&
         to >= 0.99 &&
         Math.abs(to - from) < 0.01 &&
-        this.opacity.context.isInitial()
+        this.opacity.context.isInitial() &&
+        Math.abs(scale.x) > 1e-3 &&
+        Math.abs(scale.y) > 1e-3
       ) {
-        this.warnVisibleBeforeEntrance(via, ', so the fade does nothing');
+        this.warnVisibleBeforeEntrance(
+          `opacity(${+to.toFixed(2)}) fade-in`,
+          ', so the fade does nothing',
+        );
       }
     }
     yield* this.opacity.context.tweener(
@@ -463,8 +472,17 @@ export class Node implements Promisable<Node> {
    */
   protected warningLabel(): string {
     // Not every component declares a @nodeName (Icon, SVG, Latex, ...), so the
-    // inherited one can be a base class; decorated classes are renamed `_Name`.
-    return this.constructor.name.replace(/^_/, '') || this[NODE_NAME];
+    // inherited one can be a base class. Without one, use the class name:
+    // decorated classes are renamed `_Name`, and bundlers append a digit
+    // (`Img2`).
+    const prototype = Object.getPrototypeOf(this);
+    if (Object.prototype.hasOwnProperty.call(prototype, NODE_NAME)) {
+      return this[NODE_NAME];
+    }
+    return (
+      this.constructor.name.replace(/^_/, '').replace(/\d+$/, '') ||
+      this[NODE_NAME]
+    );
   }
 
   /** Record that `node` appears on screen from now on (validation only). */
