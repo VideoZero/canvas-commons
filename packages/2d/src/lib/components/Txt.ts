@@ -1,5 +1,6 @@
 import {
   DEFAULT,
+  DependencyContext,
   InterpolationFunction,
   SignalValue,
   SimpleSignal,
@@ -16,8 +17,9 @@ import {
   tween,
 } from '@motion-canvas/core';
 import {computed, initial, nodeName, signal} from '../decorators';
-import {fontRegistry} from '../text/fontRegistry';
+import {fontRegistry, resolveFontFamily} from '../text/fontRegistry';
 import {is} from '../utils';
+import {Layout} from './Layout';
 import {Node} from './Node';
 import {Shape, ShapeProps} from './Shape';
 import {TxtChar, TxtLeaf} from './TxtLeaf';
@@ -26,9 +28,27 @@ import {ComponentChildren} from './types';
 type TxtChildren = string | Node | (string | Node)[];
 type AnyTxt = Txt | TxtLeaf;
 
+/**
+ * Which part of the text is centered on the node's position.
+ *
+ * - `'line'` - the CSS line box (font ascent + descent). Fonts with uneven
+ *   metrics make the glyphs sit visibly high or low.
+ * - `'cap'` - the band from cap height to baseline. Depends only on the font,
+ *   so it stays put while the text changes.
+ * - `'ink'` - the glyphs actually drawn, measured for the current text. Use it
+ *   for numbers in fonts with old-style figures; it moves when the text does.
+ */
+export type TextCenter = 'line' | 'cap' | 'ink';
+
+// Scripts that have capital letters to measure; other text centers on its ink.
+const CapScripts = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}0-9]/u;
+
+let measureContext: CanvasRenderingContext2D | null = null;
+
 export interface TxtProps extends ShapeProps {
   children?: TxtChildren;
   text?: SignalValue<string>;
+  textCenter?: SignalValue<TextCenter | null>;
 }
 
 @nodeName('Txt')
@@ -98,6 +118,119 @@ export class Txt extends Shape {
   @initial('round')
   @signal()
   public declare readonly lineJoin: SimpleSignal<CanvasLineJoin, this>;
+
+  /**
+   * Default for {@link textCenter} on text nodes that don't set it.
+   *
+   * @remarks
+   * Set to `'line'` to restore the original Motion Canvas placement:
+   * ```ts
+   * Txt.defaultTextCenter = 'line';
+   * ```
+   */
+  public static defaultTextCenter: TextCenter = 'cap';
+
+  /**
+   * Which part of the text is centered on the node's position.
+   *
+   * @remarks
+   * Only the drawn glyphs move: the layout box keeps its size, so stacks and
+   * paddings are unaffected. Nested text follows the outermost `Txt`, and
+   * baseline-aligned siblings (`alignItems`/`alignSelf: 'baseline'`) all move
+   * with the largest of them, so their baselines stay aligned.
+   * See {@link TextCenter} for the modes; `null` uses
+   * {@link Txt.defaultTextCenter}.
+   */
+  @initial(null)
+  @signal()
+  public declare readonly textCenter: SimpleSignal<TextCenter | null, this>;
+
+  /**
+   * The vertical offset added to the glyphs to apply {@link textCenter}, in
+   * local pixels.
+   */
+  @computed()
+  public textCenterOffset(): number {
+    const parentTxt = this.parentTxt();
+    if (parentTxt) {
+      return parentTxt.textCenterOffset();
+    }
+
+    if (this.isBaselineAligned()) {
+      // Baseline-aligned siblings share one offset so their baselines stay
+      // aligned: the one of the largest text, which dominates the row.
+      let leader: Txt = this;
+      for (const sibling of this.parent()!.children()) {
+        if (
+          sibling instanceof Txt &&
+          sibling.isBaselineAligned() &&
+          sibling.fontSize() > leader.fontSize()
+        ) {
+          leader = sibling;
+        }
+      }
+      return leader.ownTextCenterOffset();
+    }
+
+    return this.ownTextCenterOffset();
+  }
+
+  @computed()
+  protected ownTextCenterOffset(): number {
+    let mode = this.textCenter() ?? Txt.defaultTextCenter;
+    if (mode === 'line') {
+      return 0;
+    }
+
+    const text = this.text().replace(/\\n|\s+/g, ' ');
+    if (mode === 'cap' && !CapScripts.test(text)) {
+      mode = 'ink';
+    }
+
+    const font = `${this.fontStyle()} ${this.fontWeight()} ${this.fontSize()}px ${resolveFontFamily(this.fontFamily())}`;
+    if (typeof document === 'undefined') return 0;
+    measureContext ??= document.createElement('canvas').getContext('2d');
+    if (!measureContext) return 0;
+    try {
+      if (document.fonts && !document.fonts.check(font)) {
+        DependencyContext.collectPromise(document.fonts.load(font));
+      }
+    } catch {
+      // An invalid shorthand; the browser ignores it as well.
+    }
+    measureContext.font = font;
+
+    let metrics = measureContext.measureText(mode === 'ink' ? text : 'H');
+    if (
+      mode === 'ink' &&
+      metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent <= 0
+    ) {
+      metrics = measureContext.measureText('H');
+    }
+    const ascent = metrics.actualBoundingBoxAscent;
+    const descent = mode === 'cap' ? 0 : metrics.actualBoundingBoxDescent;
+    // The line box is centered on (fontAscent - fontDescent) / 2 above the
+    // baseline whatever the line height and line count; move the glyphs so
+    // that the chosen band is centered there instead.
+    const offset =
+      (ascent -
+        descent -
+        metrics.fontBoundingBoxAscent +
+        metrics.fontBoundingBoxDescent) /
+      2;
+    return Number.isFinite(offset) ? offset : 0;
+  }
+
+  private isBaselineAligned() {
+    const alignSelf = this.alignSelf() as string;
+    if (alignSelf === 'baseline') return true;
+    const parent = this.parent();
+    return (
+      alignSelf === 'auto' &&
+      parent instanceof Layout &&
+      parent.alignItems() === 'baseline'
+    );
+  }
 
   protected getText(): string {
     if (this.splitOriginalText !== null) {

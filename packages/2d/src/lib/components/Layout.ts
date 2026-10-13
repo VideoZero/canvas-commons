@@ -24,9 +24,11 @@ import {
   originToOffset,
   threadable,
   tween,
+  useLogger,
 } from '@motion-canvas/core';
 
 import {
+  NODE_NAME,
   Vector2LengthSignal,
   addInitializer,
   cloneable,
@@ -225,6 +227,20 @@ export type LayoutAnimateCallback = (
 
 @nodeName('Layout')
 export class Layout extends Node {
+  /**
+   * Warn when `x`, `y` or `position` is set on a node whose position comes
+   * from its layout parent, where the value is silently ignored.
+   *
+   * @remarks
+   * Off by default. Meant for validation runs:
+   * ```ts
+   * Layout.warnIgnoredPosition = true;
+   * ```
+   */
+  public static warnIgnoredPosition = false;
+
+  private static readonly warnedIgnoredPosition = new WeakSet<Layout>();
+
   @initial(null)
   @interpolation(boolLerp)
   @signal()
@@ -324,6 +340,7 @@ export class Layout extends Node {
       return this.x.context.getter();
     }
 
+    if (Layout.warnIgnoredPosition) this.warnIgnoredPosition();
     return this.computedPosition().x;
   }
   protected setX(value: SignalValue<number>) {
@@ -335,10 +352,33 @@ export class Layout extends Node {
       return this.y.context.getter();
     }
 
+    if (Layout.warnIgnoredPosition) this.warnIgnoredPosition();
     return this.computedPosition().y;
   }
   protected setY(value: SignalValue<number>) {
     this.y.context.setter(value);
+  }
+
+  private warnIgnoredPosition() {
+    if (
+      Layout.warnedIgnoredPosition.has(this) ||
+      (this.x.context.isInitial() && this.y.context.isInitial())
+    ) {
+      return;
+    }
+    Layout.warnedIgnoredPosition.add(this);
+    // Some nodes (Txt) are always laid out, so `layout={false}` can't free them.
+    const free =
+      this.layout.context.raw() === false
+        ? 'wrap it in a <code>&lt;Node&gt;</code> to position it freely'
+        : 'set <code>layout={false}</code> on it to position it freely';
+    useLogger().warn({
+      message: `${this[NODE_NAME]} is positioned by its layout parent, so its x/y/position is ignored.`,
+      remarks:
+        "Use the parent's <code>alignItems</code>/<code>justifyContent</code>, " +
+        `<code>margin</code> or <code>padding</code> to move it, or ${free}.`,
+      inspect: this.key,
+    });
   }
 
   /**
