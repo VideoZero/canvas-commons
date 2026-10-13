@@ -1,4 +1,5 @@
 import {afterAll, afterEach, beforeAll, describe, expect, it, vi} from 'vitest';
+import {roundPx} from '../../utils';
 import {Txt} from '../Txt';
 import {TxtLeaf} from '../TxtLeaf';
 import {mockScene2D} from './mockScene2D';
@@ -29,6 +30,8 @@ const KERN: Record<string, number> = {AV: 3};
 // joined forms of a cursive script.
 const CELL: Record<string, number> = {Q: 2, ب: 6};
 const STANDALONE: Record<string, number> = {ب: 18};
+// Glyphs whose DOM box sits slightly lower, like a fallback font's.
+const SHIFT: Record<string, number> = {F: 1.5};
 let wrapAt = Infinity;
 
 function spacingOf(node: Node) {
@@ -36,7 +39,14 @@ function spacingOf(node: Node) {
   return parseFloat((el as HTMLElement | null)?.style.letterSpacing ?? '') || 0;
 }
 
-/** Character boxes of an element's text, laid out as described above. */
+const Hebrew = /[\u0590-\u05ff]/;
+
+/**
+ * Character boxes of an element's text, laid out as described above. Runs of
+ * Hebrew (with the spaces between their words) are laid out right to left
+ * within each line, like the bidi algorithm does: the boxes keep their
+ * logical order, but the first one of a run is its rightmost.
+ */
 function layoutOf(el: Element) {
   const text = el.textContent ?? '';
   const spacing = spacingOf(el);
@@ -46,8 +56,35 @@ function layoutOf(el: Element) {
     if (i === wrapAt) x = 0;
     const cell =
       (CELL[text[i]] ?? ADV) - (KERN[text[i] + (text[i + 1] ?? '')] ?? 0);
-    boxes.push({left: x, top: i >= wrapAt ? HEIGHT : 0, width: cell + spacing});
+    boxes.push({
+      left: x,
+      top: (i >= wrapAt ? HEIGHT : 0) + (SHIFT[text[i]] ?? 0),
+      width: cell + spacing,
+    });
     x += cell + spacing;
+  }
+  const rtl = (i: number) =>
+    Hebrew.test(text[i]) ||
+    (text[i] === ' ' &&
+      i - 1 >= 0 &&
+      i + 1 < text.length &&
+      i !== wrapAt &&
+      i + 1 !== wrapAt &&
+      Hebrew.test(text[i - 1]) &&
+      Hebrew.test(text[i + 1]));
+  for (let start = 0; start < text.length; start++) {
+    if (!rtl(start)) continue;
+    let end = start;
+    while (end + 1 < text.length && rtl(end + 1)) {
+      if (end + 1 === wrapAt) break;
+      end++;
+    }
+    const from = boxes[start].left;
+    const to = boxes[end].left + boxes[end].width;
+    for (let i = start; i <= end; i++) {
+      boxes[i].left = from + to - (boxes[i].left + boxes[i].width);
+    }
+    start = end;
   }
   return boxes;
 }
@@ -114,11 +151,13 @@ function recordingContext() {
     letterSpacing: string;
     textAlign: string;
     textBaseline: string;
+    direction: string;
   }[] = [];
   const ctx: any = {
     calls,
     font: '',
     letterSpacing: '0px',
+    direction: 'inherit',
     textAlign: 'start',
     textBaseline: 'alphabetic',
     save() {},
@@ -140,6 +179,7 @@ function recordingContext() {
         letterSpacing: ctx.letterSpacing,
         textAlign: ctx.textAlign,
         textBaseline: ctx.textBaseline,
+        direction: ctx.direction,
       });
     },
   };
@@ -202,10 +242,24 @@ describe('Txt letterSpacing', () => {
     vi.restoreAllMocks();
   });
 
+  /**
+   * jsdom's computed styles are a snapshot taken when the node is created;
+   * pin the values a browser would compute (white-space, direction).
+   */
+  function pinStyles(leaf: TxtLeaf, styles: Record<string, string>) {
+    for (const [key, value] of Object.entries(styles)) {
+      Object.defineProperty((leaf as any).styles, key, {
+        value,
+        configurable: true,
+      });
+    }
+  }
+
   function leafOf(
     spacing: number,
     text = 'AB',
     props: Record<string, any> = {},
+    styles: Record<string, string> = {},
   ) {
     const txt = (
       <Txt
@@ -221,6 +275,7 @@ describe('Txt letterSpacing', () => {
     txt.smooth = false;
     txt.disableSmooth();
     const leaf = txt.childAs<TxtLeaf>(0)!;
+    pinStyles(leaf, styles);
     // The leaf's size comes from the (faked) DOM box.
     leaf.size();
     return {txt, leaf};
@@ -391,5 +446,259 @@ describe('Txt letterSpacing', () => {
     txt.letterSpacing(10);
     // Box 40 wide: B's cell is [0, 20], glyph [5, 15].
     expect(txt.chars[1].x()).toBeCloseTo(10);
+  });
+  describe('right-to-left text', () => {
+    function leafWithDirection(
+      text: string,
+      direction: string,
+      spacing = 0,
+      props: Record<string, any> = {textWrap: true},
+      styles: Record<string, string> = {},
+    ) {
+      const txt = (
+        <Txt letterSpacing={spacing} fontSize={FONT_SIZE} {...props}>
+          <TxtLeaf text={text} textDirection={direction as CanvasDirection} />
+        </Txt>
+      ) as Txt;
+      txt.smooth = false;
+      txt.disableSmooth();
+      const leaf = txt.childAs<TxtLeaf>(0)!;
+      pinStyles(leaf, styles);
+      leaf.size();
+      return {txt, leaf};
+    }
+
+    const runs = (leaf: TxtLeaf) => drawn(leaf).map(c => [c.text, c.x]);
+
+    it('draws RTL runs from their right edge, not their first character', () => {
+      // Box: 30 wide, from -15. Visually ג [-15, -5], ב [-5, 5], א [5, 15].
+      const {leaf} = leafOf(0, 'אבג');
+      const calls = drawn(leaf);
+      expect(calls.map(c => [c.text, c.x])).toEqual([['אבג', 15]]);
+      expect(calls[0].textAlign).toBe('right');
+      expect(calls[0].direction).toBe('rtl');
+    });
+
+    it('keeps plain LTR lines a single left-aligned run', () => {
+      const [call] = drawn(leafOf(0, 'AB CD').leaf);
+      expect([call.text, call.x]).toEqual(['AB CD', -25]);
+      expect(call.textAlign).toBe('left');
+      expect(call.direction).toBe('ltr');
+    });
+
+    it('anchors every wrapped line at its own edge', () => {
+      wrapAt = 2;
+      // Box: 20 x 24, from (-10, -12).
+      expect(runs(leafOf(0, 'אבגד').leaf)).toEqual([
+        ['אב', 10],
+        ['גד', 10],
+      ]);
+    });
+
+    it('leaves whitespace at the end of a wrapped line out', () => {
+      // "אב " | "גד": the space hangs at the end of the first line.
+      wrapAt = 3;
+      expect(runs(leafOf(0, 'אב גד').leaf)).toEqual([
+        ['אב', 5],
+        ['גד', 5],
+      ]);
+    });
+
+    it('draws mixed-direction lines as visual runs', () => {
+      // "אב AB": visually ב [-25, -15], א [-15, -5], space, A [5, 15], B.
+      const calls = drawn(leafOf(0, 'אב AB').leaf);
+      expect(calls.map(c => [c.text, c.x, c.direction])).toEqual([
+        ['אב', -5, 'rtl'],
+        ['AB', 5, 'ltr'],
+      ]);
+    });
+
+    it('keeps the letter-spacing offset', () => {
+      // Cells of 16, box from -16: the run ends half a spacing past the box.
+      const {leaf} = leafOf(6, 'אב');
+      const [call] = drawn(leaf);
+      expect(call.x).toBe(19);
+      expect(call.letterSpacing).toBe('6px');
+    });
+
+    it('anchors an RTL paragraph at its right edge', () => {
+      const {leaf} = leafWithDirection('אבג', 'rtl');
+      const [call] = drawn(leaf);
+      expect([call.text, call.x]).toEqual(['אבג', 15]);
+      expect(call.textAlign).toBe('right');
+      expect(call.direction).toBe('rtl');
+      // Laid out in that direction before anything measures it.
+      expect((leaf as any).element.dir).toBe('rtl');
+    });
+
+    it('offsets an RTL paragraph by the letter spacing', () => {
+      const {leaf} = leafWithDirection('אב', 'rtl', 6);
+      const [call] = drawn(leaf);
+      expect([call.x, call.textAlign, call.letterSpacing]).toEqual([
+        19,
+        'right',
+        '6px',
+      ]);
+    });
+
+    it('draws nowrap and pre text node by node in the paragraph direction', () => {
+      const nowrap = leafWithDirection(
+        'אבג',
+        'rtl',
+        0,
+        {textWrap: false},
+        {whiteSpace: 'nowrap'},
+      );
+      expect(drawn(nowrap.leaf).map(c => [c.text, c.x, c.textAlign])).toEqual([
+        ['אבג', 15, 'right'],
+      ]);
+      const ltr = leafWithDirection(
+        'אבג',
+        'ltr',
+        0,
+        {textWrap: false},
+        {whiteSpace: 'nowrap'},
+      );
+      expect(drawn(ltr.leaf).map(c => [c.text, c.x, c.textAlign])).toEqual([
+        ['אבג', -15, 'left'],
+      ]);
+      wrapAt = 3;
+      const pre = leafWithDirection(
+        'אב\nגד',
+        'rtl',
+        0,
+        {textWrap: 'pre'},
+        {whiteSpace: 'pre'},
+      );
+      expect(runs(pre.leaf)).toEqual([
+        ['אב\n', 15],
+        ['גד\n', 15],
+      ]);
+    });
+
+    it("resolves 'inherit' from the computed direction", () => {
+      // Box: 20 wide, from -10; an RTL paragraph anchors at the right edge.
+      const rtl = leafWithDirection('אב', 'inherit', 0, undefined, {
+        direction: 'rtl',
+      });
+      expect(drawn(rtl.leaf).map(c => [c.x, c.textAlign])).toEqual([
+        [10, 'right'],
+      ]);
+      // Plain LTR text in an LTR paragraph stays a single left-aligned run.
+      const ltr = leafWithDirection('AB', 'inherit', 0, undefined, {
+        direction: 'ltr',
+      });
+      expect(drawn(ltr.leaf).map(c => [c.x, c.textAlign])).toEqual([
+        [-10, 'left'],
+      ]);
+      // LTR text in an RTL paragraph: an LTR run, at its left edge.
+      const mixed = leafWithDirection('AB', 'inherit', 0, undefined, {
+        direction: 'rtl',
+      });
+      expect(drawn(mixed.leaf).map(c => [c.x, c.direction])).toEqual([
+        [-10, 'ltr'],
+      ]);
+    });
+
+    it('follows the Txt textDirection unless the leaf has its own', () => {
+      const txt = (
+        <Txt textWrap fontSize={FONT_SIZE} textDirection="rtl">
+          <TxtLeaf text="אבג" />
+          <TxtLeaf text="AB" textDirection="ltr" />
+          <Txt>
+            <TxtLeaf text="גד" />
+          </Txt>
+        </Txt>
+      ) as Txt;
+      txt.disableSmooth();
+      const [follows, own] = [0, 1].map(i => txt.childAs<TxtLeaf>(i)!);
+      const nested = txt.childAs<Txt>(2)!.childAs<TxtLeaf>(0)!;
+      expect(follows.textDirection()).toBe('rtl');
+      expect(own.textDirection()).toBe('ltr');
+      expect(nested.textDirection()).toBe('rtl');
+      follows.size();
+      own.size();
+      expect((txt as any).element.style.direction).toBe('rtl');
+      expect((follows as any).element.dir).toBe('rtl');
+      const [call] = drawn(follows);
+      expect([call.text, call.x, call.textAlign]).toEqual(['אבג', 15, 'right']);
+      expect(drawn(own)[0].textAlign).toBe('left');
+      // Without a textDirection, nothing changes.
+      const plain = leafOf(0, 'אבג');
+      expect(plain.leaf.textDirection()).toBe('ltr');
+      expect((plain.txt as any).element.style.direction).toBe('ltr');
+    });
+
+    it('places split chars on their visual cells, like the unsplit line', () => {
+      for (const direction of ['ltr', 'rtl']) {
+        const {txt} = leafWithDirection('אבג', direction);
+        txt.split();
+        expect(txt.chars.map(c => c.x())).toEqual([10, 0, -10]);
+      }
+      const {txt} = leafOf(6, 'אב');
+      txt.split();
+      // Cells: ב [-16, 0], א [0, 16]; glyphs centred on their advance.
+      expect(txt.chars.map(c => c.x())).toEqual([3 + ADV / 2, -13 + ADV / 2]);
+    });
+  });
+
+  describe('whitespace and lines', () => {
+    const runs = (leaf: TxtLeaf) => drawn(leaf).map(c => [c.text, c.x]);
+
+    it('keeps pre-wrap leading and interior spaces where the DOM has them', () => {
+      // "  A  B": 60 wide, from -30; "A" starts at -10.
+      const {leaf} = leafOf(
+        0,
+        '  A  B',
+        {textWrap: 'pre-wrap'},
+        {whiteSpace: 'pre-wrap'},
+      );
+      expect(runs(leaf)).toEqual([['A  B', -10]]);
+    });
+
+    it('collapses whitespace in the collapsing modes', () => {
+      const {leaf} = leafOf(0, 'A  B');
+      // The fake DOM does not collapse, so B's box is 2 spaces further, but
+      // the drawn string is collapsed like the browser's.
+      expect(runs(leaf)).toEqual([['A B', -20]]);
+    });
+
+    it('draws nothing for whitespace-only leaves and lines', () => {
+      expect(drawn(leafOf(0, '   ').leaf)).toEqual([]);
+      // "AB" | "  ": the blank second line joins the first.
+      wrapAt = 2;
+      // Box: 20 wide (both lines), from -10.
+      expect(runs(leafOf(0, 'AB  ').leaf)).toEqual([['AB', -10]]);
+    });
+
+    it('anchors leaves of nested Txts at their first glyph', () => {
+      const txt = (
+        <Txt textWrap fontSize={FONT_SIZE}>
+          {'AB '}
+          <Txt fontWeight={700}>{' CD'}</Txt>
+        </Txt>
+      ) as Txt;
+      txt.disableSmooth();
+      const outer = txt.childAs<TxtLeaf>(0)!;
+      const inner = txt.childAs<Txt>(1)!.childAs<TxtLeaf>(0)!;
+      inner.disableSmooth();
+      outer.size();
+      inner.size();
+      // Each 30 wide, from -15: "AB" at -15, "CD" after the space at -5.
+      expect(runs(outer)).toEqual([['AB', -15]]);
+      expect(runs(inner)).toEqual([['CD', -5]]);
+    });
+
+    it('keeps a line together within the 2px tolerance', () => {
+      // "F" sits 1.5px lower (a fallback font), which rounds differently.
+      const calls = drawn(leafOf(0, 'AFB').leaf);
+      expect(calls.map(c => [c.text, c.x])).toEqual([['AFB', -15]]);
+      // The line's y comes from its first glyph (box 13.5 high): it would
+      // be 0.5px lower if taken from "F".
+      expect(calls[0].y).toBe(roundPx(-13.5 / 2 + ASCENT));
+      expect(drawn(leafOf(0, 'FAB').leaf)[0].y).toBe(
+        roundPx(-13.5 / 2 + 1.5 + ASCENT),
+      );
+    });
   });
 });

@@ -397,6 +397,10 @@ export class Txt extends Shape {
     this.element.style.display = this.findAncestor(is(Txt))
       ? 'inline'
       : 'block';
+    // The paragraph direction: which side `start`/`end` align to and how the
+    // bidi algorithm orders the lines. The leaves follow it too.
+    const direction = this.textDirection();
+    this.element.style.direction = direction === 'inherit' ? '' : direction;
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -1036,6 +1040,7 @@ export class Txt extends Shape {
   'lineJoin',
   'lineDash',
   'lineDashOffset',
+  'textDirection',
 ].forEach(prop => {
   (Txt.prototype as any)[`getDefault${capitalize(prop)}`] = function (
     this: Txt,

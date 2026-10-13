@@ -153,11 +153,210 @@ interface CharInfo {
   baseline: number | null;
   char: string;
   lineIndex: number;
+  /** Whether the char is in a right-to-left run (see visualRuns). */
+  rtl: boolean;
 }
 
 // Scripts browsers don't apply letter-spacing to, to keep them joined.
 const CursiveScripts =
   /[\p{Script=Arabic}\p{Script=Syriac}\p{Script=Mongolian}\p{Script=Nko}\p{Script=Mandaic}\p{Script=Phags_Pa}\p{Script=Manichaean}\p{Script=Psalter_Pahlavi}\p{Script=Hanifi_Rohingya}\p{Script=Sogdian}]/u;
+
+// Scripts written right to left (strong R / AL characters, Arabic digits).
+const RtlScripts =
+  /[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Samaritan}\p{Script=Mandaic}\p{Script=Adlam}\p{Script=Hanifi_Rohingya}\p{Script=Yezidi}\p{Script=Mende_Kikakui}\p{Script=Imperial_Aramaic}\p{Script=Phoenician}]/u;
+
+/** How far apart (px) two DOM boxes may be and still count as one line. */
+const LineTolerance = 2;
+/** How far apart (px) two glyph boxes may be and still count as touching. */
+const TouchTolerance = 1;
+
+function isBlank(text: string) {
+  return !/\S/.test(text);
+}
+
+// `white-space` values that keep sequences of spaces.
+const PreservedWhiteSpace = new Set(['pre', 'pre-wrap', 'break-spaces']);
+
+/** A text piece (grapheme or text node) and its DOM box, in leaf space. */
+interface TextBox {
+  text: string;
+  left: number;
+  right: number;
+  top: number;
+}
+
+/** Graphemes `from` (inclusive) to `to` (exclusive) drawn by one fillText. */
+interface TextRun {
+  from: number;
+  to: number;
+  rtl: boolean;
+}
+
+/**
+ * Groups boxes (in logical order) into lines and returns each box's line.
+ * A box starts a new line when its top is more than {@link LineTolerance}
+ * away from the line's first glyph. With `skipBlank`, whitespace never starts
+ * a line: it may hang or collapse with a box elsewhere. Leading whitespace
+ * joins the first line.
+ */
+function lineIndices(
+  boxes: TextBox[],
+  skipBlank: boolean,
+): {lines: number[]; tops: number[]} {
+  const lines: number[] = [];
+  const tops: number[] = [];
+  let line = -1;
+  for (const box of boxes) {
+    if (!(skipBlank && isBlank(box.text))) {
+      if (line < 0 || Math.abs(box.top - tops[line]) > LineTolerance) {
+        line++;
+        tops.push(box.top);
+      }
+    }
+    lines.push(Math.max(line, 0));
+  }
+  return {lines, tops};
+}
+
+/**
+ * Lays out boxes (in logical order) as draw() draws them: lines, the runs
+ * each line is drawn in, and where each run is anchored. draw() and
+ * charLayout() share this so split and unsplit text agree to the subpixel.
+ *
+ * @param boxes - The text pieces: one per text node in draw(), one per
+ *                grapheme in charLayout().
+ * @param perGrapheme - Whether updateLayout() puts every grapheme in its own
+ *                      node. Otherwise each node is drawn as is, in the
+ *                      paragraph's direction.
+ * @param rtl - Whether the paragraph is right to left.
+ * @param spacing - The letter-spacing offset (see TxtLeaf.spacingOffset).
+ */
+function layoutRuns(
+  boxes: TextBox[],
+  perGrapheme: boolean,
+  rtl: boolean,
+  spacing: number,
+) {
+  const {lines, tops} = lineIndices(boxes, perGrapheme);
+  const result: {
+    line: number;
+    top: number;
+    run: TextRun;
+    anchor: {x: number; rounding: number} | null;
+  }[] = [];
+  for (let from = 0; from < boxes.length; ) {
+    let to = from + 1;
+    while (to < boxes.length && lines[to] === lines[from]) to++;
+    const runs = perGrapheme
+      ? visualRuns(boxes, from, to, rtl)
+      : [{from, to, rtl}];
+    for (const run of runs) {
+      result.push({
+        line: lines[from],
+        top: tops[lines[from]] ?? boxes[from].top,
+        run,
+        anchor: runAnchor(boxes, run, spacing, perGrapheme),
+      });
+    }
+    from = to;
+  }
+  return result;
+}
+
+/**
+ * Splits one line's graphemes (in logical order) into runs that can each be
+ * drawn with a single fillText.
+ *
+ * @remarks
+ * Canvas runs the bidi algorithm on the drawn string alone, while the DOM
+ * resolves it over the whole paragraph before breaking lines, so neutral
+ * characters at a line's edge (a comma, a space, brackets) can end up on
+ * different sides. A line with any right-to-left text (or in a right-to-left
+ * paragraph) is therefore split into visual runs: consecutive graphemes whose
+ * DOM boxes touch in one direction. Each run is uniform and is drawn at its
+ * own edge with its own direction. Other lines are a single LTR run.
+ */
+function visualRuns(
+  boxes: TextBox[],
+  from: number,
+  to: number,
+  rtlBase: boolean,
+): TextRun[] {
+  let mixed = rtlBase;
+  for (let i = from; i < to && !mixed; i++) {
+    mixed = RtlScripts.test(boxes[i].text);
+  }
+  if (!mixed) return [{from, to, rtl: false}];
+
+  const runs: TextRun[] = [];
+  let run: {from: number; to: number; dir: boolean | null} | null = null;
+  // The run's last box with a width (collapsed whitespace has none).
+  let last: TextBox | null = null;
+  const close = () => {
+    if (!run) return;
+    let rtl = run.dir;
+    if (rtl === null) {
+      const text = boxes
+        .slice(run.from, run.to)
+        .map(b => b.text)
+        .join('');
+      rtl = RtlScripts.test(text) || (rtlBase && !/\p{L}/u.test(text));
+    }
+    runs.push({from: run.from, to: run.to, rtl});
+  };
+  for (let i = from; i < to; i++) {
+    const box = boxes[i];
+    const width = box.right - box.left;
+    if (run && last && width > 0) {
+      const ltrTouch = Math.abs(box.left - last.right) <= TouchTolerance;
+      const rtlTouch = Math.abs(box.right - last.left) <= TouchTolerance;
+      let joins = false;
+      if (run.dir === null) {
+        joins = ltrTouch || rtlTouch;
+        if (joins) run.dir = !ltrTouch;
+      } else {
+        joins = run.dir ? rtlTouch : ltrTouch;
+      }
+      if (!joins) {
+        close();
+        run = null;
+      }
+    }
+    if (!run) {
+      run = {from: i, to: i + 1, dir: null};
+      last = null;
+    }
+    run.to = i + 1;
+    if (width > 0) last = box;
+  }
+  close();
+  return runs;
+}
+
+/**
+ * Where a run is drawn: its start edge (the right one for RTL) plus the
+ * letter-spacing offset, rounded, or null when it has nothing to anchor.
+ * With `skipBlank`, whitespace (which may hang or collapse) does not anchor;
+ * the run is then drawn without its leading and trailing whitespace.
+ */
+function runAnchor(
+  boxes: TextBox[],
+  run: TextRun,
+  spacing: number,
+  skipBlank: boolean,
+): {x: number; rounding: number} | null {
+  let left = Infinity;
+  let right = -Infinity;
+  for (let i = run.from; i < run.to; i++) {
+    if (skipBlank && isBlank(boxes[i].text)) continue;
+    left = Math.min(left, boxes[i].left);
+    right = Math.max(right, boxes[i].right);
+  }
+  if (left > right) return null;
+  const edge = (run.rtl ? right : left) + spacing;
+  const x = roundPx(edge);
+  return {x, rounding: x - edge};
+}
 
 @nodeName('TxtLeaf')
 export class TxtLeaf extends Shape {
@@ -276,13 +475,9 @@ export class TxtLeaf extends Shape {
     const parentRect = el.getBoundingClientRect();
     const {width, height} = this.size();
 
-    const infos: CharInfo[] = [];
     const range = document.createRange();
-    let curY = -Infinity;
-    let lineIdx = -1;
-    // draw() rounds each line's start; shift the line's chars by the same
-    // amount so split and unsplit glyphs agree to the subpixel.
-    let lineRounding = 0;
+    const cells: {r: DOMRect; rawY: number; left: number}[] = [];
+    const boxes: TextBox[] = [];
 
     for (const childNode of el.childNodes) {
       if (!childNode.textContent) continue;
@@ -297,40 +492,67 @@ export class TxtLeaf extends Shape {
         const r = range.getBoundingClientRect();
         const rawY = r.top - parentRect.top;
         const left = width / -2 + r.left - parentRect.left;
-        if (Math.abs(rawY - curY) > 2) {
-          lineIdx++;
-          curY = rawY;
-          lineRounding = roundPx(left + spacing) - (left + spacing);
-        }
-        // The unsplit text puts this glyph's origin half a letter spacing
-        // into its cell (see spacingOffset). Centre the char on its own
-        // advance from there rather than on the cell: the cell also contains
-        // the letter spacing and any kerning against the next character.
-        // Only trust the standalone advance when it differs from the cell by
-        // about a kerning pair: cursive and complex scripts shape differently
-        // in isolation (an isolated Arabic letter is far wider than its
-        // joined form), and there the cell centre is the better estimate.
-        const cellAdvance = r.width - cellSpacing;
-        const advance = measure?.measureText(seg.segment).width;
-        const x =
-          advance !== undefined &&
-          Math.abs(advance - cellAdvance) <= fontSize * 0.1
-            ? left + spacing + lineRounding + advance / 2
-            : left + lineRounding + r.width / 2;
-        const y = height / -2 + rawY + r.height / 2;
-        infos.push({
-          x,
-          y,
+        cells.push({r, rawY, left});
+        boxes.push({
+          text: seg.segment,
           left,
-          w: r.width,
-          h: r.height,
-          baseline: measure
-            ? roundPx(height / -2 + rawY + fontOffset) - y
-            : null,
-          char: seg.segment,
-          lineIndex: lineIdx,
+          right: width / -2 + r.right - parentRect.left,
+          top: rawY,
         });
       }
+    }
+
+    // draw() rounds each run's anchor; shift the run's chars by the same
+    // amount so split and unsplit glyphs agree to the subpixel.
+    const lineOf = new Array<number>(cells.length).fill(0);
+    const roundings = new Array<number>(cells.length).fill(0);
+    const rtlOf = new Array<boolean>(cells.length).fill(false);
+    for (const {line, run, anchor} of layoutRuns(
+      boxes,
+      this.wrapsPerGrapheme(),
+      this.rtlBase(),
+      spacing,
+    )) {
+      for (let i = run.from; i < run.to; i++) {
+        lineOf[i] = line;
+        roundings[i] = anchor?.rounding ?? 0;
+        rtlOf[i] = run.rtl;
+      }
+    }
+
+    const infos: CharInfo[] = [];
+    for (let i = 0; i < cells.length; i++) {
+      const {r, rawY, left} = cells[i];
+      const char = boxes[i].text;
+      const lineIndex = lineOf[i];
+      const lineRounding = roundings[i];
+      // The unsplit text puts this glyph's origin half a letter spacing
+      // into its cell (see spacingOffset). Centre the char on its own
+      // advance from there rather than on the cell: the cell also contains
+      // the letter spacing and any kerning against the next character.
+      // Only trust the standalone advance when it differs from the cell by
+      // about a kerning pair: cursive and complex scripts shape differently
+      // in isolation (an isolated Arabic letter is far wider than its
+      // joined form), and there the cell centre is the better estimate.
+      const cellAdvance = r.width - cellSpacing;
+      const advance = measure?.measureText(char).width;
+      const x =
+        advance !== undefined &&
+        Math.abs(advance - cellAdvance) <= fontSize * 0.1
+          ? left + spacing + lineRounding + advance / 2
+          : left + lineRounding + r.width / 2;
+      const y = height / -2 + rawY + r.height / 2;
+      infos.push({
+        x,
+        y,
+        left,
+        w: r.width,
+        h: r.height,
+        baseline: measure ? roundPx(height / -2 + rawY + fontOffset) - y : null,
+        char,
+        lineIndex,
+        rtl: rtlOf[i],
+      });
     }
 
     el.style.fontVariantLigatures = prevLigatures;
@@ -495,50 +717,78 @@ export class TxtLeaf extends Shape {
     }
     const fontOffset = context.measureText('').fontBoundingBoxAscent;
 
+    // Each line is drawn with one fillText per run (see visualRuns; plain
+    // left-to-right lines are a single run), anchored at the run's visual
+    // start edge rather than at its first character: in right-to-left (and
+    // mixed) text the first logical character is not the leftmost one.
+    const rtl = this.rtlBase();
+    const perGrapheme = this.wrapsPerGrapheme();
+
     const parentRect = this.element.getBoundingClientRect();
     const {width, height} = this.size();
     const range = document.createRange();
-    let line = '';
-    let lineRect: BBox | null = null;
+    const boxes: (TextBox & {height: number})[] = [];
     for (const childNode of this.element.childNodes) {
-      if (!childNode.textContent) {
+      const text = childNode.textContent;
+      if (!text) {
         continue;
       }
-
       range.selectNodeContents(childNode);
-      const rangeRect = range.getBoundingClientRect();
-
-      // Draw each glyph half a letter spacing into its cell (see
-      // spacingOffset) so the ink sits centred in the DOM box.
-      const x = roundPx(
-        width / -2 + rangeRect.left - parentRect.left + spacing,
-      );
-      const y = roundPx(
-        height / -2 + rangeRect.top - parentRect.top + fontOffset,
-      );
-
-      if (!lineRect) {
-        lineRect = new BBox(x, y, rangeRect.width, rangeRect.height);
-        line = childNode.textContent;
-        continue;
-      }
-
-      if (lineRect.y === y) {
-        lineRect.width += rangeRect.width;
-        line += childNode.textContent;
-      } else {
-        this.drawText(context, line, lineRect);
-        lineRect.x = x;
-        lineRect.y = y;
-        lineRect.width = rangeRect.width;
-        lineRect.height = rangeRect.height;
-        line = childNode.textContent;
-      }
+      const rect = range.getBoundingClientRect();
+      boxes.push({
+        text,
+        left: width / -2 + rect.left - parentRect.left,
+        right: width / -2 + rect.right - parentRect.left,
+        top: height / -2 + rect.top - parentRect.top,
+        height: rect.height,
+      });
     }
 
-    if (lineRect) {
-      this.drawText(context, line, lineRect);
+    for (const {top, run, anchor} of layoutRuns(
+      boxes,
+      perGrapheme,
+      rtl,
+      spacing,
+    )) {
+      if (!anchor) continue;
+      let text = '';
+      for (let i = run.from; i < run.to; i++) text += boxes[i].text;
+      // Leading and trailing whitespace did not anchor the run (see
+      // runAnchor), so leave it out of the drawn string too.
+      if (perGrapheme) text = text.trim();
+      if (!text) continue;
+      // Overrides the direction applyText() set: the run's own direction,
+      // with the alignment matching the anchored edge.
+      context.direction = run.rtl ? 'rtl' : 'ltr';
+      context.textAlign = run.rtl ? 'right' : 'left';
+      const first = boxes[run.from];
+      this.drawText(
+        context,
+        text,
+        new BBox(
+          anchor.x,
+          roundPx(top + fontOffset),
+          first.right - first.left,
+          first.height,
+        ),
+      );
     }
+  }
+
+  /**
+   * Whether the text runs right-to-left at paragraph level, as the DOM lays
+   * it out (from {@link textDirection}, resolving `inherit`).
+   */
+  protected rtlBase(): boolean {
+    const direction = this.textDirection();
+    if (direction === 'rtl' || direction === 'ltr') return direction === 'rtl';
+    return this.styles.direction === 'rtl';
+  }
+
+  /** Whether updateLayout() puts every grapheme in its own text node. */
+  protected wrapsPerGrapheme(): boolean {
+    const whiteSpace = this.styles.whiteSpace;
+    return whiteSpace !== 'nowrap' && whiteSpace !== 'pre';
   }
 
   /**
@@ -622,6 +872,9 @@ export class TxtLeaf extends Shape {
         ch.fontFamily(),
       );
       context.textAlign = 'center';
+      // The run's direction, so brackets in RTL text are mirrored as in the
+      // unsplit line.
+      context.direction = layout[idx]?.rtl ? 'rtl' : 'ltr';
       // Same baseline as draw(), so an untransformed char sits exactly where
       // the unsplit line puts it (a 'middle' baseline is the em-box centre,
       // which is not the DOM line's centre). Scaled if the char's own font
@@ -696,7 +949,9 @@ export class TxtLeaf extends Shape {
     text: string,
     box: BBox,
   ) {
-    if (this.styles.whiteSpace !== 'pre') {
+    // Collapse whitespace like the DOM does: the preserving modes keep it.
+    const whiteSpace = this.styles.whiteSpace;
+    if (!PreservedWhiteSpace.has(whiteSpace)) {
       text = text.replace(/\s+/g, ' ');
     }
 
@@ -758,6 +1013,10 @@ export class TxtLeaf extends Shape {
   protected override updateLayout() {
     this.applyFont();
     this.applyFlex();
+    // applyText() sets this too, but only when drawing: lay the text out in
+    // its direction before anything measures it (the size, or a split()
+    // that runs before the first draw).
+    this.element.dir = this.textDirection();
 
     // Make sure the text is aligned correctly even if the text is smaller than
     // the container.
@@ -772,10 +1031,7 @@ export class TxtLeaf extends Shape {
     // left untouched by this replace.
     const text = this.text().replace(/\\n/g, '\n');
 
-    const wrap =
-      this.styles.whiteSpace !== 'nowrap' && this.styles.whiteSpace !== 'pre';
-
-    if (wrap) {
+    if (this.wrapsPerGrapheme()) {
       this.element.innerText = '';
       for (const seg of segment(text, 'grapheme')) {
         this.element.appendChild(document.createTextNode(seg.segment));
@@ -791,6 +1047,14 @@ export class TxtLeaf extends Shape {
     }
   }
 }
+
+// A leaf follows its Txt's direction unless given its own.
+(TxtLeaf.prototype as any).getDefaultTextDirection = function (
+  this: TxtLeaf,
+  initial: CanvasDirection,
+) {
+  return this.parentTxt()?.textDirection() ?? initial;
+};
 
 [
   'fill',
