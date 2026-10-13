@@ -28,7 +28,6 @@ import {
 } from '@motion-canvas/core';
 
 import {
-  NODE_NAME,
   Vector2LengthSignal,
   addInitializer,
   cloneable,
@@ -373,7 +372,7 @@ export class Layout extends Node {
         ? 'wrap it in a <code>&lt;Node&gt;</code> to position it freely'
         : 'set <code>layout={false}</code> on it to position it freely';
     useLogger().warn({
-      message: `${this[NODE_NAME]} is positioned by its layout parent, so its x/y/position is ignored.`,
+      message: `${this.warningLabel()} is positioned by its layout parent, so its x/y/position is ignored.`,
       remarks:
         "Use the parent's <code>alignItems</code>/<code>justifyContent</code>, " +
         `<code>margin</code> or <code>padding</code> to move it, or ${free}.`,

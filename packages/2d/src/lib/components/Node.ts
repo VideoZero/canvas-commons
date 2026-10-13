@@ -2,6 +2,7 @@ import {
   BBox,
   ColorSignal,
   DependencyContext,
+  InterpolationFunction,
   PossibleColor,
   PossibleSpacing,
   PossibleVector2,
@@ -29,6 +30,7 @@ import {
   transformScalar,
   unwrap,
   useLogger,
+  useThread,
 } from '@motion-canvas/core';
 import {
   NODE_NAME,
@@ -132,6 +134,26 @@ export interface NodeProps {
 
 @nodeName('Node')
 export class Node implements Promisable<Node> {
+  /**
+   * Warn when an entrance animation (a {@link Txt} entrance helper such as
+   * `fadeUp()`, or an opacity fade-in) starts on a node that has already been
+   * on screen for a while, so it flashes away and animates in again.
+   *
+   * @remarks
+   * Off by default. Meant for validation runs:
+   * ```ts
+   * Node.warnVisibleBeforeEntrance = true;
+   * ```
+   * Not detected: `node.opacity(0); yield* node.opacity(1, t)` on a node that
+   * was already on screen.
+   */
+  public static warnVisibleBeforeEntrance = false;
+
+  /** When each node was attached to its parent, in project seconds. */
+  private static readonly attachedAt = new WeakMap<Node, number>();
+  private static readonly tweenedOpacity = new WeakSet<Node>();
+  private static readonly warnedVisibleBeforeEntrance = new WeakSet<Node>();
+
   /**
    * @internal
    */
@@ -403,6 +425,103 @@ export class Node implements Promisable<Node> {
   @computed()
   public absoluteOpacity(): number {
     return (this.parent()?.absoluteOpacity() ?? 1) * this.opacity();
+  }
+
+  @threadable()
+  protected *tweenOpacity(
+    value: SignalValue<number>,
+    time: number,
+    timingFunction: TimingFunction,
+    interpolationFunction: InterpolationFunction<number>,
+  ): ThreadGenerator {
+    if (Node.warnVisibleBeforeEntrance && !Node.tweenedOpacity.has(this)) {
+      Node.tweenedOpacity.add(this);
+      const from = this.opacity();
+      const to = clamp(0, 1, unwrap(value));
+      const via = `opacity(${+to.toFixed(2)}) fade-in`;
+      if (time > 0 && from >= 0.05 && to > from + 0.01) {
+        this.warnVisibleBeforeEntrance(via);
+      } else if (
+        time > 0 &&
+        to >= 0.99 &&
+        Math.abs(to - from) < 0.01 &&
+        this.opacity.context.isInitial()
+      ) {
+        this.warnVisibleBeforeEntrance(via, ', so the fade does nothing');
+      }
+    }
+    yield* this.opacity.context.tweener(
+      value,
+      time,
+      timingFunction,
+      interpolationFunction,
+    );
+  }
+
+  /**
+   * The name used for this node in validation warnings.
+   */
+  protected warningLabel(): string {
+    // Not every component declares a @nodeName (Icon, SVG, Latex, ...), so the
+    // inherited one can be a base class; decorated classes are renamed `_Name`.
+    return this.constructor.name.replace(/^_/, '') || this[NODE_NAME];
+  }
+
+  /** Record that `node` appears on screen from now on (validation only). */
+  protected static markAttached(node: Node) {
+    if (Node.warnVisibleBeforeEntrance) {
+      Node.attachedAt.set(node, node.scene2D.playback.time);
+    }
+  }
+
+  /**
+   * Warn once if this node is visible and has been in the scene for a while
+   * when its entrance animation starts.
+   *
+   * @param via - The entrance, as shown in the message (e.g. `fadeUp() entrance`).
+   * @param suffix - Appended to the message sentence.
+   */
+  protected warnVisibleBeforeEntrance(via: string, suffix = '') {
+    if (
+      Node.warnedVisibleBeforeEntrance.has(this) ||
+      this.absoluteOpacity() <= 0
+    ) {
+      return;
+    }
+    // On screen since the latest attach along the way up to the view.
+    let since = -Infinity;
+    let node: Node = this;
+    for (let parent = node.parent(); parent; parent = node.parent()) {
+      since = Math.max(since, Node.attachedAt.get(node) ?? -Infinity);
+      node = parent;
+    }
+    const playback = this.scene2D.playback;
+    if (
+      node !== this.view2D ||
+      since === -Infinity ||
+      playback.time - since <= 0.1 + 1e-6
+    ) {
+      return;
+    }
+
+    Node.warnedVisibleBeforeEntrance.add(this);
+    const start = playback.framesToSeconds(this.scene2D.firstFrame);
+    // Thread time is what `waitFor()` counts (a frame ahead of the playback).
+    let startedAt = playback.time - start;
+    try {
+      startedAt = useThread().time();
+    } catch {
+      // Not called from a generator.
+    }
+    const at = (time: number) => `${Math.max(0, time).toFixed(1)}s`;
+    useLogger().warn({
+      // The node may have become visible later, with an ancestor's fade-in;
+      // only the time it was added is known.
+      message: `${this.warningLabel()} is already visible when its ${via} starts at ${at(startedAt)}${suffix} (added at ${at(since - start)}).`,
+      remarks:
+        'Create it with <code>opacity={0}</code>, or add it to the scene right before animating it in.',
+      inspect: this.key,
+    });
   }
 
   @filtersSignal()
@@ -745,6 +864,7 @@ export class Node implements Promisable<Node> {
         newChildren.push(node);
         node.remove();
         node.parent(this);
+        Node.markAttached(node);
       }
     }
 
@@ -1311,6 +1431,7 @@ export class Node implements Promisable<Node> {
         current.removeChild(newChild);
       }
       keep.add(newChild.key);
+      if (current !== this) Node.markAttached(newChild);
       newChild.parent(this);
     }
 

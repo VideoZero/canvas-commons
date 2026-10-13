@@ -265,6 +265,14 @@ export class Txt extends Shape {
   }
 
   protected setText(value: SignalValue<string>) {
+    // Empty text draws nothing: count the node as shown once it gets text.
+    if (
+      Node.warnVisibleBeforeEntrance &&
+      this.parent() &&
+      !this.innerText().trim()
+    ) {
+      Node.markAttached(this);
+    }
     // A split node keeps drawing the TxtChars created for the OLD string —
     // drop them so the next entrance animation re-splits the new text.
     if (this.isSplit) this.unsplit();
@@ -560,13 +568,16 @@ export class Txt extends Shape {
    * scale/rotation/shadow/stroke state and the clip mode of a previous
    * animation never leak into this one.
    */
-  private prepare(clip = false) {
+  private prepare(entrance: string, clip = false) {
+    if (Node.warnVisibleBeforeEntrance) {
+      this.warnVisibleBeforeEntrance(`${entrance}() entrance`);
+    }
     this.split(clip);
     this.opacity(1);
   }
 
-  private prepareClipped() {
-    this.prepare(true);
+  private prepareClipped(entrance: string) {
+    this.prepare(entrance, true);
   }
 
   /** Exit animations need chars too — split if the node was shown without a helper. */
@@ -595,18 +606,38 @@ export class Txt extends Shape {
   protected override draw(context: CanvasRenderingContext2D) {
     this.drawChildren(context);
   }
+
+  protected override warnVisibleBeforeEntrance(via: string, suffix = '') {
+    // Split text draws per-character states that the helpers show and hide;
+    // empty text draws nothing.
+    if (this.isSplit || !this.innerText().trim()) return;
+    super.warnVisibleBeforeEntrance(via, suffix);
+  }
+
+  protected override warningLabel(): string {
+    const text = this.innerText().replace(/\s+/g, ' ').trim();
+    const snippet =
+      text.length > 24 ? `${text.slice(0, 21).trimEnd()}\u2026` : text;
+    return `${super.warningLabel()} "${snippet}"`;
+  }
+
   // ─── Entrance Animations ──────────────────────────────────────
+  //
+  // Entrance helpers don't hide the node before they run: create it with
+  // `opacity={0}` (or add it right before the entrance), otherwise it's
+  // visible from the start and flashes. `Node.warnVisibleBeforeEntrance`
+  // reports this in validation runs.
 
   @threadable()
   public *typewriter(_duration = 1.5, stagger = 0.04): ThreadGenerator {
-    this.prepare();
+    this.prepare('typewriter');
     this.chars.forEach(c => c.opacity(0));
     yield* sequence(stagger, ...this.chars.map(c => c.opacity(1, 0)));
   }
 
   @threadable()
   public *fadeUp(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('fadeUp');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] + h * 0.3); });
@@ -617,7 +648,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *fadeDown(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('fadeDown');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] - h * 0.3); });
@@ -628,7 +659,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *fadeLeft(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('fadeLeft');
     const origX = this.saveX();
     this.chars.forEach((c, i) => {
       c.opacity(0);
@@ -643,7 +674,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *fadeRight(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('fadeRight');
     const origX = this.saveX();
     this.chars.forEach((c, i) => {
       c.opacity(0);
@@ -658,7 +689,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *motionUp(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('motionUp');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] + h); });
@@ -669,7 +700,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *motionDown(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('motionDown');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] - h); });
@@ -680,7 +711,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *scaleIn(duration = 0.5, stagger = 0.08, tf: TimingFunction = easeOutBack): ThreadGenerator {
-    this.prepare();
+    this.prepare('scaleIn');
     this.chars.forEach(c => { c.opacity(0); c.scale(0); });
     yield* sequence(stagger, ...this.chars.map(c =>
         all(c.opacity(1, duration * 0.4), c.scale(1, duration, tf)),
@@ -689,7 +720,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *bounceIn(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutBack): ThreadGenerator {
-    this.prepare();
+    this.prepare('bounceIn');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] - h); });
@@ -700,7 +731,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *revealUp(duration = 0.6, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepareClipped();
+    this.prepareClipped('revealUp');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] + h); });
@@ -710,7 +741,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *revealDown(duration = 0.6, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepareClipped();
+    this.prepareClipped('revealDown');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] - h); });
@@ -720,7 +751,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *revealLeft(duration = 0.6, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepareClipped();
+    this.prepareClipped('revealLeft');
     const origX = this.saveX();
     this.chars.forEach((c, i) => {
       c.opacity(0);
@@ -734,7 +765,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *revealRight(duration = 0.6, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepareClipped();
+    this.prepareClipped('revealRight');
     const origX = this.saveX();
     this.chars.forEach((c, i) => {
       c.opacity(0);
@@ -748,7 +779,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *wordByWord(duration = 0.4, stagger = 0.1, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('wordByWord');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] + h * 0.2); });
@@ -762,7 +793,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *lineByLine(duration = 0.5, stagger = 0.15, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepareClipped();
+    this.prepareClipped('lineByLine');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] + h); });
@@ -778,7 +809,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *trackingIn(duration = 0.7, spread = 0.4, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('trackingIn');
     const origX = this.saveX();
     const center = origX.reduce((a, b) => a + b, 0) / origX.length;
     this.chars.forEach((c, i) => {
@@ -792,7 +823,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *waveIn(duration = 2, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('waveIn');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach(c => c.opacity(0));
@@ -809,7 +840,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *rotateIn(duration = 0.5, stagger = 0.04, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('rotateIn');
     this.chars.forEach(c => { c.opacity(0); c.rotation(90); c.scale(0.5); });
     yield* sequence(stagger, ...this.chars.map(c =>
         all(c.opacity(1, duration * 0.4), c.rotation(0, duration, tf), c.scale(1, duration, tf)),
@@ -818,7 +849,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *scramble(duration = 2, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('scramble');
     const charTexts = this.chars.map(c => c.text());
     const pool = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*';
     this.chars.forEach(c => c.opacity(0));
@@ -839,7 +870,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *outline(_duration = 0.5, stagger = 0.04): ThreadGenerator {
-    this.prepare();
+    this.prepare('outline');
     const fillColor = String(this.fill() ?? '#ffffff');
     const chars = this.chars;
     // Phase 1: show as stroke-only outlines
@@ -867,7 +898,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *neon(duration = 0.5, stagger = 0.06, tf: TimingFunction = easeOutSine): ThreadGenerator {
-    this.prepare();
+    this.prepare('neon');
     const fillColor = String(this.fill() ?? '#ffffff');
     this.chars.forEach(c => {
       c.opacity(0);
@@ -881,7 +912,7 @@ export class Txt extends Shape {
 
   @threadable()
   public *shadowIn(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
-    this.prepare();
+    this.prepare('shadowIn');
     const origY = this.saveY();
     const h = this.maxCharHeight;
     this.chars.forEach((c, i) => {
