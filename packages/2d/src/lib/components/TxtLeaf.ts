@@ -200,8 +200,7 @@ export class TxtLeaf extends Shape {
   // Applies Txt.textCenter by moving the whole leaf, so normal and split
   // drawing, clip rects and absolute positions all see the same shift.
   protected override getY(): number {
-    const offset = this.parentTxt()?.textCenterOffset() ?? 0;
-    return super.getY() + (this.smooth ? offset : Math.round(offset));
+    return super.getY() + roundPx(this.parentTxt()?.textCenterOffset() ?? 0);
   }
 
   // ─── Per-character measurement & split ────────────────────────

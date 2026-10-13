@@ -1,6 +1,5 @@
 import {
   DEFAULT,
-  DependencyContext,
   InterpolationFunction,
   SignalValue,
   SimpleSignal,
@@ -34,7 +33,8 @@ type AnyTxt = Txt | TxtLeaf;
  * - `'line'` - the CSS line box (font ascent + descent). Fonts with uneven
  *   metrics make the glyphs sit visibly high or low.
  * - `'cap'` - the band from cap height to baseline. Depends only on the font,
- *   so it stays put while the text changes.
+ *   so it stays put while the text changes. Text without Latin, Greek or
+ *   Cyrillic letters or digits has no caps to measure and uses `'ink'`.
  * - `'ink'` - the glyphs actually drawn, measured for the current text. Use it
  *   for numbers in fonts with old-style figures; it moves when the text does.
  */
@@ -43,7 +43,19 @@ export type TextCenter = 'line' | 'cap' | 'ink';
 // Scripts that have capital letters to measure; other text centers on its ink.
 const CapScripts = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}0-9]/u;
 
-let measureContext: CanvasRenderingContext2D | null = null;
+// `null` once creating a 2D context failed (no canvas support, e.g. jsdom).
+let measureContext: CanvasRenderingContext2D | null | undefined;
+// Cap metrics per loaded font; measuring is the costly part of the offset.
+const CapMetrics = new Map<string, TextMetrics>();
+
+function isFontLoaded(font: string) {
+  try {
+    return document.fonts?.check(font) ?? true;
+  } catch {
+    // An invalid shorthand; the browser ignores it as well.
+    return true;
+  }
+}
 
 export interface TxtProps extends ShapeProps {
   children?: TxtChildren;
@@ -140,6 +152,10 @@ export class Txt extends Shape {
    * with the largest of them, so their baselines stay aligned.
    * See {@link TextCenter} for the modes; `null` uses
    * {@link Txt.defaultTextCenter}.
+   *
+   * The metrics come from the outermost `Txt` (or the largest baseline
+   * sibling), so a much larger inline child, or a baseline sibling wrapped in
+   * another node, isn't accounted for.
    */
   @initial(null)
   @signal()
@@ -178,35 +194,43 @@ export class Txt extends Shape {
   @computed()
   protected ownTextCenterOffset(): number {
     let mode = this.textCenter() ?? Txt.defaultTextCenter;
-    if (mode === 'line') {
+    if (mode === 'line' || typeof document === 'undefined') {
       return 0;
     }
 
-    const text = this.text().replace(/\\n|\s+/g, ' ');
+    measureContext ??= document.createElement('canvas').getContext('2d');
+    if (!measureContext) {
+      return 0;
+    }
+
+    // Read the leaf text directly: `text()` returns a plain field while split,
+    // which would drop the dependency.
+    const text = this.innerText().replace(/\s+/g, ' ');
     if (mode === 'cap' && !CapScripts.test(text)) {
       mode = 'ink';
     }
 
+    // Depend on the font being loaded: applyFont() collects the load promise
+    // (including fonts declared later by a font resolver) and is invalidated
+    // when it settles.
+    this.applyFont();
     const font = `${this.fontStyle()} ${this.fontWeight()} ${this.fontSize()}px ${resolveFontFamily(this.fontFamily())}`;
-    if (typeof document === 'undefined') return 0;
-    measureContext ??= document.createElement('canvas').getContext('2d');
-    if (!measureContext) return 0;
-    try {
-      if (document.fonts && !document.fonts.check(font)) {
-        DependencyContext.collectPromise(document.fonts.load(font));
+    let metrics = mode === 'cap' ? CapMetrics.get(font) : undefined;
+    if (!metrics) {
+      measureContext.font = font;
+      metrics = measureContext.measureText(mode === 'ink' ? text : 'H');
+      if (
+        mode === 'ink' &&
+        metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent <= 0
+      ) {
+        mode = 'cap';
+        metrics = measureContext.measureText('H');
       }
-    } catch {
-      // An invalid shorthand; the browser ignores it as well.
+      if (mode === 'cap' && isFontLoaded(font)) {
+        CapMetrics.set(font, metrics);
+      }
     }
-    measureContext.font = font;
 
-    let metrics = measureContext.measureText(mode === 'ink' ? text : 'H');
-    if (
-      mode === 'ink' &&
-      metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent <= 0
-    ) {
-      metrics = measureContext.measureText('H');
-    }
     const ascent = metrics.actualBoundingBoxAscent;
     const descent = mode === 'cap' ? 0 : metrics.actualBoundingBoxDescent;
     // The line box is centered on (fontAscent - fontDescent) / 2 above the
@@ -222,13 +246,14 @@ export class Txt extends Shape {
   }
 
   private isBaselineAligned() {
-    const alignSelf = this.alignSelf() as string;
-    if (alignSelf === 'baseline') return true;
     const parent = this.parent();
+    if (!(parent instanceof Layout) || this.isLayoutRoot()) {
+      return false;
+    }
+    const alignSelf = this.alignSelf() as string;
     return (
-      alignSelf === 'auto' &&
-      parent instanceof Layout &&
-      parent.alignItems() === 'baseline'
+      alignSelf === 'baseline' ||
+      (alignSelf === 'auto' && parent.alignItems() === 'baseline')
     );
   }
 
