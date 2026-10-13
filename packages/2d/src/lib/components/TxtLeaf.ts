@@ -14,6 +14,7 @@ import {
   signal,
 } from '../decorators';
 import {resolveFontFamily} from '../text/fontRegistry';
+import {getMeasureContext, trySetFont} from '../text/measureContext';
 import {segment} from '../text/segmenter';
 import {roundPx} from '../utils';
 import {Node, NodeProps} from './Node';
@@ -137,13 +138,26 @@ export interface LeafLineInfo {
 }
 
 interface CharInfo {
+  /** Centre of the glyph as the unsplit text draws it (the TxtChar's x). */
   x: number;
   y: number;
+  /** Left edge of the character's DOM cell (advance + letter spacing). */
+  left: number;
+  /** Width of the character's DOM cell. */
   w: number;
   h: number;
+  /**
+   * Offset from `y` to where draw() puts the line's 'bottom' baseline, or
+   * null when no measuring canvas is available.
+   */
+  baseline: number | null;
   char: string;
   lineIndex: number;
 }
+
+// Scripts browsers don't apply letter-spacing to, to keep them joined.
+const CursiveScripts =
+  /[\p{Script=Arabic}\p{Script=Syriac}\p{Script=Mongolian}\p{Script=Nko}\p{Script=Mandaic}\p{Script=Phags_Pa}\p{Script=Manichaean}\p{Script=Psalter_Pahlavi}\p{Script=Hanifi_Rohingya}\p{Script=Sogdian}]/u;
 
 @nodeName('TxtLeaf')
 export class TxtLeaf extends Shape {
@@ -223,6 +237,33 @@ export class TxtLeaf extends Shape {
     void this.fontWeight();
     void this.fontStyle();
     void this.text();
+    const spacing = this.spacingOffset();
+    const cellSpacing = this.letterSpacingPx();
+    // Standalone advances, as drawSplitChars() centres each char on its own,
+    // and the baseline offset draw() uses.
+    const fontSize = this.fontSize();
+    let measure = getMeasureContext();
+    let fontOffset = 0;
+    if (
+      measure &&
+      !trySetFont(
+        measure,
+        this.splitFont(
+          this.fontStyle(),
+          this.fontWeight(),
+          fontSize,
+          this.fontFamily(),
+        ),
+      )
+    ) {
+      // The font did not parse: measurements would use another font.
+      measure = null;
+    }
+    if (measure) {
+      if ('letterSpacing' in measure) measure.letterSpacing = '0px';
+      measure.textBaseline = 'bottom';
+      fontOffset = measure.measureText('').fontBoundingBoxAscent;
+    }
 
     this.requestLayoutUpdate();
     const el = this.element;
@@ -239,6 +280,9 @@ export class TxtLeaf extends Shape {
     const range = document.createRange();
     let curY = -Infinity;
     let lineIdx = -1;
+    // draw() rounds each line's start; shift the line's chars by the same
+    // amount so split and unsplit glyphs agree to the subpixel.
+    let lineRounding = 0;
 
     for (const childNode of el.childNodes) {
       if (!childNode.textContent) continue;
@@ -252,15 +296,37 @@ export class TxtLeaf extends Shape {
         range.setEnd(childNode, seg.index + seg.segment.length);
         const r = range.getBoundingClientRect();
         const rawY = r.top - parentRect.top;
+        const left = width / -2 + r.left - parentRect.left;
         if (Math.abs(rawY - curY) > 2) {
           lineIdx++;
           curY = rawY;
+          lineRounding = roundPx(left + spacing) - (left + spacing);
         }
+        // The unsplit text puts this glyph's origin half a letter spacing
+        // into its cell (see spacingOffset). Centre the char on its own
+        // advance from there rather than on the cell: the cell also contains
+        // the letter spacing and any kerning against the next character.
+        // Only trust the standalone advance when it differs from the cell by
+        // about a kerning pair: cursive and complex scripts shape differently
+        // in isolation (an isolated Arabic letter is far wider than its
+        // joined form), and there the cell centre is the better estimate.
+        const cellAdvance = r.width - cellSpacing;
+        const advance = measure?.measureText(seg.segment).width;
+        const x =
+          advance !== undefined &&
+          Math.abs(advance - cellAdvance) <= fontSize * 0.1
+            ? left + spacing + lineRounding + advance / 2
+            : left + lineRounding + r.width / 2;
+        const y = height / -2 + rawY + r.height / 2;
         infos.push({
-          x: width / -2 + r.left - parentRect.left + r.width / 2,
-          y: height / -2 + rawY + r.height / 2,
+          x,
+          y,
+          left,
           w: r.width,
           h: r.height,
+          baseline: measure
+            ? roundPx(height / -2 + rawY + fontOffset) - y
+            : null,
           char: seg.segment,
           lineIndex: lineIdx,
         });
@@ -344,10 +410,12 @@ export class TxtLeaf extends Shape {
     for (const [, lcs] of entries) {
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       const charIndices: number[] = [];
+      // Glyphs drawn half a negative spacing past their cells.
+      const overhang = this.spacingOverhang();
       for (const {ci, idx} of lcs) {
-        x0 = Math.min(x0, ci.x - ci.w / 2);
+        x0 = Math.min(x0, ci.left - overhang);
         y0 = Math.min(y0, ci.y - ci.h / 2);
-        x1 = Math.max(x1, ci.x + ci.w / 2);
+        x1 = Math.max(x1, ci.left + ci.w + overhang);
         y1 = Math.max(y1, ci.y + ci.h / 2);
         charIndices.push(idx);
       }
@@ -358,7 +426,9 @@ export class TxtLeaf extends Shape {
 
   @computed()
   public leafLineWidths(): number[] {
-    return this.leafLineInfos().map(l => l.x1 - l.x0);
+    // The cells' extent, without the clip overhang of negative spacing.
+    const overhang = this.spacingOverhang();
+    return this.leafLineInfos().map(l => l.x1 - l.x0 - overhang * 2);
   }
 
   @computed()
@@ -419,8 +489,9 @@ export class TxtLeaf extends Shape {
     this.applyText(context);
     context.font = this.styles.font;
     context.textBaseline = 'bottom';
+    const spacing = this.spacingOffset();
     if ('letterSpacing' in context) {
-      context.letterSpacing = `${this.letterSpacing()}px`;
+      context.letterSpacing = `${this.letterSpacingPx()}px`;
     }
     const fontOffset = context.measureText('').fontBoundingBoxAscent;
 
@@ -437,7 +508,11 @@ export class TxtLeaf extends Shape {
       range.selectNodeContents(childNode);
       const rangeRect = range.getBoundingClientRect();
 
-      const x = roundPx(width / -2 + rangeRect.left - parentRect.left);
+      // Draw each glyph half a letter spacing into its cell (see
+      // spacingOffset) so the ink sits centred in the DOM box.
+      const x = roundPx(
+        width / -2 + rangeRect.left - parentRect.left + spacing,
+      );
       const y = roundPx(
         height / -2 + rangeRect.top - parentRect.top + fontOffset,
       );
@@ -467,11 +542,58 @@ export class TxtLeaf extends Shape {
   }
 
   /**
+   * Half of this leaf's letter spacing: how far right of its DOM cell each
+   * glyph is drawn.
+   *
+   * @remarks
+   * CSS `letter-spacing` (like canvas `letterSpacing`) adds the whole spacing
+   * after every character, including the last one on each line, so the DOM
+   * box is `letterSpacing` wider than the ink on one side only. Drawing every
+   * glyph half the spacing into its cell spreads that space evenly to both
+   * sides instead: each character cell is `advance + letterSpacing` wide with
+   * the glyph in its middle. The DOM layout (and therefore wrapping and the
+   * Txt's size) stays untouched, the ink is centred in the box for any line
+   * count, alignment or nesting, and split characters (see charLayout) use
+   * the same glyph origins as the unsplit text.
+   *
+   * Browsers don't letter-space cursive scripts (Arabic, Syriac, ...), so
+   * text containing them keeps the plain left-aligned drawing.
+   */
+  @computed()
+  protected spacingOffset(): number {
+    return CursiveScripts.test(this.text()) ? 0 : this.letterSpacingPx() / 2;
+  }
+
+  /** How far glyphs overhang their cells horizontally (negative spacing). */
+  protected spacingOverhang(): number {
+    const offset = this.spacingOffset();
+    const spacing = this.letterSpacingPx();
+    // Shifted glyphs overhang on both sides; unshifted ones on the right only.
+    return Math.max(0, offset === 0 ? -spacing : -offset);
+  }
+
+  protected letterSpacingPx(): number {
+    const spacing = this.letterSpacing();
+    return Number.isFinite(spacing) ? spacing : 0;
+  }
+
+  protected splitFont(
+    style: string,
+    weight: number | string,
+    size: number,
+    family: string,
+  ) {
+    return `${style} ${weight} ${size}px ${resolveFontFamily(family)}`;
+  }
+
+  /**
    * Render individual characters with per-char transforms.
    * All rendering logic lives here — TxtChar is just state.
    */
   protected drawSplitChars(context: CanvasRenderingContext2D) {
-    const renderChar = (ch: TxtChar) => {
+    const layout = this.charLayout();
+    const leafFontSize = this.fontSize();
+    const renderChar = (ch: TxtChar, idx: number) => {
       const opacity = ch.opacity();
       if (opacity <= 0) return;
 
@@ -493,9 +615,31 @@ export class TxtLeaf extends Shape {
       if (scl.x !== 1 || scl.y !== 1) context.scale(scl.x, scl.y);
       context.globalAlpha *= opacity;
 
-      context.font = `${ch.fontStyle()} ${ch.fontWeight()} ${ch.fontSize()}px ${resolveFontFamily(ch.fontFamily())}`;
-      context.textBaseline = 'middle';
+      context.font = this.splitFont(
+        ch.fontStyle(),
+        ch.fontWeight(),
+        ch.fontSize(),
+        ch.fontFamily(),
+      );
       context.textAlign = 'center';
+      // Same baseline as draw(), so an untransformed char sits exactly where
+      // the unsplit line puts it (a 'middle' baseline is the em-box centre,
+      // which is not the DOM line's centre). Scaled if the char's own font
+      // size was changed.
+      const baseline = layout[idx]?.baseline;
+      let textY = 0;
+      if (baseline != null) {
+        context.textBaseline = 'bottom';
+        textY = leafFontSize ? (baseline * ch.fontSize()) / leafFontSize : 0;
+      } else {
+        context.textBaseline = 'middle';
+      }
+      // charLayout() centres the char on its bare advance; a non-zero canvas
+      // letterSpacing would widen the measured advance and pull the glyph
+      // left of the unsplit position.
+      if ('letterSpacing' in context) {
+        context.letterSpacing = '0px';
+      }
 
       const sc = ch.charShadowColor();
       const sb = ch.charShadowBlur();
@@ -513,13 +657,13 @@ export class TxtLeaf extends Shape {
         // characters don't miter-spike on sharp glyph corners.
         context.lineJoin = this.lineJoin();
         context.lineCap = this.lineCap();
-        context.strokeText(text, 0, 0);
+        context.strokeText(text, 0, textY);
       }
 
       const fill = ch.fill();
       if (fill) {
         context.fillStyle = fill;
-        context.fillText(text, 0, 0);
+        context.fillText(text, 0, textY);
       }
 
       context.restore();
@@ -538,14 +682,12 @@ export class TxtLeaf extends Shape {
         );
         context.clip();
         for (const idx of line.charIndices) {
-          renderChar(this.charStates[idx]);
+          renderChar(this.charStates[idx], idx);
         }
         context.restore();
       }
     } else {
-      for (const char of this.charStates) {
-        renderChar(char);
-      }
+      this.charStates.forEach(renderChar);
     }
   }
 
@@ -594,14 +736,18 @@ export class TxtLeaf extends Shape {
     // We take the default value of the miterLimit as 10.
     const miterLimitCoefficient = this.lineJoin() === 'miter' ? 0.5 * 10 : 0.5;
 
-    return new BBox(
-      -size.width / 2,
-      -size.height / 2,
-      roundPx(bbox.width),
-      roundPx(bbox.height),
-    )
-      .expand([0, this.fontSize() * 0.5])
-      .expand(lineWidth * miterLimitCoefficient);
+    return (
+      new BBox(
+        -size.width / 2,
+        -size.height / 2,
+        roundPx(bbox.width),
+        roundPx(bbox.height),
+      )
+        // Glyphs are drawn half a letter spacing into their cells, so with a
+        // negative spacing the ink overhangs the DOM box on both sides.
+        .expand([0, this.fontSize() * 0.5 + this.spacingOverhang()])
+        .expand(lineWidth * miterLimitCoefficient)
+    );
   }
 
   protected override applyFlex() {

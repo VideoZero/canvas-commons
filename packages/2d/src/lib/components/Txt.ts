@@ -17,6 +17,7 @@ import {
 } from '@motion-canvas/core';
 import {computed, initial, nodeName, signal} from '../decorators';
 import {fontRegistry, resolveFontFamily} from '../text/fontRegistry';
+import {getMeasureContext} from '../text/measureContext';
 import {is} from '../utils';
 import {Layout} from './Layout';
 import {Node} from './Node';
@@ -43,8 +44,6 @@ export type TextCenter = 'line' | 'cap' | 'ink';
 // Scripts that have capital letters to measure; other text centers on its ink.
 const CapScripts = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}0-9]/u;
 
-// `null` once creating a 2D context failed (no canvas support, e.g. jsdom).
-let measureContext: CanvasRenderingContext2D | null | undefined;
 // Cap metrics per loaded font; measuring is the costly part of the offset.
 const CapMetrics = new Map<string, TextMetrics>();
 
@@ -198,7 +197,7 @@ export class Txt extends Shape {
       return 0;
     }
 
-    measureContext ??= document.createElement('canvas').getContext('2d');
+    const measureContext = getMeasureContext();
     if (!measureContext) {
       return 0;
     }
