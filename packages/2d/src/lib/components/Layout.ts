@@ -247,6 +247,20 @@ export class Layout extends Node {
 
   private static readonly warnedIgnoredPosition = new WeakSet<Layout>();
 
+  /**
+   * Warn when a text node's line height is well below its font size, so its
+   * lines overlap.
+   *
+   * @remarks
+   * Off by default. Meant for validation runs:
+   * ```ts
+   * Layout.warnTightLineHeight = true;
+   * ```
+   */
+  public static warnTightLineHeight = false;
+
+  protected static readonly warnedTightLineHeight = new WeakSet<Layout>();
+
   @initial(null)
   @interpolation(boolLerp)
   @signal()
@@ -1252,6 +1266,12 @@ export class Layout extends Node {
     }
   }
 
+  /**
+   * Report a line height that makes lines overlap. Only text nodes do: other
+   * layouts just pass the font on to their children.
+   */
+  protected warnTightLineHeight(_lineHeight: Length, _fontSize: number) {}
+
   @computed()
   protected applyFont() {
     const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
@@ -1272,6 +1292,9 @@ export class Layout extends Node {
         : lineHeight <= LINE_HEIGHT_MULTIPLIER_LIMIT
           ? lineHeight.toString()
           : `${lineHeight}px`;
+    if (Layout.warnTightLineHeight) {
+      this.warnTightLineHeight(lineHeight, this.fontSize());
+    }
 
     this.element.style.fontWeight = this.fontWeight().toString();
     this.element.style.letterSpacing = `${this.letterSpacing()}px`;

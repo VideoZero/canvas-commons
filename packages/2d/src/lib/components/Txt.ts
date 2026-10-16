@@ -14,18 +14,26 @@ import {
   sequence,
   threadable,
   tween,
+  useLogger,
 } from '@motion-canvas/core';
 import {computed, initial, nodeName, signal} from '../decorators';
+import {Length} from '../partials';
 import {fontRegistry, resolveFontFamily} from '../text/fontRegistry';
 import {getMeasureContext} from '../text/measureContext';
-import {is} from '../utils';
-import {Layout} from './Layout';
+import {is, roundPx} from '../utils';
+import {LINE_HEIGHT_MULTIPLIER_LIMIT, Layout} from './Layout';
 import {Node} from './Node';
 import {Shape, ShapeProps} from './Shape';
 import {TxtChar, TxtLeaf} from './TxtLeaf';
 import {ComponentChildren} from './types';
 
 type TxtChildren = string | Node | (string | Node)[];
+
+/**
+ * A line height below this share of the font size draws the lines of a text
+ * over each other (`Layout.warnTightLineHeight`).
+ */
+const TIGHT_LINE_HEIGHT = 0.7;
 type AnyTxt = Txt | TxtLeaf;
 
 /**
@@ -483,7 +491,10 @@ export class Txt extends Shape {
     this.forEachLeaf(this, leaf => {
       this.chars.push(...leaf.charStates);
       this.words.push(...leaf.leafWords());
-      this.maxCharHeight = Math.max(this.maxCharHeight, leaf.leafMaxCharHeight());
+      this.maxCharHeight = Math.max(
+        this.maxCharHeight,
+        leaf.leafMaxCharHeight(),
+      );
       this.lineWidths.push(...leaf.leafLineWidths());
     });
     if (this.smooth) this.enableSmooth();
@@ -524,9 +535,7 @@ export class Txt extends Shape {
       const lineInfos = leaf.leafLineInfos();
       if (lineIndex < offset + lineInfos.length) {
         const localLine = lineIndex - offset;
-        return lineInfos[localLine].charIndices.map(
-          i => leaf.charStates[i],
-        );
+        return lineInfos[localLine].charIndices.map(i => leaf.charStates[i]);
       }
       offset += lineInfos.length;
     }
@@ -602,7 +611,6 @@ export class Txt extends Shape {
     }
   }
 
-
   // ═══════════════════════════════════════════════════════════════════════
   // Drawing
   // ═══════════════════════════════════════════════════════════════════════
@@ -616,6 +624,32 @@ export class Txt extends Shape {
     // empty text draws nothing.
     if (this.isSplit || !this.innerText().trim()) return;
     super.warnVisibleBeforeEntrance(via, suffix);
+  }
+
+  protected override warnTightLineHeight(lineHeight: Length, fontSize: number) {
+    if (
+      Layout.warnedTightLineHeight.has(this) ||
+      // Nested Txt inherit the outer one's font: report it there only.
+      this.parentTxt() ||
+      !this.innerText().trim()
+    ) {
+      return;
+    }
+    const px =
+      typeof lineHeight !== 'number'
+        ? (parseFloat(lineHeight) / 100) * fontSize
+        : lineHeight <= LINE_HEIGHT_MULTIPLIER_LIMIT
+          ? lineHeight * fontSize
+          : lineHeight;
+    if (!(px < TIGHT_LINE_HEIGHT * fontSize)) return;
+    Layout.warnedTightLineHeight.add(this);
+    useLogger().warn({
+      message: `${this.warningLabel()} has a ${roundPx(px)}px line height at font size ${fontSize}, so its lines overlap.`,
+      remarks:
+        `A <code>lineHeight</code> above ${LINE_HEIGHT_MULTIPLIER_LIMIT} is pixels: ` +
+        'write a multiplier (<code>lineHeight={1.2}</code>) or pixels near the font size.',
+      inspect: this.key,
+    });
   }
 
   protected override warningLabel(): string {
@@ -640,29 +674,59 @@ export class Txt extends Shape {
   }
 
   @threadable()
-  public *fadeUp(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *fadeUp(
+    duration = 0.5,
+    stagger = 0.03,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('fadeUp');
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] + h * 0.3); });
-    yield* sequence(stagger, ...this.chars.map((c, i) =>
-        all(c.opacity(1, duration * 0.8, tf), c.position.y(origY[i], duration, tf)),
-    ));
+    this.chars.forEach((c, i) => {
+      c.opacity(0);
+      c.position.y(origY[i] + h * 0.3);
+    });
+    yield* sequence(
+      stagger,
+      ...this.chars.map((c, i) =>
+        all(
+          c.opacity(1, duration * 0.8, tf),
+          c.position.y(origY[i], duration, tf),
+        ),
+      ),
+    );
   }
 
   @threadable()
-  public *fadeDown(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *fadeDown(
+    duration = 0.5,
+    stagger = 0.03,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('fadeDown');
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] - h * 0.3); });
-    yield* sequence(stagger, ...this.chars.map((c, i) =>
-        all(c.opacity(1, duration * 0.8, tf), c.position.y(origY[i], duration, tf)),
-    ));
+    this.chars.forEach((c, i) => {
+      c.opacity(0);
+      c.position.y(origY[i] - h * 0.3);
+    });
+    yield* sequence(
+      stagger,
+      ...this.chars.map((c, i) =>
+        all(
+          c.opacity(1, duration * 0.8, tf),
+          c.position.y(origY[i], duration, tf),
+        ),
+      ),
+    );
   }
 
   @threadable()
-  public *fadeLeft(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *fadeLeft(
+    duration = 0.5,
+    stagger = 0.03,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('fadeLeft');
     const origX = this.saveX();
     this.chars.forEach((c, i) => {
@@ -671,13 +735,23 @@ export class Txt extends Shape {
       const w = li >= 0 ? this.lineWidths[li] : this.lineWidths[0];
       c.position.x(origX[i] + w * 0.1);
     });
-    yield* sequence(stagger, ...this.chars.map((c, i) =>
-        all(c.opacity(1, duration * 0.8, tf), c.position.x(origX[i], duration, tf)),
-    ));
+    yield* sequence(
+      stagger,
+      ...this.chars.map((c, i) =>
+        all(
+          c.opacity(1, duration * 0.8, tf),
+          c.position.x(origX[i], duration, tf),
+        ),
+      ),
+    );
   }
 
   @threadable()
-  public *fadeRight(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *fadeRight(
+    duration = 0.5,
+    stagger = 0.03,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('fadeRight');
     const origX = this.saveX();
     this.chars.forEach((c, i) => {
@@ -686,75 +760,140 @@ export class Txt extends Shape {
       const w = li >= 0 ? this.lineWidths[li] : this.lineWidths[0];
       c.position.x(origX[i] - w * 0.1);
     });
-    yield* sequence(stagger, ...this.chars.map((c, i) =>
-        all(c.opacity(1, duration * 0.8, tf), c.position.x(origX[i], duration, tf)),
-    ));
+    yield* sequence(
+      stagger,
+      ...this.chars.map((c, i) =>
+        all(
+          c.opacity(1, duration * 0.8, tf),
+          c.position.x(origX[i], duration, tf),
+        ),
+      ),
+    );
   }
 
   @threadable()
-  public *motionUp(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *motionUp(
+    duration = 0.5,
+    stagger = 0.03,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('motionUp');
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] + h); });
-    yield* sequence(stagger, ...this.chars.map((c, i) =>
+    this.chars.forEach((c, i) => {
+      c.opacity(0);
+      c.position.y(origY[i] + h);
+    });
+    yield* sequence(
+      stagger,
+      ...this.chars.map((c, i) =>
         all(c.opacity(1, 0.15), c.position.y(origY[i], duration, tf)),
-    ));
+      ),
+    );
   }
 
   @threadable()
-  public *motionDown(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *motionDown(
+    duration = 0.5,
+    stagger = 0.03,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('motionDown');
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] - h); });
-    yield* sequence(stagger, ...this.chars.map((c, i) =>
+    this.chars.forEach((c, i) => {
+      c.opacity(0);
+      c.position.y(origY[i] - h);
+    });
+    yield* sequence(
+      stagger,
+      ...this.chars.map((c, i) =>
         all(c.opacity(1, 0.15), c.position.y(origY[i], duration, tf)),
-    ));
+      ),
+    );
   }
 
   @threadable()
-  public *scaleIn(duration = 0.5, stagger = 0.08, tf: TimingFunction = easeOutBack): ThreadGenerator {
+  public *scaleIn(
+    duration = 0.5,
+    stagger = 0.08,
+    tf: TimingFunction = easeOutBack,
+  ): ThreadGenerator {
     this.prepare('scaleIn');
-    this.chars.forEach(c => { c.opacity(0); c.scale(0); });
-    yield* sequence(stagger, ...this.chars.map(c =>
+    this.chars.forEach(c => {
+      c.opacity(0);
+      c.scale(0);
+    });
+    yield* sequence(
+      stagger,
+      ...this.chars.map(c =>
         all(c.opacity(1, duration * 0.4), c.scale(1, duration, tf)),
-    ));
+      ),
+    );
   }
 
   @threadable()
-  public *bounceIn(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutBack): ThreadGenerator {
+  public *bounceIn(
+    duration = 0.5,
+    stagger = 0.03,
+    tf: TimingFunction = easeOutBack,
+  ): ThreadGenerator {
     this.prepare('bounceIn');
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] - h); });
-    yield* sequence(stagger, ...this.chars.map((c, i) =>
+    this.chars.forEach((c, i) => {
+      c.opacity(0);
+      c.position.y(origY[i] - h);
+    });
+    yield* sequence(
+      stagger,
+      ...this.chars.map((c, i) =>
         all(c.opacity(1, 0.15), c.position.y(origY[i], duration, tf)),
-    ));
+      ),
+    );
   }
 
   @threadable()
-  public *revealUp(duration = 0.6, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *revealUp(
+    duration = 0.6,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepareClipped('revealUp');
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] + h); });
+    this.chars.forEach((c, i) => {
+      c.opacity(0);
+      c.position.y(origY[i] + h);
+    });
     this.chars.forEach(c => c.opacity(1));
-    yield* all(...this.chars.map((c, i) => c.position.y(origY[i], duration, tf)));
+    yield* all(
+      ...this.chars.map((c, i) => c.position.y(origY[i], duration, tf)),
+    );
   }
 
   @threadable()
-  public *revealDown(duration = 0.6, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *revealDown(
+    duration = 0.6,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepareClipped('revealDown');
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] - h); });
+    this.chars.forEach((c, i) => {
+      c.opacity(0);
+      c.position.y(origY[i] - h);
+    });
     this.chars.forEach(c => c.opacity(1));
-    yield* all(...this.chars.map((c, i) => c.position.y(origY[i], duration, tf)));
+    yield* all(
+      ...this.chars.map((c, i) => c.position.y(origY[i], duration, tf)),
+    );
   }
 
   @threadable()
-  public *revealLeft(duration = 0.6, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *revealLeft(
+    duration = 0.6,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepareClipped('revealLeft');
     const origX = this.saveX();
     this.chars.forEach((c, i) => {
@@ -764,11 +903,16 @@ export class Txt extends Shape {
       c.position.x(origX[i] + w);
     });
     this.chars.forEach(c => c.opacity(1));
-    yield* all(...this.chars.map((c, i) => c.position.x(origX[i], duration, tf)));
+    yield* all(
+      ...this.chars.map((c, i) => c.position.x(origX[i], duration, tf)),
+    );
   }
 
   @threadable()
-  public *revealRight(duration = 0.6, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *revealRight(
+    duration = 0.6,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepareClipped('revealRight');
     const origX = this.saveX();
     this.chars.forEach((c, i) => {
@@ -778,41 +922,74 @@ export class Txt extends Shape {
       c.position.x(origX[i] - w);
     });
     this.chars.forEach(c => c.opacity(1));
-    yield* all(...this.chars.map((c, i) => c.position.x(origX[i], duration, tf)));
+    yield* all(
+      ...this.chars.map((c, i) => c.position.x(origX[i], duration, tf)),
+    );
   }
 
   @threadable()
-  public *wordByWord(duration = 0.4, stagger = 0.1, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *wordByWord(
+    duration = 0.4,
+    stagger = 0.1,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('wordByWord');
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] + h * 0.2); });
-    yield* sequence(stagger, ...this.words.map(wg =>
-        all(...wg.map(c => {
-          const i = this.chars.indexOf(c);
-          return all(c.opacity(1, duration, tf), c.position.y(origY[i], duration, tf));
-        })),
-    ));
+    this.chars.forEach((c, i) => {
+      c.opacity(0);
+      c.position.y(origY[i] + h * 0.2);
+    });
+    yield* sequence(
+      stagger,
+      ...this.words.map(wg =>
+        all(
+          ...wg.map(c => {
+            const i = this.chars.indexOf(c);
+            return all(
+              c.opacity(1, duration, tf),
+              c.position.y(origY[i], duration, tf),
+            );
+          }),
+        ),
+      ),
+    );
   }
 
   @threadable()
-  public *lineByLine(duration = 0.5, stagger = 0.15, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *lineByLine(
+    duration = 0.5,
+    stagger = 0.15,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepareClipped('lineByLine');
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    this.chars.forEach((c, i) => { c.opacity(0); c.position.y(origY[i] + h); });
+    this.chars.forEach((c, i) => {
+      c.opacity(0);
+      c.position.y(origY[i] + h);
+    });
     const numLines = this.lineWidths.length;
-    yield* sequence(stagger, ...Array.from({length: numLines}, (_, li) => {
-      const lc = this.lineChars(li);
-      lc.forEach(c => c.opacity(1));
-      return all(...lc.map(c =>
-          c.position.y(origY[this.chars.indexOf(c)], duration, tf),
-      ));
-    }));
+    yield* sequence(
+      stagger,
+      ...Array.from({length: numLines}, (_, li) => {
+        const lc = this.lineChars(li);
+        lc.forEach(c => c.opacity(1));
+        return all(
+          ...lc.map(c =>
+            c.position.y(origY[this.chars.indexOf(c)], duration, tf),
+          ),
+        );
+      }),
+    );
   }
 
   @threadable()
-  public *trackingIn(duration = 0.7, spread = 0.4, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *trackingIn(
+    duration = 0.7,
+    spread = 0.4,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('trackingIn');
     const origX = this.saveX();
     const center = origX.reduce((a, b) => a + b, 0) / origX.length;
@@ -820,13 +997,21 @@ export class Txt extends Shape {
       c.opacity(0);
       c.position.x(origX[i] + (origX[i] - center) * spread);
     });
-    yield* all(...this.chars.map((c, i) =>
-        all(c.opacity(1, duration * 0.7, tf), c.position.x(origX[i], duration, tf)),
-    ));
+    yield* all(
+      ...this.chars.map((c, i) =>
+        all(
+          c.opacity(1, duration * 0.7, tf),
+          c.position.x(origX[i], duration, tf),
+        ),
+      ),
+    );
   }
 
   @threadable()
-  public *waveIn(duration = 2, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *waveIn(
+    duration = 2,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('waveIn');
     const origY = this.saveY();
     const h = this.maxCharHeight;
@@ -836,26 +1021,50 @@ export class Txt extends Shape {
       for (let i = 0; i < this.chars.length; i++) {
         const cp = Math.max(0, Math.min(1, (p - i * 0.03) / 0.5));
         this.chars[i].opacity(Math.min(cp * 2, 1));
-        this.chars[i].position.y(origY[i] + Math.sin(p * Math.PI * 4 - i * 0.3) * h * 0.3 * (1 - p));
+        this.chars[i].position.y(
+          origY[i] + Math.sin(p * Math.PI * 4 - i * 0.3) * h * 0.3 * (1 - p),
+        );
       }
     });
-    this.chars.forEach((c, i) => { c.opacity(1); c.position.y(origY[i]); });
+    this.chars.forEach((c, i) => {
+      c.opacity(1);
+      c.position.y(origY[i]);
+    });
   }
 
   @threadable()
-  public *rotateIn(duration = 0.5, stagger = 0.04, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *rotateIn(
+    duration = 0.5,
+    stagger = 0.04,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('rotateIn');
-    this.chars.forEach(c => { c.opacity(0); c.rotation(90); c.scale(0.5); });
-    yield* sequence(stagger, ...this.chars.map(c =>
-        all(c.opacity(1, duration * 0.4), c.rotation(0, duration, tf), c.scale(1, duration, tf)),
-    ));
+    this.chars.forEach(c => {
+      c.opacity(0);
+      c.rotation(90);
+      c.scale(0.5);
+    });
+    yield* sequence(
+      stagger,
+      ...this.chars.map(c =>
+        all(
+          c.opacity(1, duration * 0.4),
+          c.rotation(0, duration, tf),
+          c.scale(1, duration, tf),
+        ),
+      ),
+    );
   }
 
   @threadable()
-  public *scramble(duration = 2, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *scramble(
+    duration = 2,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('scramble');
     const charTexts = this.chars.map(c => c.text());
-    const pool = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*';
+    const pool =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*';
     this.chars.forEach(c => c.opacity(0));
     yield* tween(duration, t => {
       const p = tf(t);
@@ -886,7 +1095,9 @@ export class Txt extends Shape {
     });
     yield* sequence(stagger, ...chars.map(c => c.opacity(1, 0.2)));
     // Phase 2: crossfade stroke → fill per character
-    yield* sequence(stagger, ...chars.map(c =>
+    yield* sequence(
+      stagger,
+      ...chars.map(c =>
         tween(0.3, t => {
           if (t < 0.5) {
             c.opacity(1 - t * 0.6);
@@ -897,11 +1108,16 @@ export class Txt extends Shape {
             c.opacity(0.7 + (t - 0.5) * 0.6);
           }
         }),
-    ));
+      ),
+    );
   }
 
   @threadable()
-  public *neon(duration = 0.5, stagger = 0.06, tf: TimingFunction = easeOutSine): ThreadGenerator {
+  public *neon(
+    duration = 0.5,
+    stagger = 0.06,
+    tf: TimingFunction = easeOutSine,
+  ): ThreadGenerator {
     this.prepare('neon');
     const fillColor = String(this.fill() ?? '#ffffff');
     this.chars.forEach(c => {
@@ -909,13 +1125,20 @@ export class Txt extends Shape {
       c.charShadowColor(fillColor);
       c.charShadowBlur(0);
     });
-    yield* sequence(stagger, ...this.chars.map(c =>
+    yield* sequence(
+      stagger,
+      ...this.chars.map(c =>
         all(c.opacity(1, 0.3), c.charShadowBlur(20, duration, tf)),
-    ));
+      ),
+    );
   }
 
   @threadable()
-  public *shadowIn(duration = 0.5, stagger = 0.03, tf: TimingFunction = easeOutCubic): ThreadGenerator {
+  public *shadowIn(
+    duration = 0.5,
+    stagger = 0.03,
+    tf: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
     this.prepare('shadowIn');
     const origY = this.saveY();
     const h = this.maxCharHeight;
@@ -925,9 +1148,12 @@ export class Txt extends Shape {
       c.charShadowColor('rgba(0,0,0,0.5)');
       c.charShadowBlur(4);
     });
-    yield* sequence(stagger, ...this.chars.map((c, i) =>
+    yield* sequence(
+      stagger,
+      ...this.chars.map((c, i) =>
         all(c.opacity(1, 0.3), c.position.y(origY[i], duration, tf)),
-    ));
+      ),
+    );
   }
 
   // ─── Exit Animations ──────────────────────────────────────────
@@ -943,90 +1169,135 @@ export class Txt extends Shape {
   }
 
   @threadable()
-  public *fadeOut(duration = 0.35, tf: TimingFunction = easeInCubic): ThreadGenerator {
+  public *fadeOut(
+    duration = 0.35,
+    tf: TimingFunction = easeInCubic,
+  ): ThreadGenerator {
     this.prepareExit();
     yield* all(...this.chars.map(c => c.opacity(0, duration, tf)));
     this.endExit();
   }
 
   @threadable()
-  public *fadeOutUp(duration = 0.35, stagger = 0, tf: TimingFunction = easeInCubic): ThreadGenerator {
+  public *fadeOutUp(
+    duration = 0.35,
+    stagger = 0,
+    tf: TimingFunction = easeInCubic,
+  ): ThreadGenerator {
     this.prepareExit();
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    yield* sequence(stagger, ...this.chars.map((c, i) =>
-        all(c.opacity(0, duration, tf), c.position.y(origY[i] - h * 0.15, duration, tf)),
-    ));
+    yield* sequence(
+      stagger,
+      ...this.chars.map((c, i) =>
+        all(
+          c.opacity(0, duration, tf),
+          c.position.y(origY[i] - h * 0.15, duration, tf),
+        ),
+      ),
+    );
     this.endExit();
   }
 
   @threadable()
-  public *fadeOutDown(duration = 0.35, stagger = 0, tf: TimingFunction = easeInCubic): ThreadGenerator {
+  public *fadeOutDown(
+    duration = 0.35,
+    stagger = 0,
+    tf: TimingFunction = easeInCubic,
+  ): ThreadGenerator {
     this.prepareExit();
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    yield* sequence(stagger, ...this.chars.map((c, i) =>
-        all(c.opacity(0, duration, tf), c.position.y(origY[i] + h * 0.15, duration, tf)),
-    ));
+    yield* sequence(
+      stagger,
+      ...this.chars.map((c, i) =>
+        all(
+          c.opacity(0, duration, tf),
+          c.position.y(origY[i] + h * 0.15, duration, tf),
+        ),
+      ),
+    );
     this.endExit();
   }
 
   @threadable()
-  public *scaleOut(duration = 0.3, tf: TimingFunction = easeInCubic): ThreadGenerator {
+  public *scaleOut(
+    duration = 0.3,
+    tf: TimingFunction = easeInCubic,
+  ): ThreadGenerator {
     this.prepareExit();
-    yield* all(...this.chars.map(c =>
+    yield* all(
+      ...this.chars.map(c =>
         all(c.opacity(0, duration, tf), c.scale(0.8, duration, tf)),
-    ));
+      ),
+    );
     this.endExit();
   }
 
   @threadable()
-  public *revealOutUp(duration = 0.35, tf: TimingFunction = easeInCubic): ThreadGenerator {
+  public *revealOutUp(
+    duration = 0.35,
+    tf: TimingFunction = easeInCubic,
+  ): ThreadGenerator {
     this.prepareExit();
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    yield* all(...this.chars.map((c, i) =>
-        c.position.y(origY[i] - h, duration, tf),
-    ));
+    yield* all(
+      ...this.chars.map((c, i) => c.position.y(origY[i] - h, duration, tf)),
+    );
     this.endExit();
   }
 
   @threadable()
-  public *revealOutDown(duration = 0.35, tf: TimingFunction = easeInCubic): ThreadGenerator {
+  public *revealOutDown(
+    duration = 0.35,
+    tf: TimingFunction = easeInCubic,
+  ): ThreadGenerator {
     this.prepareExit();
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    yield* all(...this.chars.map((c, i) =>
-        c.position.y(origY[i] + h, duration, tf),
-    ));
+    yield* all(
+      ...this.chars.map((c, i) => c.position.y(origY[i] + h, duration, tf)),
+    );
     this.endExit();
   }
 
   @threadable()
-  public *trackingOut(duration = 0.35, spread = 0.2, tf: TimingFunction = easeInCubic): ThreadGenerator {
+  public *trackingOut(
+    duration = 0.35,
+    spread = 0.2,
+    tf: TimingFunction = easeInCubic,
+  ): ThreadGenerator {
     this.prepareExit();
     const origX = this.saveX();
     const center = origX.reduce((a, b) => a + b, 0) / origX.length;
-    yield* all(...this.chars.map((c, i) =>
+    yield* all(
+      ...this.chars.map((c, i) =>
         all(
-            c.opacity(0, duration, tf),
-            c.position.x(origX[i] - (origX[i] - center) * spread, duration, tf),
+          c.opacity(0, duration, tf),
+          c.position.x(origX[i] - (origX[i] - center) * spread, duration, tf),
         ),
-    ));
+      ),
+    );
     this.endExit();
   }
 
   @threadable()
-  public *swapOut(duration = 0.3, tf: TimingFunction = easeInCubic): ThreadGenerator {
+  public *swapOut(
+    duration = 0.3,
+    tf: TimingFunction = easeInCubic,
+  ): ThreadGenerator {
     this.prepareExit();
     const origY = this.saveY();
     const h = this.maxCharHeight;
-    yield* all(...this.chars.map((c, i) =>
+    yield* all(
+      ...this.chars.map((c, i) =>
         all(
-            c.opacity(0, duration * 0.8, tf),
-            c.position.y(origY[i] - h, duration, tf),
+          c.opacity(0, duration * 0.8, tf),
+          c.position.y(origY[i] - h, duration, tf),
         ),
-    ));
+      ),
+    );
     this.endExit();
   }
 }
