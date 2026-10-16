@@ -193,6 +193,16 @@ importing a second copy.
   from the camera; defaults are the camera distance and three times it) with
   `background="#1e1b4b"` or the same `fill`. Tween `fog` from `"#1e1b4b00"` to
   fade the fog in.
+- **Soft studio look.** `environment="studio"` (image-based light from a
+  built-in soft room), `toneMapping="neutral"`, `shadows shadowType="vsm"` and a
+  key `Light3D castShadow shadowRadius={12}`. For a floor that is only its
+  contact shadow, use a plane with `material="shadow" opacity={0.3}` (leave its
+  `castShadow` on — VSM needs the receiver in the shadow map): the transparent
+  canvas lets the 2D background show through, so there is no horizon line and no
+  fog is needed. Text and UI on a `Mesh3D` surface are never tone mapped; give
+  labels and screens `contentMaterial="basic"` to show exactly their authored
+  colours. Keep one `shadowType` per scene: switching it between stages rebuilds
+  the shadow maps on every switch.
 - **Fade a shot.** Tween the `Three` node's `opacity`: it fades the finished
   image. Per-object `opacity` makes materials transparent, which is right for
   thin or convex shapes but shows the far side of a knot or a model through its
@@ -315,24 +325,29 @@ function. Lengths are pixels, angles degrees, colours anything `Color` accepts.
 
 ### `Three` (extends `Rect`)
 
-| Prop                | Type                                | Default   | Notes                                                                                                                                                                                                                                            |
-| ------------------- | ----------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `cameraDistance`    | `number`                            | `1600`    | Distance from `cameraTarget`; sets the perspective when `fov` is unset                                                                                                                                                                           |
-| `cameraYaw`         | `number`                            | `0`       | Orbit around the vertical axis                                                                                                                                                                                                                   |
-| `cameraPitch`       | `number`                            | `0`       | Orbit above (`+`) or below the target                                                                                                                                                                                                            |
-| `cameraTarget`      | `[x, y, z]`                         | `[0,0,0]` | The point the camera looks at                                                                                                                                                                                                                    |
-| `fov`               | `number \| null`                    | `null`    | Vertical field of view; `null` derives it so the target plane fills the node                                                                                                                                                                     |
-| `zoom`              | `number`                            | `1`       | `2` shows half the area at twice the size; also applies to raw cameras                                                                                                                                                                           |
-| `orthographic`      | `boolean`                           | `false`   | No perspective; pixels are exact at every depth                                                                                                                                                                                                  |
-| `shadows`           | `boolean`                           | `false`   | Enables shadow maps; needs `castShadow` on a light                                                                                                                                                                                               |
-| `defaultLights`     | `boolean`                           | `true`    | Neutral rig when the scene has no `Light3D`                                                                                                                                                                                                      |
-| `background`        | `color \| null`                     | `null`    | Backdrop of the 3D image; alpha lets `fill` show through                                                                                                                                                                                         |
-| `fog`               | `color \| null`                     | `null`    | Fog colour; enables fog. Alpha thins it (≈ `alpha` strength at `fogFar`)                                                                                                                                                                         |
-| `fogNear`, `fogFar` | `number \| null`                    | `null`    | Fog range from the camera; default `cameraDistance` and 3× it                                                                                                                                                                                    |
-| `quality`           | `number`                            | `1`       | Supersampling on top of the scale the node is drawn at, which already includes the project's resolution scale: a 4K export at resolution scale `2` renders the 3D image (and its surface content) at twice the pixels with `quality` left at `1` |
-| `scene`, `camera`   | `THREE.Scene`, `THREE.Camera`       | `null`    | Raw mode; orbit props are ignored when `camera` is set                                                                                                                                                                                           |
-| `onUpdate`          | `(scene, camera, three) => void`    |           | Signal-tracked; mutate raw objects here. Errors are logged, not rethrown                                                                                                                                                                         |
-| `onRender`          | `(renderer, scene, camera) => void` |           | Replaces the default `renderer.render` call, for post-processing                                                                                                                                                                                 |
+| Prop                   | Type                                                 | Default   | Notes                                                                                                                                                                                                                                            |
+| ---------------------- | ---------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cameraDistance`       | `number`                                             | `1600`    | Distance from `cameraTarget`; sets the perspective when `fov` is unset                                                                                                                                                                           |
+| `cameraYaw`            | `number`                                             | `0`       | Orbit around the vertical axis                                                                                                                                                                                                                   |
+| `cameraPitch`          | `number`                                             | `0`       | Orbit above (`+`) or below the target                                                                                                                                                                                                            |
+| `cameraTarget`         | `[x, y, z]`                                          | `[0,0,0]` | The point the camera looks at                                                                                                                                                                                                                    |
+| `fov`                  | `number \| null`                                     | `null`    | Vertical field of view; `null` derives it so the target plane fills the node                                                                                                                                                                     |
+| `zoom`                 | `number`                                             | `1`       | `2` shows half the area at twice the size; also applies to raw cameras                                                                                                                                                                           |
+| `orthographic`         | `boolean`                                            | `false`   | No perspective; pixels are exact at every depth                                                                                                                                                                                                  |
+| `shadows`              | `boolean`                                            | `false`   | Enables shadow maps; needs `castShadow` on a light                                                                                                                                                                                               |
+| `shadowType`           | `'pcf' \| 'pcfsoft' \| 'vsm'`                        | `'pcf'`   | `vsm`: blurred, soft penumbrae sized by each light's `shadowRadius`; `pcfsoft` falls back to `pcf` on r180+. One type per scene                                                                                                                  |
+| `toneMapping`          | `'none' \| 'linear' \| 'neutral' \| 'aces' \| 'agx'` | `'none'`  | `neutral` keeps base colours close and rolls off highlights; surface content is never tone mapped                                                                                                                                                |
+| `toneMappingExposure`  | `number`                                             | `1`       | Exposure before tone mapping; ignored with `none`                                                                                                                                                                                                |
+| `environment`          | `'studio' \| THREE.Texture \| null`                  | `null`    | Image-based lighting; `studio` is a built-in soft photo-studio room. Lights and reflects only, never drawn                                                                                                                                       |
+| `environmentIntensity` | `number`                                             | `1`       | Strength of `environment`                                                                                                                                                                                                                        |
+| `defaultLights`        | `boolean`                                            | `true`    | Neutral rig when the scene has no `Light3D`                                                                                                                                                                                                      |
+| `background`           | `color \| null`                                      | `null`    | Backdrop of the 3D image; alpha lets `fill` show through                                                                                                                                                                                         |
+| `fog`                  | `color \| null`                                      | `null`    | Fog colour; enables fog. Alpha thins it (≈ `alpha` strength at `fogFar`)                                                                                                                                                                         |
+| `fogNear`, `fogFar`    | `number \| null`                                     | `null`    | Fog range from the camera; default `cameraDistance` and 3× it                                                                                                                                                                                    |
+| `quality`              | `number`                                             | `1`       | Supersampling on top of the scale the node is drawn at, which already includes the project's resolution scale: a 4K export at resolution scale `2` renders the 3D image (and its surface content) at twice the pixels with `quality` left at `1` |
+| `scene`, `camera`      | `THREE.Scene`, `THREE.Camera`                        | `null`    | Raw mode; orbit props are ignored when `camera` is set                                                                                                                                                                                           |
+| `onUpdate`             | `(scene, camera, three) => void`                     |           | Signal-tracked; mutate raw objects here. Errors are logged, not rethrown                                                                                                                                                                         |
+| `onRender`             | `(renderer, scene, camera) => void`                  |           | Replaces the default `renderer.render` call, for post-processing                                                                                                                                                                                 |
 
 Statics: `Three.antialias` (default `true`) turns multisampling on or off for
 every `Three` node at once — it is a property of the shared WebGL context, not
@@ -366,27 +381,27 @@ the load); `opacity3D()` → opacity accumulated through 3D ancestors.
 
 ### `Mesh3D`
 
-| Prop                | Type                                                                                   | Default      | Notes                                                                    |
-| ------------------- | -------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------ |
-| `geometry`          | primitive name \| `THREE.BufferGeometry`                                               | `'box'`      | See the primitive list below                                             |
-| `size`              | `number \| [w, h] \| [w, h, d]`                                                        | `200`        | Missing dimensions repeat the width; diameter for round shapes           |
-| `radius`            | `number`                                                                               | `0`          | Rounded edges for `box`, clamped to half the smallest dimension          |
-| `origin`            | `'center' \| 'top' \| 'bottom' \| 'left' \| 'right' \| 'front' \| 'back' \| [x, y, z]` | `'center'`   | Pivot on the shape; tuple in `-1..1`                                     |
-| `segments`          | `number`                                                                               | `48`         | Tessellation of curved primitives                                        |
-| `material`          | material name \| `THREE.Material`                                                      | `'standard'` | `standard`, `physical`, `phong`, `lambert`, `toon`, `basic`, `normal`    |
-| `color`             | color                                                                                  | `'#ffffff'`  | Alpha multiplies `opacity`                                               |
-| `emissive`          | color                                                                                  | `'#000000'`  | Self-illumination; alpha multiplies `emissiveIntensity`                  |
-| `emissiveIntensity` | `number`                                                                               | `1`          |                                                                          |
-| `metalness`         | `number`                                                                               | `0.1`        | `standard` / `physical` only                                             |
-| `roughness`         | `number`                                                                               | `0.55`       | `standard` / `physical` only                                             |
-| `wireframe`         | `boolean`                                                                              | `false`      |                                                                          |
-| `flatShading`       | `boolean`                                                                              | `false`      |                                                                          |
-| `side`              | `'front' \| 'back' \| 'double'`                                                        | `'front'`    | `double` for planes seen from behind                                     |
-| `map`               | `string \| null`                                                                       | `null`       | Image URL wrapped around the surface; a failed load is logged, not fatal |
-| `contentMaterial`   | material name \| `null`                                                                | `null`       | Shading of the surface content; `null` follows `material`                |
-| `contentScale`      | `number \| null`                                                                       | `null`       | Texels per pixel for the content; `null` follows the viewport and `zoom` |
-| `castShadow`        | `boolean`                                                                              | `true`       |                                                                          |
-| `receiveShadow`     | `boolean`                                                                              | `true`       |                                                                          |
+| Prop                | Type                                                                                   | Default      | Notes                                                                                                                                                                                                               |
+| ------------------- | -------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `geometry`          | primitive name \| `THREE.BufferGeometry`                                               | `'box'`      | See the primitive list below                                                                                                                                                                                        |
+| `size`              | `number \| [w, h] \| [w, h, d]`                                                        | `200`        | Missing dimensions repeat the width; diameter for round shapes                                                                                                                                                      |
+| `radius`            | `number`                                                                               | `0`          | Rounded edges for `box`, clamped to half the smallest dimension                                                                                                                                                     |
+| `origin`            | `'center' \| 'top' \| 'bottom' \| 'left' \| 'right' \| 'front' \| 'back' \| [x, y, z]` | `'center'`   | Pivot on the shape; tuple in `-1..1`                                                                                                                                                                                |
+| `segments`          | `number`                                                                               | `48`         | Tessellation of curved primitives                                                                                                                                                                                   |
+| `material`          | material name \| `THREE.Material`                                                      | `'standard'` | `standard`, `physical`, `phong`, `lambert`, `toon`, `basic`, `normal`, `shadow` (shadow catcher: invisible except received shadows; `opacity` = strength, black unless `color` is set; keep `castShadow` under VSM) |
+| `color`             | color                                                                                  | `'#ffffff'`  | Alpha multiplies `opacity`                                                                                                                                                                                          |
+| `emissive`          | color                                                                                  | `'#000000'`  | Self-illumination; alpha multiplies `emissiveIntensity`                                                                                                                                                             |
+| `emissiveIntensity` | `number`                                                                               | `1`          |                                                                                                                                                                                                                     |
+| `metalness`         | `number`                                                                               | `0.1`        | `standard` / `physical` only                                                                                                                                                                                        |
+| `roughness`         | `number`                                                                               | `0.55`       | `standard` / `physical` only                                                                                                                                                                                        |
+| `wireframe`         | `boolean`                                                                              | `false`      |                                                                                                                                                                                                                     |
+| `flatShading`       | `boolean`                                                                              | `false`      |                                                                                                                                                                                                                     |
+| `side`              | `'front' \| 'back' \| 'double'`                                                        | `'front'`    | `double` for planes seen from behind                                                                                                                                                                                |
+| `map`               | `string \| null`                                                                       | `null`       | Image URL wrapped around the surface; a failed load is logged, not fatal                                                                                                                                            |
+| `contentMaterial`   | material name \| `null`                                                                | `null`       | Shading of the surface content; `null` follows `material`. Never tone mapped; `basic` = exact authored colours                                                                                                      |
+| `contentScale`      | `number \| null`                                                                       | `null`       | Texels per pixel for the content; `null` follows the viewport and `zoom`                                                                                                                                            |
+| `castShadow`        | `boolean`                                                                              | `true`       |                                                                                                                                                                                                                     |
+| `receiveShadow`     | `boolean`                                                                              | `true`       |                                                                                                                                                                                                                     |
 
 Methods: `mesh()` → the inner `THREE.Mesh` (geometry, material); `surfaceSize()`
 → the content area in pixels; `hasSurface()`.
@@ -399,18 +414,20 @@ Primitives: `box` (with `radius`), `sphere`, `plane`, `circle`, `cylinder`,
 
 ### `Light3D`
 
-| Prop          | Type                                                              | Default         | Notes                                                   |
-| ------------- | ----------------------------------------------------------------- | --------------- | ------------------------------------------------------- |
-| `kind`        | `'ambient' \| 'hemisphere' \| 'directional' \| 'point' \| 'spot'` | `'directional'` |                                                         |
-| `color`       | color                                                             | `'#ffffff'`     | Alpha multiplies `intensity`                            |
-| `intensity`   | `number`                                                          | `1`             | Sunlight-strength directionals sit around 2–3           |
-| `groundColor` | color                                                             | `'#444444'`     | `hemisphere` only; alpha dims the ground light          |
-| `target`      | `[x, y, z]`                                                       | `[0,0,0]`       | `directional` / `spot`; in the same space as `position` |
-| `angle`       | `number`                                                          | `30`            | `spot` cone half-angle                                  |
-| `penumbra`    | `number`                                                          | `0.3`           | `spot` edge softness, 0–1                               |
-| `decay`       | `number`                                                          | `0`             | `point` / `spot` falloff; `2` is physical               |
-| `castShadow`  | `boolean`                                                         | `false`         | Needs `shadows` on the `Three` node                     |
-| `shadowArea`  | `number`                                                          | `2400`          | `directional`: side of the shadowed square              |
+| Prop           | Type                                                              | Default         | Notes                                                                                         |
+| -------------- | ----------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
+| `kind`         | `'ambient' \| 'hemisphere' \| 'directional' \| 'point' \| 'spot'` | `'directional'` |                                                                                               |
+| `color`        | color                                                             | `'#ffffff'`     | Alpha multiplies `intensity`                                                                  |
+| `intensity`    | `number`                                                          | `1`             | Sunlight-strength directionals sit around 2–3                                                 |
+| `groundColor`  | color                                                             | `'#444444'`     | `hemisphere` only; alpha dims the ground light                                                |
+| `target`       | `[x, y, z]`                                                       | `[0,0,0]`       | `directional` / `spot`; in the same space as `position`                                       |
+| `angle`        | `number`                                                          | `30`            | `spot` cone half-angle                                                                        |
+| `penumbra`     | `number`                                                          | `0.3`           | `spot` edge softness, 0–1                                                                     |
+| `decay`        | `number`                                                          | `0`             | `point` / `spot` falloff; `2` is physical                                                     |
+| `castShadow`   | `boolean`                                                         | `false`         | Needs `shadows` on the `Three` node                                                           |
+| `shadowArea`   | `number`                                                          | `2400`          | `directional`: side of the shadowed square                                                    |
+| `shadowRadius` | `number`                                                          | `1`             | Shadow blur in texels; with `shadowType="vsm"` try 8–16 (large radii look grainy under `pcf`) |
+| `shadowFar`    | `number \| null`                                                  | `null`          | `directional`: far plane of the shadow camera in pixels; `null` keeps Three's range. Tighter = more depth precision |
 
 ### `Object3D`
 
@@ -438,6 +455,25 @@ or build the object with `create`, which gives every clone its own.
 ### `Group3D`
 
 Transform only. Use it to rotate or move a set of nodes together.
+
+## Addons
+
+`three/addons/*` cannot be imported (the runtime is loaded at run time, not
+bundled). `loadThreeAddon(name)` fetches a vendored addon bound to the loaded
+runtime instead; the host provides the files through
+`configureThree({loadAddon: (name, revision) => import(url)})`. A module with a
+default export is treated as a `factory(THREE)`, any other module is returned
+as it is. Names are listed in `THREE_ADDONS`.
+
+```ts
+const {RoundedBoxGeometry} = yield loadThreeAddon('RoundedBoxGeometry');
+const {TextGeometry, loadFont} = yield loadThreeAddon('TextGeometry');
+const font = yield loadFont('helvetiker-bold');
+```
+
+Build addon objects inside `Object3D`'s `create` so the node disposes them.
+`Line2` needs `material.resolution` set from the renderer viewport (e.g. in
+`onBeforeRender`).
 
 ## Limitations
 

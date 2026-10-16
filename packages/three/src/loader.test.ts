@@ -72,4 +72,59 @@ describe('loader', () => {
     loader.configureThree({module: fakeRuntime('second')});
     expect(loader.getThree()).toBe(first);
   });
+
+  test('loadThreeAddon binds the addon factory to the loaded runtime, once', async () => {
+    const loader = await freshLoader();
+    const runtime = {REVISION: '186'} as unknown as ThreeModule;
+    const requested: string[] = [];
+    loader.configureThree({
+      module: runtime,
+      loadAddon: async (name, revision) => {
+        requested.push(`${name}@r${revision}`);
+        return {default: (three: ThreeModule) => ({SimplexNoise: three})};
+      },
+    });
+    const first = await loader.loadThreeAddon('SimplexNoise');
+    expect(first.SimplexNoise as unknown).toBe(runtime);
+    expect(await loader.loadThreeAddon('SimplexNoise')).toBe(first);
+    expect(requested).toEqual(['SimplexNoise@r186']);
+  });
+
+  test('a module without a default factory is returned as is', async () => {
+    const loader = await freshLoader();
+    const namespace = {SimplexNoise: class {}};
+    loader.configureThree({
+      module: fakeRuntime('x'),
+      loadAddon: async () => namespace,
+    });
+    expect(await loader.loadThreeAddon('SimplexNoise')).toBe(namespace);
+  });
+
+  test('loadThreeAddon rejects unknown names and unconfigured hosts', async () => {
+    const loader = await freshLoader();
+    loader.configureThree({module: fakeRuntime('x')});
+    await expect(loader.loadThreeAddon('Line2')).rejects.toThrow(
+      /not available/,
+    );
+    loader.configureThree({loadAddon: async () => ({default: () => ({})})});
+    await expect(
+      loader.loadThreeAddon('OrbitControls' as never),
+    ).rejects.toThrow(/Unknown Three.js addon/);
+  });
+
+  test('a failed addon fetch is retried on the next call', async () => {
+    const loader = await freshLoader();
+    let calls = 0;
+    loader.configureThree({
+      module: fakeRuntime('x'),
+      loadAddon: async () => {
+        if (calls++ === 0) throw new Error('offline');
+        return {default: () => ({ok: true})};
+      },
+    });
+    await expect(loader.loadThreeAddon('ImprovedNoise')).rejects.toThrow(
+      'offline',
+    );
+    expect(await loader.loadThreeAddon('ImprovedNoise')).toEqual({ok: true});
+  });
 });

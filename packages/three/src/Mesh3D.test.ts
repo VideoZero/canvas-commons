@@ -109,6 +109,41 @@ describe('Mesh3D material', () => {
     expect(material.transparent).toBe(false);
   });
 
+  test('`shadow` is a translucent black shadow catcher', () => {
+    const node = new Mesh3D({material: 'shadow', opacity: 0.3});
+    const material = node.mesh().material as THREE.ShadowMaterial;
+    expect(material).toBeInstanceOf(THREE.ShadowMaterial);
+    // The default white `color` would make an invisible shadow.
+    expect(material.color.getHexString()).toBe('000000');
+    expect(material.opacity).toBeCloseTo(0.3);
+    expect(material.transparent).toBe(true);
+  });
+
+  test('`shadow` stays transparent at full opacity and takes a tint', () => {
+    // Every other kind turns opaque at full opacity...
+    const node = new Mesh3D({material: 'standard'});
+    expect((node.mesh().material as THREE.Material).transparent).toBe(false);
+    // ...but an opaque catcher would paint the whole plane in its colour.
+    node.material('shadow');
+    node.color('#336699');
+    const material = node.mesh().material as THREE.ShadowMaterial;
+    expect(material.opacity).toBe(1);
+    expect(material.transparent).toBe(true);
+    expect(material.color.getHexString()).toBe('336699');
+    node.opacity(0.4);
+    node.mesh();
+    node.opacity(1);
+    expect((node.mesh().material as THREE.Material).transparent).toBe(true);
+  });
+
+  test('a shadow catcher draws before other transparent meshes', () => {
+    const node = new Mesh3D({material: 'shadow'});
+    expect(node.mesh().renderOrder).toBe(-1);
+    node.material('standard');
+    expect(node.mesh().renderOrder).toBe(0);
+    expect(new Mesh3D({geometry: 'plane'}).mesh().renderOrder).toBe(0);
+  });
+
   test('switching the material kind swaps the material', () => {
     const node = new Mesh3D({material: 'standard'});
     expect(node.mesh().material).toBeInstanceOf(THREE.MeshStandardMaterial);

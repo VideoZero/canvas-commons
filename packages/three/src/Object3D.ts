@@ -250,6 +250,11 @@ export class Object3D extends Object3DNode {
           mat.dispose();
         }
       }
+      // An InstancedMesh holds per-instance GPU buffers that only its own
+      // dispose() releases.
+      if ((child as THREE.InstancedMesh).isInstancedMesh) {
+        (child as THREE.InstancedMesh).dispose();
+      }
     });
     this.created = null;
     this.createFailed = false;

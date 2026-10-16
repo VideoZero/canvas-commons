@@ -21,14 +21,22 @@ export type {
   ThreeRenderCallback,
   ThreeUpdateCallback,
 } from './ThreeNode';
+export type {ThreeEnvironmentKind} from './environment';
 export {
+  THREE_ADDONS,
   configureThree,
   getThree,
   isThreeLoaded,
   isThreeLoading,
   loadThree,
+  loadThreeAddon,
 } from './loader';
-export type {ThreeConfig, ThreeModule} from './loader';
+export type {
+  ThreeAddonName,
+  ThreeAddons,
+  ThreeConfig,
+  ThreeModule,
+} from './loader';
 export {
   disposeSharedRenderer,
   getContextLossCount,
@@ -36,5 +44,6 @@ export {
   getSharedRenderer,
   setRendererAntialias,
 } from './renderer';
+export type {ThreeShadowType, ThreeToneMapping} from './renderer';
 export {PIXELS_PER_UNIT, toRadians} from './units';
 export type {PossibleVector3} from './units';

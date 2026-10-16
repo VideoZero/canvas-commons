@@ -10,6 +10,7 @@ import {
   signal,
 } from '@motion-canvas/2d';
 import {
+  Color,
   ColorSignal,
   DependencyContext,
   PossibleColor,
@@ -87,6 +88,15 @@ export type Mesh3DOrigin =
  * - `toon`: stepped cel shading.
  * - `basic`: unlit flat colour — ignores lights entirely.
  * - `normal`: debug rainbow from surface normals.
+ * - `shadow`: invisible except for the shadows it receives — a shadow
+ *   catcher. On a floor plane (`receiveShadow`) the background shows through
+ *   and only the cast shadow remains. `opacity` sets the shadow strength;
+ *   the shadow is black unless you pass a `color`. With the stage's
+ *   `shadowType="vsm"` keep the catcher's `castShadow` on (the default):
+ *   VSM blurs the receiver's own depth into the penumbra, and a catcher
+ *   missing from the shadow map shows an eroded, hard-edged shadow. It is
+ *   drawn before other transparent meshes, so cards and labels standing on
+ *   it never punch holes into its shadow.
  */
 export type Mesh3DMaterial =
   | 'standard'
@@ -95,7 +105,8 @@ export type Mesh3DMaterial =
   | 'lambert'
   | 'toon'
   | 'basic'
-  | 'normal';
+  | 'normal'
+  | 'shadow';
 
 export type Mesh3DSide = 'front' | 'back' | 'double';
 
@@ -388,7 +399,16 @@ export class Mesh3D extends Object3DNode {
    * Shading of the surface content (the 2D children), when it should differ
    * from {@link material}. `'basic'` makes a screen that glows on its own
    * instead of being lit by the scene. `null` (the default) follows
-   * {@link material}.
+   * {@link material} (`standard` for a `shadow` body).
+   *
+   * @remarks
+   * Surface content is exempt from the stage's `toneMapping`. With
+   * `contentMaterial="basic"` that makes text and UI show exactly their
+   * authored colours on any stage look, which is the crispest choice for
+   * labels, signs and screens. Lit content (the default) is still shaded by
+   * the scene's lights and environment: under a tone-mapped stage its hues
+   * stay true, but a strongly lit face can clip to white where the
+   * tone-mapped body around it would roll off.
    */
   @initial(null)
   @signal()
@@ -430,6 +450,7 @@ export class Mesh3D extends Object3DNode {
   private ownMaterial: THREE.Material | null = null;
   private ownMaterialKind: Mesh3DMaterial | null = null;
   private innerMesh: THREE.Mesh | null = null;
+  private catcherOrder = false;
   private surfaceMaterial: THREE.Material | null = null;
   private surfaceMaterialKind: Mesh3DMaterial | null = null;
   private surfaceCanvasElement: HTMLCanvasElement | null = null;
@@ -483,6 +504,14 @@ export class Mesh3D extends Object3DNode {
     mesh.material = this.resolvedMaterials();
     mesh.castShadow = this.castShadow();
     mesh.receiveShadow = this.receiveShadow();
+    // A shadow catcher is transparent and would be depth-sorted by its
+    // centre against transparent surface content; draw it first so content
+    // standing on it does not cut holes into its shadow.
+    const catcher = this.material() === 'shadow';
+    if (catcher !== this.catcherOrder) {
+      mesh.renderOrder = catcher ? -1 : 0;
+      this.catcherOrder = catcher;
+    }
 
     // Size is applied as the inner mesh's scale, so primitives stay
     // unit-sized and tweening `size` does not rebuild their geometry (a
@@ -632,6 +661,21 @@ export class Mesh3D extends Object3DNode {
     const mat = this.ownMaterial as THREE.MeshStandardMaterial;
     const color = this.color();
     const opacity = this.opacity3D() * color.alpha();
+    if (material === 'shadow') {
+      // The default white would make an invisible "shadow"; only an
+      // explicit colour tints it.
+      applyColor(
+        three,
+        mat.color,
+        this.color.isInitial() ? new Color('#000000') : color,
+      );
+      mat.opacity = opacity;
+      mat.side = sideConstant(three, this.side());
+      // A shadow catcher always blends: as an opaque material it would
+      // paint the whole plane black.
+      setTransparent(mat, true);
+      return mat;
+    }
     if ('color' in mat) {
       applyColor(three, mat.color, color);
     }
@@ -915,10 +959,15 @@ export class Mesh3D extends Object3DNode {
     const three = getThree();
     const body = this.material();
     const kind =
-      this.contentMaterial() ?? (typeof body === 'string' ? body : 'standard');
+      this.contentMaterial() ??
+      (typeof body === 'string' && body !== 'shadow' ? body : 'standard');
     if (!this.surfaceMaterial || this.surfaceMaterialKind !== kind) {
       this.disposeSurfaceMaterial();
       this.surfaceMaterial = createMaterial(three, kind);
+      // Text and UI on a surface keep their authored colours under a
+      // stage's `toneMapping` (a no-op without one). Lighting still shades
+      // them like the body.
+      this.surfaceMaterial.toneMapped = false;
       if (canPremultiplySurface(three)) {
         premultipliedSurfaceShader(three, this.surfaceMaterial);
       }
@@ -1191,6 +1240,14 @@ function applyOrigin(
   return geometry;
 }
 
+function sideConstant(three: ThreeModule, side: Mesh3DSide): THREE.Side {
+  return side === 'double'
+    ? three.DoubleSide
+    : side === 'back'
+      ? three.BackSide
+      : three.FrontSide;
+}
+
 function createMaterial(
   three: ThreeModule,
   kind: Mesh3DMaterial,
@@ -1210,6 +1267,8 @@ function createMaterial(
       return new three.MeshBasicMaterial();
     case 'normal':
       return new three.MeshNormalMaterial();
+    case 'shadow':
+      return new three.ShadowMaterial();
   }
 }
 
