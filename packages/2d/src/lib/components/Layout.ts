@@ -224,6 +224,13 @@ export type LayoutAnimateCallback = (
   duration: number,
 ) => ThreadGenerator;
 
+/**
+ * A numeric `lineHeight` up to this is a multiplier, not pixels: a line a few
+ * pixels high is never intended, while `1.2` written CSS-style is common.
+ * Matches the theme's typography tokens.
+ */
+export const LINE_HEIGHT_MULTIPLIER_LIMIT = 4;
+
 @nodeName('Layout')
 export class Layout extends Node {
   /**
@@ -317,6 +324,14 @@ export class Layout extends Node {
   @defaultStyle(500)
   @signal()
   public declare readonly fontWeight: SimpleSignal<number, this>;
+  /**
+   * The height of a line of text.
+   *
+   * @remarks
+   * A number up to 4 is a multiplier of the font size, like a unitless CSS
+   * `line-height` (`1.2`); any other number is pixels (`60`). A percentage
+   * string is relative to the font size (`'120%'`).
+   */
   @defaultStyle('120%')
   @signal()
   public declare readonly lineHeight: SimpleSignal<Length, this>;
@@ -1252,9 +1267,11 @@ export class Layout extends Node {
 
     const lineHeight = this.lineHeight();
     this.element.style.lineHeight =
-      typeof lineHeight === 'number'
-        ? `${lineHeight}px`
-        : (parseFloat(lineHeight as string) / 100).toString();
+      typeof lineHeight !== 'number'
+        ? (parseFloat(lineHeight as string) / 100).toString()
+        : lineHeight <= LINE_HEIGHT_MULTIPLIER_LIMIT
+          ? lineHeight.toString()
+          : `${lineHeight}px`;
 
     this.element.style.fontWeight = this.fontWeight().toString();
     this.element.style.letterSpacing = `${this.letterSpacing()}px`;
