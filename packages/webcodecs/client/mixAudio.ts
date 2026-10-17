@@ -1,6 +1,7 @@
 import type {Logger, Sound} from '@canvas-commons/core';
 import {
   dbToGain,
+  fadeAutomation,
   outputOffset,
   playDuration,
   sourceOffset,
@@ -33,6 +34,8 @@ interface MixEntry {
   start?: number;
   end?: number;
   gain?: number;
+  fadeIn?: number;
+  fadeOut?: number;
 }
 
 /**
@@ -51,6 +54,8 @@ export async function mixProjectAudio(
     start: sound.start,
     end: sound.end,
     gain: sound.gain,
+    fadeIn: sound.fadeIn,
+    fadeOut: sound.fadeOut,
   }));
   // The master track mixes in last, at playback rate 1.
   if (options.master) {
@@ -108,15 +113,30 @@ export async function mixProjectAudio(
     source.buffer = buffer;
     source.playbackRate.value = entry.realPlaybackRate;
 
-    if (entry.gain) {
+    const when = startWhen(entry.offset);
+    const from = Math.max(0, -entry.offset);
+    const automation = fadeAutomation(
+      entry,
+      dbToGain(entry.gain ?? 0),
+      from,
+      from + duration / entry.realPlaybackRate,
+    );
+    if (entry.gain || automation.length > 0) {
       const gain = ctx.createGain();
-      gain.gain.value = dbToGain(entry.gain);
+      gain.gain.value = dbToGain(entry.gain ?? 0);
+      automation.forEach((point, index) => {
+        if (index === 0) {
+          gain.gain.setValueAtTime(point.gain, when + point.time);
+        } else {
+          gain.gain.linearRampToValueAtTime(point.gain, when + point.time);
+        }
+      });
       source.connect(gain).connect(ctx.destination);
     } else {
       source.connect(ctx.destination);
     }
 
-    source.start(startWhen(entry.offset), srcOffset, duration);
+    source.start(when, srcOffset, duration);
     scheduled++;
   }
 

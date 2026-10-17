@@ -1,6 +1,7 @@
 import {describe, expect, test} from 'vitest';
 import {
   dbToGain,
+  fadeAutomation,
   outputOffset,
   playDuration,
   sourceOffset,
@@ -75,4 +76,23 @@ describe('totalLengthSamples', () => {
     expect(totalLengthSamples(1, 60, 48000)).toBe(800));
   test('is at least 1 sample', () =>
     expect(totalLengthSamples(0, 60, 48000)).toBe(1));
+});
+
+describe('fadeAutomation', () => {
+  test('is empty without fades', () =>
+    expect(fadeAutomation({}, 1, 0, 10)).toEqual([]));
+  test('ramps in and out around the gain', () =>
+    expect(fadeAutomation({fadeIn: 1, fadeOut: 2}, 0.5, 0, 10)).toEqual([
+      {time: 0, gain: 0},
+      {time: 1, gain: 0.5},
+      {time: 8, gain: 0.5},
+      {time: 10, gain: 0},
+    ]));
+  test('starts partway into the sound', () =>
+    expect(fadeAutomation({fadeIn: 2, fadeOut: 2}, 1, 1, 10)).toEqual([
+      {time: 0, gain: 0.5},
+      {time: 1, gain: 1},
+      {time: 7, gain: 1},
+      {time: 9, gain: 0},
+    ]));
 });

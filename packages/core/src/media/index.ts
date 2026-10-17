@@ -10,3 +10,4 @@ export * from './AudioManagerPool';
 export * from './AudioResourceManager';
 export * from './decibelsToAmplitude';
 export * from './loadImage';
+export * from './soundFade';

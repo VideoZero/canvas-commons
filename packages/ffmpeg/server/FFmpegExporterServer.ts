@@ -45,22 +45,50 @@ function formatFilters(filters: AudioVideoFilter[]): string {
     .join(',');
 }
 
+function probeDuration(file: string): Promise<number> {
+  return new Promise(resolve => {
+    ffmpeg.ffprobe(file, (error, data) => {
+      resolve(error ? Infinity : (data.format.duration ?? Infinity));
+    });
+  });
+}
+
+/**
+ * Build a `volume` expression for the fades of a sound.
+ *
+ * @param from - Seconds of the sound skipped before the output starts.
+ * @param length - Length of the sound in output seconds.
+ */
+function fadeExpression(sound: Sound, from: number, length: number): string {
+  const elapsed = `(t+${from})`;
+  let gain = '1';
+  if (sound.fadeIn) {
+    gain = `min(${gain}\\,${elapsed}/${sound.fadeIn})`;
+  }
+  if (sound.fadeOut && Number.isFinite(length)) {
+    gain = `min(${gain}\\,(${length}-${elapsed})/${sound.fadeOut})`;
+  }
+  return `max(0\\,${gain})`;
+}
+
 /**
  * The server-side implementation of the FFmpeg video exporter.
  */
 export class FFmpegExporterServer {
   private readonly stream: ImageStream;
+  private readonly size: {x: number; y: number};
   private readonly command: ffmpeg.FfmpegCommand;
-  private readonly promise: Promise<void>;
+  private promise: Promise<void> = Promise.resolve();
 
   public constructor(
-    settings: FFmpegExporterSettings,
+    private readonly settings: FFmpegExporterSettings,
     private readonly config: PluginConfig,
   ) {
     const size = {
       x: Math.round(settings.size.x * settings.resolutionScale),
       y: Math.round(settings.size.y * settings.resolutionScale),
     };
+    this.size = size;
     this.stream = new ImageStream(size);
     this.command = ffmpeg();
 
@@ -70,8 +98,10 @@ export class FFmpegExporterServer {
       .inputFormat('rawvideo')
       .inputOptions(['-pix_fmt rgba', '-s:v', `${size.x}x${size.y}`])
       .inputFps(settings.fps);
+  }
 
-    // Input audio
+  private async addAudio() {
+    const settings = this.settings;
     const sounds = [...settings.sounds];
     if (settings.audio && settings.includeAudio) {
       sounds.push({
@@ -86,7 +116,8 @@ export class FFmpegExporterServer {
 
     for (let i = 0; i < sounds.length; i++) {
       const sound = sounds[i];
-      this.command.input(sound.audio.slice(1));
+      const file = sound.audio.slice(1);
+      this.command.input(file);
 
       let trimmed = sound.start ?? 0;
       if (sound.offset < 0) {
@@ -131,6 +162,21 @@ export class FFmpegExporterServer {
         });
       }
 
+      if (sound.fadeIn || sound.fadeOut) {
+        const end = sound.fadeOut
+          ? Math.min(sound.end ?? Infinity, await probeDuration(file))
+          : Infinity;
+        const fade = fadeExpression(
+          sound,
+          Math.max(0, -sound.offset),
+          (end - (sound.start ?? 0)) / sound.realPlaybackRate,
+        );
+        filters.push({
+          filter: 'volume',
+          options: {volume: `'${fade}'`, eval: 'frame'},
+        });
+      }
+
       if (sound.offset > 0) {
         const delay = Math.round(sound.offset * 1000);
         filters.push({
@@ -164,6 +210,11 @@ export class FFmpegExporterServer {
       ]);
       this.command.outputOptions(['-map 0:v', '-map [a]']);
     }
+  }
+
+  public async start() {
+    const settings = this.settings;
+    await this.addAudio();
 
     // Output settings
     this.command
@@ -173,7 +224,7 @@ export class FFmpegExporterServer {
         `-t ${settings.duration / settings.fps}`,
       ])
       .outputFps(settings.fps)
-      .size(`${size.x}x${size.y}`);
+      .size(`${this.size.x}x${this.size.y}`);
     if (settings.fastStart) {
       this.command.outputOptions(['-movflags +faststart']);
     }
@@ -181,9 +232,7 @@ export class FFmpegExporterServer {
     this.promise = new Promise<void>((resolve, reject) => {
       this.command.on('end', () => resolve()).on('error', reject);
     });
-  }
 
-  public async start() {
     if (!fs.existsSync(this.config.output)) {
       await fs.promises.mkdir(this.config.output, {recursive: true});
     }

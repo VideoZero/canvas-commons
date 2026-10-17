@@ -9,6 +9,15 @@ export interface SoundSettings {
   gain?: number;
   detune?: number;
   playbackRate?: number;
+  /**
+   * The duration in seconds over which the sound fades in from silence.
+   */
+  fadeIn?: number;
+  /**
+   * The duration in seconds over which the sound fades out to silence before
+   * it ends.
+   */
+  fadeOut?: number;
 }
 
 export interface Sound extends SoundSettings {
@@ -49,6 +58,27 @@ export class SoundBuilder {
    */
   public gain(db: number): this {
     this.settings.gain = db;
+    return this;
+  }
+
+  /**
+   * Fade the sound in at its start and out at its end.
+   *
+   * @remarks
+   * The durations are measured in the timeline, after trimming and changing
+   * the playback rate.
+   *
+   * @example
+   * ```ts
+   * sound(music).fade(1, 2).play();
+   * ```
+   *
+   * @param fadeIn - The duration of the fade-in in seconds.
+   * @param fadeOut - The duration of the fade-out in seconds.
+   */
+  public fade(fadeIn?: number, fadeOut?: number): this {
+    this.settings.fadeIn = fadeIn;
+    this.settings.fadeOut = fadeOut;
     return this;
   }
 
