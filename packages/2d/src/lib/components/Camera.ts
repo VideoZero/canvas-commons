@@ -384,7 +384,13 @@ export class Camera extends Node {
   }
 
   protected override drawChildren(context: CanvasRenderingContext2D) {
-    this.scene().render(context);
+    const scene = this.scene();
+    // Cameras can share a scene, and its cached nodes must be rasterized in
+    // the space of the camera currently drawing it.
+    if (scene.parent() !== this) {
+      scene.parent(this);
+    }
+    scene.render(context);
   }
 
   // eslint-disable-next-line @typescript-eslint/naming-convention

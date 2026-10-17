@@ -4,6 +4,7 @@ import {describe, expect, it} from 'vitest';
 import {useScene2D} from '../../scenes';
 import {Camera} from '../Camera';
 import {Line} from '../Line';
+import {Node} from '../Node';
 import {Rect} from '../Rect';
 import {generatorTest} from './generatorTest';
 import {mockScene2D} from './mockScene2D';
@@ -16,6 +17,20 @@ class CachedRect extends Rect {
   public cacheRect(): BBox {
     return this.worldSpaceCacheBBox();
   }
+}
+
+function fakeContext(): CanvasRenderingContext2D {
+  return new Proxy(
+    {},
+    {
+      get: (target: Record<string, unknown>, property: string) =>
+        property in target ? target[property] : () => undefined,
+      set: (target: Record<string, unknown>, property: string, value) => {
+        target[property] = value;
+        return true;
+      },
+    },
+  ) as unknown as CanvasRenderingContext2D;
 }
 
 describe('Camera transforms', () => {
@@ -71,5 +86,24 @@ describe('Camera transforms', () => {
     expect(rect.width).toBeLessThan(210);
     expect(Math.abs(rect.center.x - center.x)).toBeLessThan(2);
     expect(Math.abs(rect.center.y - center.y)).toBeLessThan(2);
+  });
+
+  it('places a shared scene in the space of the camera drawing it', () => {
+    const view = useScene2D().getView();
+    const scene = new Node({});
+    const child = new Rect({size: 100});
+    scene.add(child);
+    const left = new Camera({scene, position: [-200, 0]});
+    const right = new Camera({scene, position: [200, 0]});
+    view.add([left, right]);
+    const center = new Vector2(0, 0).transformAsPoint(view.localToWorld());
+
+    left.render(fakeContext());
+    const leftWorld = new Vector2(0, 0).transformAsPoint(child.localToWorld());
+    right.render(fakeContext());
+    const rightWorld = new Vector2(0, 0).transformAsPoint(child.localToWorld());
+
+    expect(leftWorld.x).toBeCloseTo(center.x + 200, 3);
+    expect(rightWorld.x).toBeCloseTo(center.x - 200, 3);
   });
 });
