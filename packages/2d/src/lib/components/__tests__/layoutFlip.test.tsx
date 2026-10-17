@@ -227,6 +227,28 @@ describe('Layout FLIP edge cases', () => {
         );
       }),
     );
+
+    it(
+      'moves children along a straight world path on thawLayout',
+      generatorTest(function* () {
+        const {outer, stack, last} = setup();
+        stack.freezeLayout();
+        stack.children()[1].remove();
+        yield* checkSiblingPath(outer, stack, last, () => stack.thawLayout(1));
+      }),
+    );
+
+    it(
+      'thaws a rotated child along a straight world path',
+      generatorTest(function* () {
+        const {outer, stack, last} = setup();
+        last.rotation(90);
+        last.scale(2);
+        stack.freezeLayout();
+        stack.children()[1].remove();
+        yield* checkSiblingPath(outer, stack, last, () => stack.thawLayout(1));
+      }),
+    );
   });
 
   describe('reparenting', () => {
@@ -346,6 +368,19 @@ describe('Layout FLIP edge cases', () => {
     );
 
     it(
+      'restores translate when thawLayout is canceled',
+      generatorTest(function* () {
+        const {stack, a, b} = setup();
+        stack.freezeLayout();
+        a.position.x(-400);
+        const task = yield stack.thawLayout(1);
+        yield* waitFor(0.5);
+        cancel(task);
+        expectUnlocked(stack, a, b);
+      }),
+    );
+
+    it(
       'restores the node when transitionTo is canceled',
       generatorTest(function* () {
         const {stack, a, b} = setup();
@@ -360,6 +395,31 @@ describe('Layout FLIP edge cases', () => {
         expect(b.isLayoutRoot()).toBe(false);
         expect(stack.children()).toEqual([a]);
         expectUnlocked(stack, a);
+      }),
+    );
+  });
+
+  describe('existing translate', () => {
+    it(
+      'preserves a user translate across thawLayout',
+      generatorTest(function* () {
+        const stack = createRef<Layout>();
+        const a = createRef<Rect>();
+        useScene2D()
+          .getView()
+          .add(
+            <Layout ref={stack} layout direction="row" gap={10}>
+              <Rect width={100} height={100} />
+              <Rect ref={a} width={100} height={100} translate={[0, 30]} />
+            </Layout>,
+          );
+        stack().freezeLayout();
+        stack().children()[0].remove();
+        const pre = visual(a());
+        const task = yield stack().thawLayout(1);
+        expectVec(visual(a()), pre);
+        yield* task;
+        expect(a().translate()).toEqual(new Vector2(0, 30));
       }),
     );
   });

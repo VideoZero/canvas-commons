@@ -1967,7 +1967,8 @@ export class Layout extends Node {
     timing: TimingFunction = easeInOutCubic,
     interpolation: InterpolationFunction<Vector2> = Vector2.lerp,
   ): ThreadGenerator {
-    const children = this.applyLayout();
+    // While frozen, `applyLayout` reports no participating children.
+    const children = this.children();
     const pre = snapshotPositions(children);
     this.layoutChildren(true);
     this.requestLayoutUpdate();
