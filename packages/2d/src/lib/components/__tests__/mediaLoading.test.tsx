@@ -47,7 +47,7 @@ describe('media loading', () => {
     vi.restoreAllMocks();
   });
 
-  it('loads an image again after it failed to load', async () => {
+  it('loads an image again once the assets change', () => {
     const image = new ProbeImg({src: '/missing.png'});
     useScene2D().getView().add(image);
     const failed = image.element();
@@ -56,11 +56,13 @@ describe('media loading', () => {
     image.src('/other.png');
     image.element();
     image.src('/missing.png');
+    expect(image.element()).toBe(failed);
 
+    useScene2D().getView().assetHash('changed-image');
     expect(image.element()).not.toBe(failed);
   });
 
-  it('loads a video again after it failed to load', async () => {
+  it('loads a video again once the assets change', () => {
     const video = new ProbeVideo({src: '/missing.mp4'});
     useScene2D().getView().add(video);
     const failed = video.element();
@@ -69,7 +71,9 @@ describe('media loading', () => {
     video.src('/other.mp4');
     video.element();
     video.src('/missing.mp4');
+    expect(video.element()).toBe(failed);
 
+    useScene2D().getView().assetHash('changed-video');
     expect(video.element()).not.toBe(failed);
   });
 
@@ -133,5 +137,64 @@ describe('media loading', () => {
 
     expect(image.element().crossOrigin).toBe('anonymous');
     expect(video.element().crossOrigin).toBe('anonymous');
+  });
+});
+
+describe('media that fails to load over many frames', () => {
+  mockScene2D();
+
+  const broken = new WeakSet<HTMLImageElement | HTMLVideoElement>();
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockReturnValue(undefined);
+    vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockImplementation(
+      function (this: HTMLImageElement) {
+        return broken.has(this);
+      },
+    );
+  });
+
+  afterEach(async () => {
+    await DependencyContext.consumePromises();
+    vi.restoreAllMocks();
+  });
+
+  async function playFrames(
+    element: () => HTMLImageElement | HTMLVideoElement,
+  ) {
+    const created = new Set<HTMLImageElement | HTMLVideoElement>();
+    for (let frame = 0; frame < 30; frame++) {
+      const current = element();
+      created.add(current);
+      if (!broken.has(current)) {
+        broken.add(current);
+        current.dispatchEvent(new Event('error'));
+      }
+      await DependencyContext.consumePromises();
+      element();
+      expect(DependencyContext.hasPromises()).toBe(false);
+    }
+    return created;
+  }
+
+  it('requests and reports a missing image once', async () => {
+    const image = new ProbeImg({src: '/frames-missing.png'});
+    useScene2D().getView().add(image);
+
+    const created = await playFrames(() => image.element());
+
+    expect(created.size).toBe(1);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it('requests and reports a missing video once', async () => {
+    const video = new ProbeVideo({src: '/frames-missing.mp4'});
+    useScene2D().getView().add(video);
+
+    const created = await playFrames(() => video.element());
+
+    expect(created.size).toBe(1);
+    expect(warn).toHaveBeenCalledOnce();
   });
 });

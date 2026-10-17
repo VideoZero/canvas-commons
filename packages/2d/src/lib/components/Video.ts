@@ -69,6 +69,8 @@ export class Video extends Rect {
    */
   public static readonly unavailable = new Set<string>();
 
+  private static readonly failed = new WeakMap<HTMLVideoElement, string>();
+
   /**
    * The source of this video.
    *
@@ -195,15 +197,29 @@ export class Video extends Rect {
     registerAttributionForSource(rawSrc);
 
     const poolKey = `${this.key}/${key}`;
+    // A failed video stays pooled, drawn blank, until the assets change or
+    // the project is loaded again, which gives the view a new asset hash.
+    const hash = this.view().assetHash();
     let video = Video.pool[poolKey];
-    if (!video) {
+    const failedAt = video ? Video.failed.get(video) : undefined;
+    if (!video || (failedAt !== undefined && failedAt !== hash)) {
+      const logger = useLogger();
+      const rawSrc = this.src();
       const created = document.createElement('video');
       created.crossOrigin = 'anonymous';
       created.addEventListener('error', () => {
-        if (Video.pool[poolKey] === created) {
-          delete Video.pool[poolKey];
-        }
+        Video.failed.set(created, hash);
         Video.unavailable.add(src);
+        logger.warn({
+          message: `Failed to load a video, it will be drawn blank`,
+          remarks: `\
+The <code>src</code> property was set to:
+<pre><code>${rawSrc}</code></pre>
+...which resolved to the following url:
+<pre><code>${src}</code></pre>
+Make sure that source is correct and that the video exists.`,
+          inspect: this.key,
+        });
       });
       created.addEventListener('loadedmetadata', () =>
         Video.unavailable.delete(src),
@@ -213,33 +229,13 @@ export class Video extends Rect {
       video = created;
     }
 
-    if (video.readyState < 2) {
-      const logger = useLogger();
-      const failed = () =>
-        logger.warn({
-          message: `Failed to load a video, it will be drawn blank`,
-          remarks: `\
-The <code>src</code> property was set to:
-<pre><code>${this.src()}</code></pre>
-...which resolved to the following url:
-<pre><code>${src}</code></pre>
-Make sure that source is correct and that the video exists.`,
-          inspect: this.key,
-        });
+    if (video.readyState < 2 && !Video.failed.has(video)) {
       const element = video;
       DependencyContext.collectPromise(
         new Promise<void>(resolve => {
-          if (element.error) {
-            failed();
-            resolve();
-            return;
-          }
-          const listener = (event: Event) => {
+          const listener = () => {
             element.removeEventListener('canplay', listener);
             element.removeEventListener('error', listener);
-            if (event.type === 'error') {
-              failed();
-            }
             resolve();
           };
           element.addEventListener('canplay', listener);

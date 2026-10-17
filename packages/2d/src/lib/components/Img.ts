@@ -76,6 +76,7 @@ export interface ImgProps extends RectProps {
 @nodeName('Img')
 export class Img extends Rect {
   private static pool: Record<string, HTMLImageElement> = {};
+  private static readonly failed = new WeakMap<HTMLImageElement, string>();
 
   static {
     if (import.meta.hot) {
@@ -161,32 +162,20 @@ export class Img extends Rect {
     const {key, src} = resolveAssetUrl(rawSrc, this.view().assetHash);
     registerAttributionForSource(rawSrc);
 
+    // A failed image stays pooled, drawn blank, until the assets change or
+    // the project is loaded again, which gives the view a new asset hash.
+    const hash = this.view().assetHash();
     let image = Img.pool[key];
-    if (!image) {
+    const failedAt = image ? Img.failed.get(image) : undefined;
+    if (!image || (failedAt !== undefined && failedAt !== hash)) {
+      const logger = useLogger();
       const created = document.createElement('img');
       created.crossOrigin = 'anonymous';
       created.addEventListener('error', () => {
-        if (Img.pool[key] === created) {
-          delete Img.pool[key];
-        }
-      });
-      created.src = src;
-      Img.pool[key] = created;
-      image = created;
-    }
-
-    if (!image.complete) {
-      const logger = useLogger();
-      const element = image;
-      DependencyContext.collectPromise(
-        new Promise<void>(resolve => {
-          const listener = (event: Event) => {
-            element.removeEventListener('load', listener);
-            element.removeEventListener('error', listener);
-            if (event.type === 'error') {
-              logger.warn({
-                message: `Failed to load an image, it will be drawn blank`,
-                remarks: `\
+        Img.failed.set(created, hash);
+        logger.warn({
+          message: `Failed to load an image, it will be drawn blank`,
+          remarks: `\
 The <code>src</code> property was set to:
 <pre><code>${rawSrc}</code></pre>
 ...which resolved to the following url:
@@ -194,9 +183,21 @@ The <code>src</code> property was set to:
 Make sure that source is correct and that the image exists.<br/>
 <a target='_blank' href='https://canvascommons.io/docs/media#images'>Learn more</a>
 about working with images.`,
-                inspect: this.key,
-              });
-            }
+          inspect: this.key,
+        });
+      });
+      created.src = src;
+      Img.pool[key] = created;
+      image = created;
+    }
+
+    if (!image.complete && !Img.failed.has(image)) {
+      const element = image;
+      DependencyContext.collectPromise(
+        new Promise<void>(resolve => {
+          const listener = () => {
+            element.removeEventListener('load', listener);
+            element.removeEventListener('error', listener);
             resolve();
           };
           element.addEventListener('load', listener);
