@@ -1694,10 +1694,15 @@ export class Layout extends Node {
    * ```
    *
    * @param order - The current children in their new order.
+   */
+  public reorder(order: Node[]): this;
+  /**
+   * Animate the children of this layout into a new order.
+   *
+   * @param order - The current children in their new order.
    * @param duration - The duration of the animation in seconds.
    * @param timing - The timing function of the animation.
    */
-  public reorder(order: Node[]): this;
   public reorder(
     order: Node[],
     duration: number,
