@@ -82,8 +82,8 @@ export interface ShapeProps extends LayoutProps {
    */
   roughDisableMultiStrokeFill?: SignalValue<boolean>;
 
-  fillShaders?: PossibleShaderConfig;
-  strokeShaders?: PossibleShaderConfig;
+  fillShaders?: SignalValue<PossibleShaderConfig>;
+  strokeShaders?: SignalValue<PossibleShaderConfig>;
 }
 
 @nodeName('Shape')
