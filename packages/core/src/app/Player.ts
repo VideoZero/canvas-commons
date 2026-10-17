@@ -34,6 +34,15 @@ export interface PlayerSettings {
 const MAX_AUDIO_DESYNC = 1 / 50;
 
 /**
+ * How far, in seconds, to start the audio behind the animation after a seek.
+ *
+ * @remarks
+ * A seeked media element needs time to buffer before it emits samples. The
+ * head start is a duration so that it doesn't depend on the preview's fps.
+ */
+const AUDIO_SEEK_LEAD_IN = 0.05;
+
+/**
  * The player logic used by the editor and embeddable player.
  *
  * @remarks
@@ -432,7 +441,7 @@ export class Player {
     const audioPaused =
       state.paused || this.finished || !this.audio.isInRange(this.status.time);
     if (await this.audio.setPaused(audioPaused)) {
-      this.syncAudio(-3);
+      this.syncAudio(-AUDIO_SEEK_LEAD_IN);
     }
     this.audio.setMuted(state.muted);
     this.audio.setVolume(state.volume);
@@ -454,7 +463,7 @@ export class Player {
       this.logger.profile('seek time');
       await this.playback.seek(clampedFrame);
       this.logger.profile('seek time');
-      this.syncAudio(-3);
+      this.syncAudio(-AUDIO_SEEK_LEAD_IN);
     }
     // Do nothing if paused or is ahead of the audio.
     else if (
@@ -539,8 +548,9 @@ export class Player {
     return clamp(this.startFrame, this.endFrame, frame);
   }
 
-  private syncAudio(frameOffset = 0) {
-    const time = this.status.framesToSeconds(this.playback.frame + frameOffset);
+  private syncAudio(secondsOffset = 0) {
+    const time =
+      this.status.framesToSeconds(this.playback.frame) + secondsOffset;
     this.audio.setTime(time);
 
     this.audioPool.prepare(time);
