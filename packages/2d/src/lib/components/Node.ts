@@ -30,6 +30,7 @@ import {
   transformScalar,
   unwrap,
   useLogger,
+  useThread,
 } from '@canvas-commons/core';
 import {
   NODE_NAME,
@@ -140,6 +141,28 @@ export interface NodeProps {
 
 @nodeName('Node')
 export class Node implements Promisable<Node> {
+  /**
+   * Warn when an entrance animation starts on a node that has already been on
+   * screen for a while, so that it flashes away and animates in again.
+   *
+   * @remarks
+   * Off by default, meant for validation runs. Covers fading in a node that
+   * was never hidden and the entrances of subclasses that call
+   * {@link Node.warnVisibleBeforeEntrance}. Doesn't detect
+   * `node.opacity(0); yield* node.opacity(1, 1);` on a node that was already
+   * on screen.
+   *
+   * @example
+   * ```ts
+   * Node.warnVisibleBeforeEntrance = true;
+   * ```
+   */
+  public static warnVisibleBeforeEntrance = false;
+
+  private static readonly attachedAt = new WeakMap<Node, number>();
+  private static readonly tweenedOpacity = new WeakSet<Node>();
+  private static readonly warnedVisibleBeforeEntrance = new WeakSet<Node>();
+
   /**
    * @internal
    */
@@ -411,6 +434,143 @@ export class Node implements Promisable<Node> {
   @computed()
   public absoluteOpacity(): number {
     return (this.parent()?.absoluteOpacity() ?? 1) * this.opacity();
+  }
+
+  @threadable()
+  protected *tweenOpacity(
+    value: SignalValue<number>,
+    time: number,
+    timingFunction: TimingFunction,
+    interpolationFunction: InterpolationFunction<number>,
+  ): ThreadGenerator {
+    if (Node.warnVisibleBeforeEntrance && !Node.tweenedOpacity.has(this)) {
+      Node.tweenedOpacity.add(this);
+      const from = this.opacity();
+      const to = clamp(0, 1, unwrap(value));
+      let scale = this.scale();
+      for (let node = this.parent(); node; node = node.parent()) {
+        scale = scale.mul(node.scale());
+      }
+      // Only a fade to the opacity the node never left: partial opacities are
+      // deliberate dims, and a node at scale 0 is hidden another way.
+      if (
+        time > 0 &&
+        to >= 0.99 &&
+        Math.abs(to - from) < 0.01 &&
+        this.opacity.context.isInitial() &&
+        Math.abs(scale.x) > 1e-3 &&
+        Math.abs(scale.y) > 1e-3
+      ) {
+        this.warnVisibleBeforeEntrance(
+          `opacity(${+to.toFixed(2)}) fade-in`,
+          ', so the fade does nothing',
+        );
+      }
+    }
+    yield* this.opacity.context.tweener(
+      value,
+      time,
+      timingFunction,
+      interpolationFunction,
+    );
+  }
+
+  /**
+   * The name used for this node in validation warnings.
+   */
+  protected warningLabel(): string {
+    // Classes without their own node name inherit one from a base class. Their
+    // class name is used instead: decorated classes are renamed `_Name`, and
+    // bundlers append a digit (`Img2`).
+    const prototype = Object.getPrototypeOf(this);
+    if (Object.prototype.hasOwnProperty.call(prototype, NODE_NAME)) {
+      return this[NODE_NAME];
+    }
+    return (
+      this.constructor.name.replace(/^_/, '').replace(/\d+$/, '') ||
+      this[NODE_NAME]
+    );
+  }
+
+  /**
+   * Record that the given node is shown from now on, for
+   * {@link Node.warnVisibleBeforeEntrance}.
+   *
+   * @remarks
+   * Nodes are recorded when they're added to a parent. Subclasses can call
+   * this when their content is replaced, so that the next entrance counts
+   * from then.
+   *
+   * @param node - The node that is shown.
+   */
+  protected static markAttached(node: Node) {
+    if (Node.warnVisibleBeforeEntrance) {
+      Node.attachedAt.set(node, node.scene2D.playback.time);
+    }
+  }
+
+  /**
+   * Warn, once per node, if this node has been visible for a while when its
+   * entrance animation starts.
+   *
+   * @remarks
+   * Does nothing unless {@link Node.warnVisibleBeforeEntrance} is enabled.
+   * Subclasses call this at the start of their entrance animations.
+   *
+   * @example
+   * ```ts
+   * class Card extends Rect {
+   *   public *enter() {
+   *     this.warnVisibleBeforeEntrance('enter() entrance');
+   *     this.opacity(0);
+   *     yield* this.opacity(1, 0.5);
+   *   }
+   * }
+   * ```
+   *
+   * @param via - The entrance as named in the message.
+   * @param suffix - Text appended to the first sentence of the message.
+   */
+  protected warnVisibleBeforeEntrance(via: string, suffix = '') {
+    if (
+      !Node.warnVisibleBeforeEntrance ||
+      Node.warnedVisibleBeforeEntrance.has(this) ||
+      this.absoluteOpacity() <= 0
+    ) {
+      return;
+    }
+
+    let since = Node.attachedAt.get(this) ?? -Infinity;
+    let root = this.parent();
+    for (let parent = root?.parent(); root && parent; parent = root.parent()) {
+      since = Math.max(since, Node.attachedAt.get(root) ?? -Infinity);
+      root = parent;
+    }
+    const playback = this.scene2D.playback;
+    if (
+      root !== this.view2D ||
+      since === -Infinity ||
+      playback.time - since <= 0.1 + 1e-6
+    ) {
+      return;
+    }
+
+    Node.warnedVisibleBeforeEntrance.add(this);
+    const start = playback.framesToSeconds(this.scene2D.firstFrame);
+    // Thread time is what `waitFor()` counts, a frame ahead of the playback.
+    let startedAt = playback.time - start;
+    try {
+      startedAt = useThread().time();
+    } catch {
+      // Not called from a generator.
+    }
+    const at = (time: number) => `${Math.max(0, time).toFixed(1)}s`;
+    useLogger().warn({
+      message: `${this.warningLabel()} is already visible when its ${via} starts at ${at(startedAt)}${suffix} (added at ${at(since - start)}).`,
+      remarks:
+        'Create it with <code>opacity={0}</code>, or add it to the scene right before animating it in.',
+      inspect: this.key,
+    });
   }
 
   @filtersSignal()
@@ -784,6 +944,7 @@ export class Node implements Promisable<Node> {
         newChildren.push(node);
         node.remove();
         node.parent(this);
+        Node.markAttached(node);
       }
     }
 
@@ -1444,6 +1605,9 @@ export class Node implements Promisable<Node> {
         current.removeChild(newChild);
       }
       keep.add(newChild.key);
+      if (current !== this) {
+        Node.markAttached(newChild);
+      }
       newChild.parent(this);
     }
 
