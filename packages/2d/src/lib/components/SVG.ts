@@ -89,11 +89,17 @@ If you're not interested in animating SVG, you can use {@link Img} instead.
  */
 export class SVG extends Shape {
   @lazy(() => {
+    // A shadow root keeps the page's stylesheets from restyling the SVG.
+    const host = document.createElement('div');
+    getDomContainer().appendChild(host);
     const element = document.createElement('div');
-    getDomContainer().appendChild(element);
+    element.style.color = SVG.currentColorSentinel;
+    host.attachShadow({mode: 'open'}).appendChild(element);
     return element;
   })
   protected static containerElement: HTMLDivElement;
+  // What a computed paint resolves to when it says `currentColor`.
+  private static readonly currentColorSentinel = 'rgb(1, 2, 3)';
   private static svgNodesPool: Record<string, SVGDocumentData> = {};
 
   /**
@@ -682,13 +688,15 @@ export class SVG extends Shape {
 
   private static parseLineDash(value: string | null): number[] | null {
     if (!value) return null;
+    if (value === 'none') return [];
 
-    const list = value.split(/,|\s+/);
-    if (list.findIndex(str => str.endsWith('%')) > 0) {
+    const list = value.split(/[\s,]+/).filter(str => str.length > 0);
+    if (list.some(str => str.endsWith('%'))) {
       useLogger().warn(`SVG: percentage line dash are ignored`);
       return null;
     }
-    return list.map(str => parseFloat(str));
+    const dash = list.map(str => parseFloat(str));
+    return dash.every(Number.isFinite) ? dash : null;
   }
 
   private static parseDashOffset(value: string | null): number | null {
@@ -706,12 +714,39 @@ export class SVG extends Shape {
     return parseFloat(value);
   }
 
-  /** Read a presentation property, preferring `style` over the attribute. */
+  /**
+   * Read a presentation property the element sets itself.
+   *
+   * @remarks
+   * The element's `style` wins over its attribute. Without either, the
+   * computed style still reveals a value set by a stylesheet rule, such as one
+   * in the document's own `<style>`: inherited properties set that way differ
+   * from the parent's, and `opacity` differs from its initial value. Anything
+   * else is left to `inheritedStyle`, which follows a `<use>` to its target
+   * where the computed style would follow the target's own ancestors.
+   */
   private static getPresentationProperty(
     element: SVGGraphicsElement,
     name: string,
   ): string | null {
-    return element.style.getPropertyValue(name) || element.getAttribute(name);
+    const own =
+      element.style.getPropertyValue(name) || element.getAttribute(name);
+    if (own) {
+      return own === 'inherit' ? null : own;
+    }
+
+    const computed = window.getComputedStyle(element).getPropertyValue(name);
+    if (!computed) return null;
+    if (name === 'opacity') {
+      return computed === '1' ? null : computed;
+    }
+
+    const parent = element.parentElement;
+    const inherited = parent
+      ? window.getComputedStyle(parent).getPropertyValue(name)
+      : '';
+    if (computed === inherited) return null;
+    return computed === SVG.currentColorSentinel ? 'currentColor' : computed;
   }
 
   /**
@@ -723,7 +758,9 @@ export class SVG extends Shape {
     element: SVGGraphicsElement,
     inheritedStyle: ShapeProps,
   ): ShapeProps {
-    const lineWidth = this.getPresentationProperty(element, 'stroke-width');
+    const lineWidth = parseFloat(
+      this.getPresentationProperty(element, 'stroke-width') ?? '',
+    );
 
     return {
       fill:
@@ -731,8 +768,9 @@ export class SVG extends Shape {
       stroke:
         this.getPresentationProperty(element, 'stroke') ??
         inheritedStyle.stroke,
-      lineWidth:
-        lineWidth === null ? inheritedStyle.lineWidth : parseFloat(lineWidth),
+      lineWidth: Number.isFinite(lineWidth)
+        ? lineWidth
+        : inheritedStyle.lineWidth,
       lineCap:
         this.parseLineCap(
           this.getPresentationProperty(element, 'stroke-linecap'),
@@ -847,7 +885,7 @@ export class SVG extends Shape {
         hrefElement,
         svgRoot,
         transformMatrix,
-        inheritedStyle,
+        style,
       );
     } else if (child.tagName === 'path') {
       const data = child.getAttribute('d');

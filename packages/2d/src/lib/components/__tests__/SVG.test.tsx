@@ -88,6 +88,13 @@ function rendered(svg: string, props: ShapeProps = {}): Shape {
   return node;
 }
 
+function withStylesheet(css: string) {
+  const style = window.document.createElement('style');
+  style.textContent = css;
+  window.document.head.appendChild(style);
+  return style;
+}
+
 describe('SVG', () => {
   mockScene2D();
   polyfillSVGDom();
@@ -180,6 +187,15 @@ describe('SVG', () => {
       expect(props.scale).toMatchObject({x: 2, y: 2});
     });
 
+    it('paints a use target with the use element style', () => {
+      const {props} = only(
+        '<svg viewBox="0 0 10 10"><defs><path id="dot" d="M0 0L1 1"/></defs><use href="#dot" fill="rgb(255,0,0)" stroke-width="3"/></svg>',
+      );
+
+      expect(props.fill).toBe('rgb(255,0,0)');
+      expect(props.lineWidth).toBe(3);
+    });
+
     it('paints a typeset glyph with the color of the node', () => {
       const glyph = rendered(
         '<svg viewBox="0 0 10 10"><defs><path id="MJX-1-TEX-I-1D465" d="M0 0L1 1"/></defs><g stroke="currentColor" fill="currentColor" stroke-width="0"><g data-mml-node="mi"><use data-c="1D465" xlink:href="#MJX-1-TEX-I-1D465"/></g></g></svg>',
@@ -238,6 +254,86 @@ describe('SVG', () => {
 
       expect(hex(path.fill())).toBe('#f38ba8');
       expect(path.lineWidth()).toBe(2);
+    });
+
+    it('reads a dash array with commas and spaces', () => {
+      expect(painted(`<g stroke-dasharray="5, 3"/>`).lineDash()).toEqual([
+        5, 3,
+      ]);
+    });
+
+    it('reads a dash array of none as a solid line', () => {
+      const path = painted(`<g stroke-dasharray="none"/>`, {lineDash: [4]});
+
+      expect(path.lineDash()).toEqual([]);
+    });
+
+    it('ignores a dash array that starts with a percentage', () => {
+      const path = painted(`<g stroke-dasharray="10%, 5"/>`, {lineDash: [4]});
+
+      expect(path.lineDash()).toEqual([4]);
+    });
+
+    it('treats inherit as not set', () => {
+      const path = painted(`<g fill="inherit"/>`, {fill: 'rgb(249,226,175)'});
+
+      expect(hex(path.fill())).toBe('#f9e2af');
+    });
+
+    // jsdom ignores the stylesheets of an SVG and of a shadow root but applies
+    // the document's everywhere, which is enough to stand in for them here.
+    describe('from a stylesheet', () => {
+      let style: HTMLStyleElement | null = null;
+      afterEach(() => {
+        style?.remove();
+        style = null;
+      });
+
+      it('reads paint set by a class', () => {
+        style = withStylesheet(
+          '.cls-1{fill:rgb(255,0,0);stroke:rgb(0,0,255);stroke-width:4;opacity:0.5}',
+        );
+
+        const {props} = only(
+          '<svg viewBox="0 0 10 10"><path class="cls-1" d="M0 0L1 1"/></svg>',
+        );
+
+        expect(props.fill).toBe('rgb(255, 0, 0)');
+        expect(props.stroke).toBe('rgb(0, 0, 255)');
+        expect(props.lineWidth).toBe(4);
+        expect(props.opacity).toBe(0.5);
+      });
+
+      it('passes paint set by a class on a group to its children', () => {
+        style = withStylesheet('.cls-2{fill:rgb(255,0,0)}');
+
+        const {props} = only(
+          '<svg viewBox="0 0 10 10"><g class="cls-2"><path d="M0 0L1 1"/></g></svg>',
+        );
+
+        expect(props.fill).toBe('rgb(255, 0, 0)');
+      });
+
+      it('lets a use target inherit from the use site', () => {
+        style = withStylesheet('.cls-3{fill:rgb(255,0,0)}');
+
+        const {props} = only(
+          '<svg viewBox="0 0 10 10"><defs><path id="mark" d="M0 0L1 1"/></defs><g class="cls-3"><use href="#mark"/></g></svg>',
+        );
+
+        expect(props.fill).toBe('rgb(255, 0, 0)');
+      });
+
+      it('resolves currentColor to the color of the node', () => {
+        style = withStylesheet('.cls-4{fill:currentColor}');
+
+        const path = rendered(
+          '<svg viewBox="0 0 10 10"><path class="cls-4" d="M0 0L1 1"/></svg>',
+          {fill: 'rgb(0,255,0)'},
+        );
+
+        expect(hex(path.fill())).toBe('#00ff00');
+      });
     });
 
     it('inherits a property the element does not set', () => {
