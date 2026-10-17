@@ -1373,6 +1373,30 @@ const MyStyle = HighlightStyle.define([
 Code.defaultHighlighter = new LezerHighlighter(parser, MyStyle);
 ```
 
+### Shiki
+
+The `@canvas-commons/shiki` package provides a `ShikiHighlighter` that uses
+[Shiki](https://shiki.style/) and VS Code's TextMate grammars and themes instead
+of Lezer:
+
+```shell
+npm i @canvas-commons/shiki
+```
+
+```ts title="src/project.ts"
+import {Code} from '@canvas-commons/2d';
+import {Langs, ShikiHighlighter, Themes} from '@canvas-commons/shiki';
+
+Code.defaultHighlighter = new ShikiHighlighter({
+  lang: Langs.typescript,
+  theme: Themes.githubDark,
+});
+```
+
+`Langs` and `Themes` re-export a few common grammars and themes. Any other
+grammar or theme can be imported from `@shikijs/langs/<lang>` and
+`@shikijs/themes/<theme>`.
+
 ## Multiple Languages
 
 You can configure highlighters on a per-node basis using the
