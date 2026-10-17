@@ -113,4 +113,16 @@ describe('media loading', () => {
 
     expect(drawImage).not.toHaveBeenCalled();
   });
+
+  it('lists the videos that failed to load until they load', () => {
+    const video = new ProbeVideo({src: '/pending.mp4'});
+    useScene2D().getView().add(video);
+    const element = video.element();
+
+    element.dispatchEvent(new Event('error'));
+    expect(Video.unavailable).toContain(element.src);
+
+    element.dispatchEvent(new Event('loadedmetadata'));
+    expect(Video.unavailable).not.toContain(element.src);
+  });
 });

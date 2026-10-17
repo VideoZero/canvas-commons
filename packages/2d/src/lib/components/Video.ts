@@ -50,6 +50,22 @@ export class Video extends Rect {
   private static readonly pool: Record<string, HTMLVideoElement> = {};
 
   /**
+   * The resolved urls of videos whose last load failed.
+   *
+   * @remarks
+   * The duration of such a video is unknown until it loads, so any timing
+   * that depends on it isn't final yet.
+   *
+   * @example
+   * ```ts
+   * if (Video.unavailable.size > 0) {
+   *   console.warn('The timeline may still change.');
+   * }
+   * ```
+   */
+  public static readonly unavailable = new Set<string>();
+
+  /**
    * The source of this video.
    *
    * @example
@@ -181,7 +197,11 @@ export class Video extends Rect {
         if (Video.pool[poolKey] === created) {
           delete Video.pool[poolKey];
         }
+        Video.unavailable.add(src);
       });
+      created.addEventListener('loadedmetadata', () =>
+        Video.unavailable.delete(src),
+      );
       created.src = src;
       Video.pool[poolKey] = created;
       video = created;
