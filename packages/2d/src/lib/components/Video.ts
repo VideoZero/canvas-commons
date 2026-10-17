@@ -1,6 +1,7 @@
 import {
   BBox,
   DependencyContext,
+  DetailedError,
   PlaybackState,
   SerializedVector2,
   SignalValue,
@@ -175,20 +176,48 @@ export class Video extends Rect {
     const poolKey = `${this.key}/${key}`;
     let video = Video.pool[poolKey];
     if (!video) {
-      video = document.createElement('video');
-      video.crossOrigin = 'anonymous';
-      video.src = src;
-      Video.pool[poolKey] = video;
+      const created = document.createElement('video');
+      created.crossOrigin = 'anonymous';
+      created.addEventListener('error', () => {
+        if (Video.pool[poolKey] === created) {
+          delete Video.pool[poolKey];
+        }
+      });
+      created.src = src;
+      Video.pool[poolKey] = created;
+      video = created;
     }
 
     if (video.readyState < 2) {
+      const failed = () =>
+        new DetailedError({
+          message: `Failed to load a video`,
+          remarks: `\
+The <code>src</code> property was set to:
+<pre><code>${this.src()}</code></pre>
+...which resolved to the following url:
+<pre><code>${src}</code></pre>
+Make sure that source is correct and that the video exists.`,
+          inspect: this.key,
+        });
+      const element = video;
       DependencyContext.collectPromise(
-        new Promise<void>(resolve => {
-          const listener = () => {
-            resolve();
-            video.removeEventListener('canplay', listener);
+        new Promise<void>((resolve, reject) => {
+          if (element.error) {
+            reject(failed());
+            return;
+          }
+          const listener = (event: Event) => {
+            element.removeEventListener('canplay', listener);
+            element.removeEventListener('error', listener);
+            if (event.type === 'error') {
+              reject(failed());
+            } else {
+              resolve();
+            }
           };
-          video.addEventListener('canplay', listener);
+          element.addEventListener('canplay', listener);
+          element.addEventListener('error', listener);
         }),
       );
     }

@@ -159,10 +159,16 @@ export class Img extends Rect {
 
     let image = Img.pool[key];
     if (!image) {
-      image = document.createElement('img');
-      image.crossOrigin = 'anonymous';
-      image.src = src;
-      Img.pool[key] = image;
+      const created = document.createElement('img');
+      created.crossOrigin = 'anonymous';
+      created.addEventListener('error', () => {
+        if (Img.pool[key] === created) {
+          delete Img.pool[key];
+        }
+      });
+      created.src = src;
+      Img.pool[key] = created;
+      image = created;
     }
 
     if (!image.complete) {
