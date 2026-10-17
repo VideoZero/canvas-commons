@@ -357,6 +357,9 @@ type LineBreakOffset = {
 
 const LAYOUT_CACHE_SIZE = 6;
 
+/** How close, in pixels, a balanced break comes to its narrowest width. */
+const BALANCE_TOLERANCE = 0.5;
+
 /**
  * Breaks an exclusion layout may take to agree with the box height it was
  * broken against; a layout that has not settled keeps the lowest box it saw.
@@ -1829,6 +1832,12 @@ export class Txt extends Shape {
       ...this.exclusionKey(),
     ];
     const converge = exclusions.length > 0 && Number.isFinite(maxWidth);
+    const balance =
+      textWrap &&
+      !converge &&
+      this.textWrap() === 'balance' &&
+      Number.isFinite(maxWidth);
+    key.push(balance);
     if (converge) {
       key.push(
         this.height.context.getter(),
@@ -1842,7 +1851,9 @@ export class Txt extends Shape {
 
     const broken = converge
       ? this.breakConverged(paragraph, maxWidth, exclusions, textWrap)
-      : this.breakAround(paragraph, maxWidth, [], textWrap);
+      : balance
+        ? this.breakBalanced(paragraph, maxWidth)
+        : this.breakAround(paragraph, maxWidth, [], textWrap);
     paragraph.broken.unshift({key, broken});
     paragraph.broken.length = Math.min(
       paragraph.broken.length,
@@ -1877,6 +1888,33 @@ export class Txt extends Shape {
       vertical: paragraph.vertical,
       inkFit: true,
     });
+  }
+
+  /** Break at the narrowest width that takes no more lines than `maxWidth`. */
+  private breakBalanced(
+    paragraph: OwnedParagraph,
+    maxWidth: number,
+  ): BrokenParagraph {
+    let best = this.breakAround(paragraph, maxWidth, [], true);
+    const count = best.lines.length;
+    if (count < 2) return best;
+    let low = measureMinContentWidth(paragraph.items, {
+      textWrap: true,
+      overflowWrap: this.overflowWrap(),
+      inkFit: true,
+    });
+    let high = maxWidth;
+    while (high - low > BALANCE_TOLERANCE) {
+      const width = (low + high) / 2;
+      const broken = this.breakAround(paragraph, width, [], true);
+      if (broken.lines.length <= count) {
+        high = width;
+        best = broken;
+      } else {
+        low = width;
+      }
+    }
+    return best;
   }
 
   /** Break against exclusions placed on this node's own box. */

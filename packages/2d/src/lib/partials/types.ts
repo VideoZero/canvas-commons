@@ -22,7 +22,12 @@ export type FlexContent =
 export type FlexItems =
   'auto' | 'center' | 'start' | 'end' | 'stretch' | 'baseline';
 
-export type TextWrap = boolean | 'pre';
+/**
+ * How text wraps: `false` keeps each paragraph on one line, `true` wraps it,
+ * `'pre'` wraps it and keeps its white space, and `'balance'` wraps it into
+ * lines of about the same width, as few as `true` gives.
+ */
+export type TextWrap = boolean | 'pre' | 'balance';
 
 export type WordBreak = 'normal' | 'keep-all';
 
