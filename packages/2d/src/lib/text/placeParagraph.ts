@@ -173,6 +173,11 @@ export type PlaceOptions = {
   readonly blockWidth: number;
   readonly blockHeight: number;
   readonly measurer: AdvanceMeasurer;
+  /**
+   * Split the gap letter spacing leaves after the last glyph of a line to
+   * both of its sides, so the ink sits in the middle of the line's advance.
+   */
+  readonly centerLetterSpacing?: boolean;
 };
 
 /** Where a paint call puts its pen, and what it paints. */
@@ -668,15 +673,18 @@ export function placeParagraph(
     for (const value of slacks ?? []) spread += value;
     const lineInk = draft.ink + spread;
     orderVisually(laid, baseLevel, lineInk);
+    const inset =
+      options.centerLetterSpacing && !justified ? draft.trailing / 2 : 0;
     const left =
       line.segment.left +
+      inset +
       (justified
         ? 0
         : alignOffset(
             options.textAlign,
             options.direction,
             available,
-            lineInk,
+            lineInk + 2 * inset,
           ));
 
     const placed = new Array<PlacedPiece>(pieces.length);
@@ -723,7 +731,7 @@ export function placeParagraph(
       width: line.width,
       justified,
     });
-    width = Math.max(width, left + lineInk + draft.trailing);
+    width = Math.max(width, left - inset + lineInk + draft.trailing);
   }
 
   return {lines, direction: options.direction, width, height: broken.height};

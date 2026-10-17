@@ -152,6 +152,7 @@ export interface TxtProps extends ShapeProps {
   children?: TxtChildren;
   text?: SignalValue<string>;
   autoSize?: SignalValue<boolean>;
+  centerLetterSpacing?: SignalValue<boolean | null>;
   wrapMode?: SignalValue<TxtWrapMode>;
   overflowWrap?: SignalValue<OverflowWrapMode>;
   hyphenate?: SignalValue<HyphenateFn | null>;
@@ -343,6 +344,7 @@ type PlaceRequest = {
   textAlign: CanvasTextAlign | 'justify';
   direction: TextDirection;
   verticalAlign: 'top' | 'middle' | 'bottom';
+  centerLetterSpacing: boolean;
 };
 
 type LineBreakOffset = {
@@ -507,6 +509,42 @@ export class Txt extends Shape {
   @initial(false)
   @signal()
   declare public readonly autoSize: SimpleSignal<boolean, this>;
+
+  /**
+   * Default for {@link centerLetterSpacing} on text nodes that leave it unset.
+   *
+   * @example
+   * ```ts
+   * Txt.defaultCenterLetterSpacing = true;
+   * ```
+   */
+  public static defaultCenterLetterSpacing = false;
+
+  /**
+   * Whether letter-spaced lines keep their ink in the middle of their advance.
+   *
+   * @remarks
+   * Letter spacing follows every glyph, the last one included, so by default
+   * a letter-spaced line inks from its aligned edge and leaves the gap after
+   * its last glyph at the other end, as browsers do: a text sized to its
+   * content then sits half a spacing off its center. When enabled, that gap
+   * is split to both sides of the line, as it is around each glyph. Only the
+   * ink moves; sizes and line breaks are unchanged, and justified lines are
+   * not affected. `null` uses {@link Txt.defaultCenterLetterSpacing}.
+   *
+   * @example
+   * ```tsx
+   * <Txt letterSpacing={12} centerLetterSpacing>
+   *   TRACKED
+   * </Txt>
+   * ```
+   */
+  @initial(null)
+  @signal()
+  declare public readonly centerLetterSpacing: SimpleSignal<
+    boolean | null,
+    this
+  >;
 
   /**
    * Line-breaking algorithm.
@@ -1957,6 +1995,7 @@ export class Txt extends Shape {
       aligned,
       request.direction,
       request.verticalAlign,
+      request.centerLetterSpacing,
     ];
     for (const found of paragraph.placed) {
       if (sameKey(found.key, key)) return found.placed;
@@ -1972,6 +2011,7 @@ export class Txt extends Shape {
       blockWidth: request.blockWidth,
       blockHeight: request.blockHeight,
       measurer: canvasParagraphMeasurer,
+      centerLetterSpacing: request.centerLetterSpacing,
     });
     paragraph.placed.unshift({key, placed, paint: null});
     paragraph.placed.length = Math.min(
@@ -2003,6 +2043,7 @@ export class Txt extends Shape {
       textAlign: 'left',
       direction: 'ltr',
       verticalAlign: 'top',
+      centerLetterSpacing: false,
     });
   }
 
@@ -2025,6 +2066,8 @@ export class Txt extends Shape {
       textAlign: this.textAlign(),
       direction: this.textDirectionValue(),
       verticalAlign: this.verticalAlign(),
+      centerLetterSpacing:
+        this.centerLetterSpacing() ?? Txt.defaultCenterLetterSpacing,
     });
   }
 
@@ -3332,6 +3375,7 @@ export class Txt extends Shape {
       textDirection: this.textDirection(),
       textWrap: false,
       textAlign: 'left',
+      centerLetterSpacing: false,
       lineHeight: unit.height,
     };
     const styles = parts.map(part => this.styleOf(part.run));
