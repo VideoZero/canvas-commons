@@ -15,6 +15,7 @@ module.exports = {
         '2d',
         'core',
         'create',
+        'd3-geo',
         'deps',
         'deps-dev',
         'docs',

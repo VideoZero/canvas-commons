@@ -18,7 +18,8 @@
       "@canvas-commons/fiddle",
       "@canvas-commons/shiki",
       "@canvas-commons/echarts",
-      "@canvas-commons/rig"
+      "@canvas-commons/rig",
+      "@canvas-commons/d3-geo"
     ]
   ],
   "linked": [],

@@ -18,6 +18,7 @@ This is a `pnpm` monorepo containing the following packages:
 - `2d` - Built-in 2D nodes and utilities
 - `core` - Core animation timing and data logic
 - `create` - Project bootstrapping utility
+- `d3-geo` - Animated maps rendered with d3-geo
 - `docs` - Documentation website
 - `e2e` - End-to-end tests
 - `editor` - User interface used for editing
@@ -133,6 +134,7 @@ Available scopes are:
 - `2d`
 - `core`
 - `create`
+- `d3-geo`
 - `deps-dev`
 - `deps`
 - `docs`
@@ -206,6 +208,7 @@ short usage examples. Read the one for the package you're touching:
 - [`packages/shiki/AGENTS.md`](packages/shiki/AGENTS.md)
 - [`packages/echarts/AGENTS.md`](packages/echarts/AGENTS.md)
 - [`packages/create/AGENTS.md`](packages/create/AGENTS.md)
+- [`packages/d3-geo/AGENTS.md`](packages/d3-geo/AGENTS.md)
 - [`packages/template/AGENTS.md`](packages/template/AGENTS.md)
 - [`packages/examples/AGENTS.md`](packages/examples/AGENTS.md)
 - [`packages/docs/AGENTS.md`](packages/docs/AGENTS.md)
