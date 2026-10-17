@@ -163,6 +163,41 @@ function isMorphable(node: Node): node is Curve {
 
 const MAX_TEX_REPAIRS = 4;
 
+function findFragmentEnd(tex: string, start: number): number {
+  let depth = 0;
+  for (let i = start; i < tex.length; i++) {
+    const char = tex[i];
+    if (char === '\\') {
+      i++;
+    } else if (char === '{') {
+      depth++;
+    } else if (char === '}' && depth > 0) {
+      depth--;
+    } else if (char === '}' && tex[i + 1] === '}') {
+      return i;
+    }
+  }
+  return -1;
+}
+
+// A regular expression cannot balance braces, so `{{\frac{a}{b}}}` would end
+// at the first `}}`.
+function splitFragments(tex: string): string[] {
+  const parts: string[] = [];
+  let cursor = 0;
+  while (cursor < tex.length) {
+    const start = tex.indexOf('{{', cursor);
+    const end = start === -1 ? -1 : findFragmentEnd(tex, start + 2);
+    if (end === -1) {
+      parts.push(tex.slice(cursor));
+      break;
+    }
+    parts.push(tex.slice(cursor, start), tex.slice(start + 2, end));
+    cursor = end + 2;
+  }
+  return parts;
+}
+
 function repairTex(tex: string, error: string): string | null {
   if (/^Missing (argument for|superscript or subscript)/.test(error)) {
     return `${tex}{\\quad}`;
@@ -197,6 +232,20 @@ function repairTex(tex: string, error: string): string | null {
  * ```
  */
 export class Latex extends SVGNode {
+  /**
+   * Render the tex of every new Latex node as soon as it is created.
+   *
+   * @remarks
+   * Invalid tex is otherwise only reported once the node is first drawn. With
+   * this enabled, the error surfaces where the node is created instead.
+   *
+   * @example
+   * ```ts
+   * Latex.eagerValidation = true;
+   * ```
+   */
+  public static eagerValidation = false;
+
   @lazy(() => {
     return parseFloat(
       window.getComputedStyle(SVGNode.containerElement).fontSize,
@@ -238,7 +287,7 @@ export class Latex extends SVGNode {
     const array = typeof value === 'string' ? [value] : value;
     return array
       .reduce<string[]>((prev, current) => {
-        prev.push(...current.split(/{{(.*?)}}/));
+        prev.push(...splitFragments(current));
         return prev;
       }, [])
       .filter(sub => sub.trim().length > 0);
@@ -253,6 +302,9 @@ export class Latex extends SVGNode {
       svg: '',
     });
     this.svg(this.latexSVG);
+    if (Latex.eagerValidation) {
+      this.latexSVG();
+    }
 
     const overlay = new Node({});
     overlay.children(this.fragmentOverlay);
@@ -341,6 +393,128 @@ export class Latex extends SVGNode {
         shapes: (children.length > 0 ? children : [shape]).filter(isMorphable),
       };
     });
+  }
+
+  /**
+   * Get the shapes that make up the formula, in document order.
+   *
+   * @example
+   * ```ts
+   * yield* all(...tex().getShapes().map(shape => shape.fill('red', 0.5)));
+   * ```
+   */
+  public getShapes(): Curve[] {
+    return this.getDisplayedFragments().flatMap(({shapes}) => shapes);
+  }
+
+  /**
+   * Get the shapes of each occurrence of a fragment.
+   *
+   * @remarks
+   * {@link getChildrenById} returns the node grouping a fragment's glyphs. This
+   * returns the glyphs themselves, which can be filled and faded.
+   *
+   * @example
+   * ```ts
+   * // tex="{{x}} + {{x}}"
+   * const [first, second] = tex().getShapesById('x');
+   * yield* all(...first.map(shape => shape.fill('red', 0.5)));
+   * ```
+   *
+   * @param id - The sub-tex of the fragment, as written inside `{{}}`.
+   */
+  public getShapesById(id: string): Curve[][] {
+    return this.getDisplayedFragments()
+      .filter(fragment => fragment.id === id)
+      .map(({shapes}) => shapes);
+  }
+
+  /**
+   * Get the bounding box of each occurrence of a fragment in the parent space.
+   *
+   * @remarks
+   * The boxes share the space of {@link position}, so they can place a sibling
+   * of this node.
+   *
+   * @example
+   * ```tsx
+   * <Rect
+   *   position={() => tex().getFragmentBBox('a')[0].center}
+   *   size={() => tex().getFragmentBBox('a', 8)[0].size}
+   * />
+   * ```
+   *
+   * @param id - The sub-tex of the fragment, as written inside `{{}}`.
+   * @param padding - The padding added on each side of the box.
+   */
+  public getFragmentBBox(id: string, padding = 0): BBox[] {
+    return this.getFragmentBBoxes(id, padding, this.worldToParent());
+  }
+
+  /**
+   * Get the bounding box of each occurrence of a fragment in the local space of
+   * this node.
+   *
+   * @remarks
+   * The boxes can place a child of this node.
+   *
+   * @example
+   * ```tsx
+   * <Latex ref={tex} tex="{{a}}x^2">
+   *   <Rect
+   *     layout={false}
+   *     position={() => tex().getLocalFragmentBBox('a')[0].center}
+   *     size={() => tex().getLocalFragmentBBox('a')[0].size}
+   *   />
+   * </Latex>
+   * ```
+   *
+   * @param id - The sub-tex of the fragment, as written inside `{{}}`.
+   * @param padding - The padding added on each side of the box.
+   */
+  public getLocalFragmentBBox(id: string, padding = 0): BBox[] {
+    return this.getFragmentBBoxes(id, padding, this.worldToLocal());
+  }
+
+  /**
+   * Get the bounding box of each occurrence of a fragment in world space.
+   *
+   * @remarks
+   * The boxes share the space of {@link absolutePosition}.
+   *
+   * @example
+   * ```ts
+   * marker().absolutePosition(tex().getAbsoluteFragmentBBox('a')[0].center);
+   * ```
+   *
+   * @param id - The sub-tex of the fragment, as written inside `{{}}`.
+   * @param padding - The padding added on each side of the box.
+   */
+  public getAbsoluteFragmentBBox(id: string, padding = 0): BBox[] {
+    return this.getFragmentBBoxes(id, padding, new DOMMatrix());
+  }
+
+  private getDisplayedFragments(): LatexFragment[] {
+    // Reading the children attaches the shapes, so they can be measured before
+    // the first render.
+    this.wrapper.children();
+    return this.getFragments(this.document().nodes);
+  }
+
+  private getFragmentBBoxes(
+    id: string,
+    padding: number,
+    worldToSpace: DOMMatrix,
+  ): BBox[] {
+    return this.getShapesById(id).map(shapes =>
+      BBox.fromPoints(
+        ...shapes.flatMap(shape =>
+          shape
+            .cacheBBox()
+            .transformCorners(worldToSpace.multiply(shape.localToWorld())),
+        ),
+      ).expand(padding),
+    );
   }
 
   private alignFragments(
@@ -438,7 +612,7 @@ export class Latex extends SVGNode {
     return svg;
   }
 
-  private subTexToSVG(subTex: string) {
+  protected subTexToSVG(subTex: string) {
     let tex = subTex.trim();
     if (tex === '\\substack') tex = '\\quad';
 
@@ -619,14 +793,6 @@ export class Latex extends SVGNode {
     time: number,
     timingFunction: TimingFunction,
   ) {
-    const newSize = target.document.size.mul(
-      this.calculateWrapperScale(target.document.size, this.getCurrentSize()),
-    );
-    const lockedScale = new Vector2(this.wrapper.scale());
-
-    this.lockLayout();
-    this.wrapper.scale(lockedScale);
-
     const animations: ThreadGenerator[] = [];
     for (const {from, to, transition} of pairs) {
       // An unchanged fragment has nothing to cross over with.
@@ -653,15 +819,47 @@ export class Latex extends SVGNode {
       );
     }
 
-    yield* all(...animations, this.size(newSize, time, timingFunction));
+    yield* this.tweenToDocument(animations, target, time, timingFunction);
+  }
+
+  @threadable()
+  private *tweenToDocument(
+    animations: ThreadGenerator[],
+    target: {svg: string; tex: string[]; document: SVGDocument},
+    time: number,
+    timingFunction: TimingFunction,
+  ) {
+    const autoWidth = this.width.isInitial();
+    const autoHeight = this.height.isInitial();
+    const targetScale = this.calculateWrapperScale(
+      target.document.size,
+      this.getCurrentSize(),
+    );
+    const newSize = target.document.size.mul(targetScale);
+
+    this.lockLayout();
+    this.wrapper.scale(new Vector2(this.wrapper.scale()));
+
+    if (autoWidth && autoHeight) {
+      animations.push(this.size(newSize, time, timingFunction));
+    } else if (autoWidth) {
+      animations.push(this.width(newSize.width, time, timingFunction));
+    } else if (autoHeight) {
+      animations.push(this.height(newSize.height, time, timingFunction));
+    }
+
+    yield* all(
+      ...animations,
+      this.wrapper.scale(targetScale, time, timingFunction),
+    );
 
     this.svg.context.setter(target.svg);
     this.tex.context.setter(target.tex);
     this.wrapper.children(this.documentNodes);
     this.wrapper.scale(this.wrapperScale);
     this.releaseLayout();
-    this.width.reset();
-    this.height.reset();
+    if (autoWidth) this.width.reset();
+    if (autoHeight) this.height.reset();
   }
 
   /**
@@ -987,10 +1185,11 @@ export class Latex extends SVGNode {
       );
     }
 
-    yield* all(...animations);
-
-    this.svg.context.setter(newSVG);
-    this.tex.context.setter(parsedValue);
-    this.wrapper.children(this.documentNodes);
+    yield* this.tweenToDocument(
+      animations,
+      {svg: newSVG, tex: parsedValue, document: targetDoc},
+      time,
+      timing,
+    );
   }
 }
