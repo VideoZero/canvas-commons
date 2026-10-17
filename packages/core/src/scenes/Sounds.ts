@@ -9,6 +9,15 @@ export interface SoundSettings {
   gain?: number;
   detune?: number;
   playbackRate?: number;
+  /**
+   * The duration in seconds over which the sound fades in from silence.
+   */
+  fadeIn?: number;
+  /**
+   * The duration in seconds over which the sound fades out to silence before
+   * it ends.
+   */
+  fadeOut?: number;
 }
 
 export interface Sound extends SoundSettings {
@@ -49,6 +58,27 @@ export class SoundBuilder {
    */
   public gain(db: number): this {
     this.settings.gain = db;
+    return this;
+  }
+
+  /**
+   * Fade the sound in at its start and out at its end.
+   *
+   * @remarks
+   * The durations are measured in the timeline, after trimming and changing
+   * the playback rate.
+   *
+   * @example
+   * ```ts
+   * sound(music).fade(1, 2).play();
+   * ```
+   *
+   * @param fadeIn - The duration of the fade-in in seconds.
+   * @param fadeOut - The duration of the fade-out in seconds.
+   */
+  public fade(fadeIn?: number, fadeOut?: number): this {
+    this.settings.fadeIn = fadeIn;
+    this.settings.fadeOut = fadeOut;
     return this;
   }
 
@@ -109,10 +139,29 @@ export class Sounds {
   }
 
   public add(settings: SoundSettings, offset?: number) {
-    const playbackTime = this.scene.playback.time + (offset ?? 0);
+    this.addAt(settings, this.scene.playback.time + (offset ?? 0));
+  }
 
+  /**
+   * Register a sound at an absolute time instead of relative to the current
+   * frame.
+   *
+   * @remarks
+   * Useful for sounds whose timing is only known after the scene has been
+   * calculated, for example in a handler of {@link Scene.onRecalculated}.
+   *
+   * @example
+   * ```ts
+   * scene.sounds.addAt({audio: whoosh, gain: -6}, 2.5);
+   * ```
+   *
+   * @param settings - The sound to play.
+   * @param time - The time in seconds, from the start of the project, at which
+   *               the sound starts.
+   */
+  public addAt(settings: SoundSettings, time: number) {
     this.registeredSounds.push({
-      offset: playbackTime,
+      offset: time,
       realPlaybackRate:
         Math.pow(2, (settings.detune ?? 0) / 1200) *
         (settings.playbackRate ?? 1),

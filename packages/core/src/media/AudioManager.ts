@@ -12,6 +12,7 @@ export class AudioManager {
   private duration?: number;
   private gainNode?: GainNode;
   private sourceNode?: MediaElementAudioSourceNode;
+  private gain = 1;
 
   public constructor(
     private readonly logger: Logger,
@@ -40,8 +41,21 @@ export class AudioManager {
       this.gainNode.connect(this.context.destination);
     }
 
-    this.gainNode.gain.value = decibelsToAmplitude(sound.gain ?? 0);
+    this.gain = decibelsToAmplitude(sound.gain ?? 0);
+    this.gainNode.gain.value = this.gain;
     this.setPlaybackRate(sound.realPlaybackRate, true);
+  }
+
+  /**
+   * Scale the gain of the current sound.
+   *
+   * @param fade - The multiplier between 0 and 1 applied on top of the gain of
+   *               the sound.
+   */
+  public setFade(fade: number) {
+    if (this.gainNode) {
+      this.gainNode.gain.value = this.gain * fade;
+    }
   }
 
   public getTime() {
@@ -125,7 +139,10 @@ export class AudioManager {
     if (this.source && this.audioElement.paused !== isPaused) {
       if (isPaused) {
         this.audioElement.pause();
-      } else if (this.audioElement.currentTime < this.audioElement.duration) {
+      } else if (
+        isNaN(this.audioElement.duration) ||
+        this.audioElement.currentTime < this.audioElement.duration
+      ) {
         try {
           await this.audioElement.play();
           this.error = false;

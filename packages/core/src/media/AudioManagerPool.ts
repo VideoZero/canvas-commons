@@ -2,6 +2,7 @@ import {Logger} from '../app';
 import {Sound} from '../scenes';
 import {AudioManager} from './AudioManager';
 import {AudioResourceManager} from './AudioResourceManager';
+import {soundFadeGain} from './soundFade';
 
 export class AudioManagerPool {
   private readonly context = new AudioContext();
@@ -54,24 +55,29 @@ export class AudioManagerPool {
     );
   }
 
-  private isInRange(sound: Sound, time: number) {
+  private getLength(sound: Sound) {
     const duration = this.audioResources.peekDuration(sound.audio);
     const audioStart = sound.start ?? 0;
     const audioEnd = Math.min(duration, sound.end ?? Infinity);
-    const audioDuration = (audioEnd - audioStart) / sound.realPlaybackRate;
-
-    return time >= sound.offset && time < sound.offset + audioDuration;
+    return (audioEnd - audioStart) / sound.realPlaybackRate;
   }
 
   public prepare(time: number) {
     for (const sound of this.sounds) {
-      if (this.isInRange(sound, time)) {
+      const length = this.getLength(sound);
+      const elapsed = time - sound.offset;
+      if (elapsed >= 0 && elapsed < length) {
+        const fade = soundFadeGain(sound, elapsed, length);
         let manager = this.managers.get(sound);
-        if (manager) continue;
+        if (manager) {
+          manager.setFade(fade);
+          continue;
+        }
 
         // sound is starting
         manager = this.pool.pop() ?? this.spawn();
         manager.setSound(sound);
+        manager.setFade(fade);
         manager.setMuted(this.muted);
         manager.setVolume(this.volume);
         manager.setTime(time);

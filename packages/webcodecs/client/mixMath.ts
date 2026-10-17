@@ -1,4 +1,9 @@
-import {decibelsToAmplitude} from '@canvas-commons/core';
+import type {SoundFade} from '@canvas-commons/core';
+import {
+  decibelsToAmplitude,
+  soundFadeBreakpoints,
+  soundFadeGain,
+} from '@canvas-commons/core';
 
 /** Decibels to a linear amplitude factor. */
 export function dbToGain(db: number): number {
@@ -64,4 +69,34 @@ export function totalLengthSamples(
   sampleRate: number,
 ): number {
   return Math.max(1, Math.ceil((durationFrames / fps) * sampleRate));
+}
+
+export interface GainPoint {
+  /** Output seconds since the source started playing. */
+  time: number;
+  gain: number;
+}
+
+/**
+ * Gain values to ramp between linearly to apply the fades of a sound.
+ *
+ * @remarks
+ * `from` is how far into the sound, in output seconds, playback starts; it's
+ * non-zero for a sound that began before the render window.
+ *
+ * @returns An empty list when the sound has no fades.
+ */
+export function fadeAutomation(
+  fade: SoundFade,
+  gain: number,
+  from: number,
+  length: number,
+): GainPoint[] {
+  if (!fade.fadeIn && !fade.fadeOut) {
+    return [];
+  }
+  return soundFadeBreakpoints(fade, from, length).map(point => ({
+    time: point - from,
+    gain: gain * soundFadeGain(fade, point, length),
+  }));
 }
