@@ -1,6 +1,7 @@
 import {DependencyContext, Vector2} from '@canvas-commons/core';
 import {geoContains} from 'd3-geo';
 import type {Feature, FeatureCollection} from 'geojson';
+import type {Topology} from 'topojson-specification';
 import {describe, expect, test} from 'vitest';
 import {GeoFeature} from '../GeoFeature';
 import {GeoLine} from '../GeoLine';
@@ -56,6 +57,55 @@ class InspectableLine extends GeoLine {
   }
 }
 
+// Countries as TopoJSON, the second of which simplification collapsed into a
+// zero-area ring.
+const CollapsedTopology: Topology = {
+  type: 'Topology',
+  arcs: [
+    [
+      [10, 10],
+      [10, 20],
+      [20, 20],
+      [20, 10],
+      [10, 10],
+    ],
+    [
+      [12, 0],
+      [13, 0],
+      [12.5, 0],
+      [12, 0],
+    ],
+  ],
+  objects: {
+    countries: {
+      type: 'GeometryCollection',
+      geometries: [
+        {type: 'Polygon', arcs: [[0]], properties: {name: 'Testland'}},
+        {type: 'Polygon', arcs: [[1]], properties: {name: 'Speck'}},
+      ],
+    },
+  },
+};
+
+function fakeContext(): CanvasRenderingContext2D {
+  const state: Record<string | symbol, unknown> = {
+    getTransform: () => new DOMMatrix(),
+    getLineDash: () => [],
+  };
+  return new Proxy(state, {
+    get: (target, key) =>
+      key in target
+        ? target[key]
+        : () => {
+            /* paint calls are not recorded */
+          },
+    set: (target, key, value) => {
+      target[key] = value;
+      return true;
+    },
+  }) as unknown as CanvasRenderingContext2D;
+}
+
 describe('GeoMap fixes', () => {
   const {errors} = mockScene2D();
 
@@ -98,6 +148,24 @@ describe('GeoMap fixes', () => {
     expect(errors.map(({message}) => message)).toEqual([
       'GeoMap: map data must be TopoJSON or GeoJSON.',
     ]);
+  });
+
+  test('culls a zoomed map with a country that collapsed', () => {
+    const map = new GeoMap({
+      data: CollapsedTopology,
+      size: [800, 400],
+      center: [15, 15],
+      zoom: 20,
+      land: '#ffffff',
+      borders: '#000000',
+      coast: '#000000',
+    });
+    map.render(fakeContext());
+    expect(errors.map(({message}) => message)).toEqual([]);
+    expect(map.featureByName('Speck')?.geometry).toEqual({
+      type: 'MultiPolygon',
+      coordinates: [],
+    });
   });
 
   test('supports the composite albersUsa projection', () => {
