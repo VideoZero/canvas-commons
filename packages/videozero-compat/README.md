@@ -56,3 +56,6 @@ pnpm --filter @videozero/compat run typecheck
 
 The package depends on the built `lib` of `@canvas-commons/core` and
 `@canvas-commons/2d`; build those first.
+
+The `cc/*` branches behind `videozero-cc`, their stacking order and what is
+still open are listed in [BRANCHES.md](./BRANCHES.md).
