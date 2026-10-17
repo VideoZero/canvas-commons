@@ -12,8 +12,20 @@ export function resolveAssetUrl(
   }
 
   const key = viaProxy(rawSrc);
-  const url = new URL(key, window.location.origin);
-  if (url.origin === window.location.origin) {
+  const origin = window.origin;
+  let url: URL;
+  try {
+    url = new URL(key, origin === 'null' ? undefined : origin);
+  } catch {
+    return {key, src: key};
+  }
+
+  // Blob and data urls can share the origin of the page but break when a
+  // query is appended to them.
+  if (
+    url.origin === origin &&
+    (url.protocol === 'http:' || url.protocol === 'https:')
+  ) {
     url.searchParams.set('asset-hash', assetHash());
   }
 

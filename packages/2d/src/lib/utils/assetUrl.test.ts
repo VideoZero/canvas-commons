@@ -1,4 +1,4 @@
-import {afterEach, describe, expect, it, vi} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {resolveAssetUrl} from './assetUrl';
 
 const REMOTE = 'https://example.com/video.mp4';
@@ -47,5 +47,47 @@ describe('resolveAssetUrl', () => {
     const {key, src} = resolveAssetUrl(REMOTE, assetHash);
     expect(key).toBe(proxied);
     expect(src).toBe(`${window.location.origin}${proxied}?asset-hash=hash`);
+  });
+
+  it('leaves same-origin blob urls as they are', () => {
+    const blob = `blob:${window.location.origin}/4a1d6e0c`;
+    expect(resolveAssetUrl(blob, assetHash)).toStrictEqual({
+      key: blob,
+      src: blob,
+    });
+  });
+
+  describe('on a page with a null origin', () => {
+    beforeEach(() => {
+      vi.stubGlobal('origin', 'null');
+      vi.stubGlobal('location', {origin: 'null'});
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('leaves absolute sources as they are', () => {
+      vi.stubEnv('VITE_MC_PROXY_ENABLED', 'false');
+      expect(resolveAssetUrl(REMOTE, assetHash)).toStrictEqual({
+        key: REMOTE,
+        src: REMOTE,
+      });
+    });
+
+    it('leaves data urls as they are', () => {
+      const data = 'data:image/png;base64,AAAA';
+      expect(resolveAssetUrl(data, assetHash)).toStrictEqual({
+        key: data,
+        src: data,
+      });
+    });
+
+    it('leaves relative sources to the browser', () => {
+      expect(resolveAssetUrl('/media/video.mp4', assetHash)).toStrictEqual({
+        key: '/media/video.mp4',
+        src: '/media/video.mp4',
+      });
+    });
   });
 });
