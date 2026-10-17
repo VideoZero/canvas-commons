@@ -2,7 +2,6 @@ import {
   BBox,
   Color,
   DependencyContext,
-  DetailedError,
   PossibleVector2,
   SerializedVector2,
   SignalValue,
@@ -164,20 +163,29 @@ export class Img extends Rect {
 
     let image = Img.pool[key];
     if (!image) {
-      image = document.createElement('img');
-      image.crossOrigin = 'anonymous';
-      image.src = src;
-      Img.pool[key] = image;
+      const created = document.createElement('img');
+      created.crossOrigin = 'anonymous';
+      created.addEventListener('error', () => {
+        if (Img.pool[key] === created) {
+          delete Img.pool[key];
+        }
+      });
+      created.src = src;
+      Img.pool[key] = created;
+      image = created;
     }
 
     if (!image.complete) {
+      const logger = useLogger();
+      const element = image;
       DependencyContext.collectPromise(
-        new Promise((resolve, reject) => {
-          image.addEventListener('load', resolve);
-          image.addEventListener('error', () =>
-            reject(
-              new DetailedError({
-                message: `Failed to load an image`,
+        new Promise<void>(resolve => {
+          const listener = (event: Event) => {
+            element.removeEventListener('load', listener);
+            element.removeEventListener('error', listener);
+            if (event.type === 'error') {
+              logger.warn({
+                message: `Failed to load an image, it will be drawn blank`,
                 remarks: `\
 The <code>src</code> property was set to:
 <pre><code>${rawSrc}</code></pre>
@@ -187,9 +195,12 @@ Make sure that source is correct and that the image exists.<br/>
 <a target='_blank' href='https://canvascommons.io/docs/media#images'>Learn more</a>
 about working with images.`,
                 inspect: this.key,
-              }),
-            ),
-          );
+              });
+            }
+            resolve();
+          };
+          element.addEventListener('load', listener);
+          element.addEventListener('error', listener);
         }),
       );
     }
@@ -216,7 +227,11 @@ about working with images.`,
     context.canvas.width = image.naturalWidth;
     context.canvas.height = image.naturalHeight;
     context.imageSmoothingEnabled = this.smoothing();
-    context.drawImage(image, 0, 0);
+    drawImage(
+      context,
+      image,
+      new BBox(0, 0, image.naturalWidth, image.naturalHeight),
+    );
 
     return context;
   }

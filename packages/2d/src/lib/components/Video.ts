@@ -54,6 +54,22 @@ export class Video extends Rect {
   private static readonly pool: Record<string, HTMLVideoElement> = {};
 
   /**
+   * The resolved urls of videos whose last load failed.
+   *
+   * @remarks
+   * The duration of such a video is unknown until it loads, so any timing
+   * that depends on it isn't final yet.
+   *
+   * @example
+   * ```ts
+   * if (Video.unavailable.size > 0) {
+   *   console.warn('The timeline may still change.');
+   * }
+   * ```
+   */
+  public static readonly unavailable = new Set<string>();
+
+  /**
    * The source of this video.
    *
    * @example
@@ -181,20 +197,53 @@ export class Video extends Rect {
     const poolKey = `${this.key}/${key}`;
     let video = Video.pool[poolKey];
     if (!video) {
-      video = document.createElement('video');
-      video.crossOrigin = 'anonymous';
-      video.src = src;
-      Video.pool[poolKey] = video;
+      const created = document.createElement('video');
+      created.crossOrigin = 'anonymous';
+      created.addEventListener('error', () => {
+        if (Video.pool[poolKey] === created) {
+          delete Video.pool[poolKey];
+        }
+        Video.unavailable.add(src);
+      });
+      created.addEventListener('loadedmetadata', () =>
+        Video.unavailable.delete(src),
+      );
+      created.src = src;
+      Video.pool[poolKey] = created;
+      video = created;
     }
 
     if (video.readyState < 2) {
+      const logger = useLogger();
+      const failed = () =>
+        logger.warn({
+          message: `Failed to load a video, it will be drawn blank`,
+          remarks: `\
+The <code>src</code> property was set to:
+<pre><code>${this.src()}</code></pre>
+...which resolved to the following url:
+<pre><code>${src}</code></pre>
+Make sure that source is correct and that the video exists.`,
+          inspect: this.key,
+        });
+      const element = video;
       DependencyContext.collectPromise(
         new Promise<void>(resolve => {
-          const listener = () => {
+          if (element.error) {
+            failed();
             resolve();
-            video.removeEventListener('canplay', listener);
+            return;
+          }
+          const listener = (event: Event) => {
+            element.removeEventListener('canplay', listener);
+            element.removeEventListener('error', listener);
+            if (event.type === 'error') {
+              failed();
+            }
+            resolve();
           };
-          video.addEventListener('canplay', listener);
+          element.addEventListener('canplay', listener);
+          element.addEventListener('error', listener);
         }),
       );
     }

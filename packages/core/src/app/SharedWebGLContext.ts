@@ -151,9 +151,15 @@ function logGlslError(logger: Logger, log: string | null, source: string) {
   SOURCE_URL_REGEX.lastIndex = 0;
   const sourceMatch = SOURCE_URL_REGEX.exec(source);
   if (sourceMatch) {
-    const url = new URL(sourceMatch[1], window.location.origin);
-    url.searchParams.set('t', Date.now().toString());
-    sourceUrl = url.toString();
+    sourceUrl = sourceMatch[1];
+    const origin = window.origin;
+    try {
+      const url = new URL(sourceUrl, origin === 'null' ? undefined : origin);
+      url.searchParams.set('t', Date.now().toString());
+      sourceUrl = url.toString();
+    } catch {
+      // A relative url can't be resolved on a page with a null origin.
+    }
   }
 
   if (!log) {
