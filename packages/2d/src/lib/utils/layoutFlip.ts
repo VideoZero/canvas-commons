@@ -92,11 +92,15 @@ export function invertPositions(
     if (delta.exactlyEquals(Vector2.zero)) continue;
 
     if (node instanceof Layout) {
+      // `translate` is applied after the node's own rotation, scale, and
+      // skew, so the parent-space delta is mapped through their inverse.
+      const translate = node.translate();
+      const localDelta = delta.transform(node.localToParent().inverse());
       inverted.push({
         node,
         channel: 'translate',
-        from: delta,
-        to: Vector2.zero,
+        from: translate.add(localDelta),
+        to: translate,
       });
     } else {
       const postPos = node.position();

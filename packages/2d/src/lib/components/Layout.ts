@@ -532,11 +532,14 @@ export class Layout extends Node {
 
     this.size.x(from);
     lock && this.lockLayout();
-    yield* tween(time, value =>
-      this.size.x(interpolationFunction(from, to, timingFunction(value))),
-    );
+    try {
+      yield* tween(time, value =>
+        this.size.x(interpolationFunction(from, to, timingFunction(value))),
+      );
+    } finally {
+      lock && this.releaseLayout();
+    }
     this.size.x(value);
-    lock && this.releaseLayout();
   }
 
   protected getHeight(): number {
@@ -573,11 +576,14 @@ export class Layout extends Node {
 
     this.size.y(from);
     lock && this.lockLayout();
-    yield* tween(time, value =>
-      this.size.y(interpolationFunction(from, to, timingFunction(value))),
-    );
+    try {
+      yield* tween(time, value =>
+        this.size.y(interpolationFunction(from, to, timingFunction(value))),
+      );
+    } finally {
+      lock && this.releaseLayout();
+    }
     this.size.y(value);
-    lock && this.releaseLayout();
   }
 
   /**
@@ -624,10 +630,13 @@ export class Layout extends Node {
 
     this.size(from);
     this.lockLayout();
-    yield* tween(time, value =>
-      this.size(interpolationFunction(from, to, timingFunction(value))),
-    );
-    this.releaseLayout();
+    try {
+      yield* tween(time, value =>
+        this.size(interpolationFunction(from, to, timingFunction(value))),
+      );
+    } finally {
+      this.releaseLayout();
+    }
     this.size(value);
   }
 
@@ -640,11 +649,14 @@ export class Layout extends Node {
   ): ThreadGenerator {
     const from = this.padding();
     this.lockLayout();
-    yield* tween(time, t => {
-      const target = this.padding.context.parse(unwrap(value));
-      this.padding(interpolationFunction(from, target, timingFunction(t)));
-    });
-    this.releaseLayout();
+    try {
+      yield* tween(time, t => {
+        const target = this.padding.context.parse(unwrap(value));
+        this.padding(interpolationFunction(from, target, timingFunction(t)));
+      });
+    } finally {
+      this.releaseLayout();
+    }
   }
 
   @threadable()
@@ -656,11 +668,14 @@ export class Layout extends Node {
   ): ThreadGenerator {
     const from = this.margin();
     this.lockLayout();
-    yield* tween(time, t => {
-      const target = this.margin.context.parse(unwrap(value));
-      this.margin(interpolationFunction(from, target, timingFunction(t)));
-    });
-    this.releaseLayout();
+    try {
+      yield* tween(time, t => {
+        const target = this.margin.context.parse(unwrap(value));
+        this.margin(interpolationFunction(from, target, timingFunction(t)));
+      });
+    } finally {
+      this.releaseLayout();
+    }
   }
 
   @threadable()
@@ -672,13 +687,16 @@ export class Layout extends Node {
   ): ThreadGenerator {
     const from = this.gap();
     this.lockLayout();
-    yield* tween(time, t => {
-      const target = this.gap.context.parse(unwrap(value));
-      this.gap(
-        interpolationFunction(from, target as Vector2, timingFunction(t)),
-      );
-    });
-    this.releaseLayout();
+    try {
+      yield* tween(time, t => {
+        const target = this.gap.context.parse(unwrap(value));
+        this.gap(
+          interpolationFunction(from, target as Vector2, timingFunction(t)),
+        );
+      });
+    } finally {
+      this.releaseLayout();
+    }
   }
 
   /**
@@ -1580,6 +1598,9 @@ export class Layout extends Node {
     if (this.layoutLockCounter() > 0) {
       node.setFlexGrow(0);
       node.setFlexShrink(0);
+      // A non-auto basis would override the explicit size a locked node is
+      // being driven by, collapsing e.g. `basis={0}` items to zero.
+      node.setFlexBasis('auto');
     } else {
       node.setFlexGrow(this.grow());
       node.setFlexShrink(this.resolvedShrink());
@@ -1752,10 +1773,16 @@ export class Layout extends Node {
 
     const slots = layoutNodes.map(userNode => {
       const natural = userNode.size();
+      // The wrapper takes over the node's flex sizing so grown, stretched,
+      // or `basis`-sized nodes reach the same slot they settle into later.
       const wrapper = new Layout({
         layout: true,
-        width: natural.x,
-        height: natural.y,
+        width: slotLength(userNode.width.context.getter(), natural.x),
+        height: slotLength(userNode.height.context.getter(), natural.y),
+        grow: userNode.grow(),
+        shrink: userNode.shrink(),
+        basis: userNode.basis(),
+        alignSelf: userNode.alignSelf(),
         scale: animate ? 1 : 0,
       });
       wrapper.add(userNode);
@@ -1764,10 +1791,7 @@ export class Layout extends Node {
 
     const oldSize = new Vector2(this.size());
     const flexChildren = this.applyLayout();
-    const preWorld = new Map<Layout, Vector2>();
-    for (const child of flexChildren) {
-      preWorld.set(child, child.position.abs());
-    }
+    const preState = captureFlexState(flexChildren);
 
     slots.forEach((slot, i) => {
       const insertIndex = Number.isFinite(index) ? index + i : Infinity;
@@ -1776,10 +1800,7 @@ export class Layout extends Node {
     this.requestLayoutUpdate();
 
     const newSize = new Vector2(this.size());
-    const postWorld = new Map<Layout, Vector2>();
-    for (const child of flexChildren) {
-      postWorld.set(child, child.position.abs());
-    }
+    const postState = captureFlexState(flexChildren);
 
     // Pin each wrapper at its flex-resolved position before freeze. Once
     // `layoutChildren` is off, the wrappers become layout roots and `position`
@@ -1797,8 +1818,8 @@ export class Layout extends Node {
     try {
       yield* this.runFreezeThawTween(
         flexChildren,
-        preWorld,
-        postWorld,
+        preState,
+        postState,
         oldSize,
         newSize,
         duration,
@@ -1826,10 +1847,7 @@ export class Layout extends Node {
   ): ThreadGenerator {
     const oldSize = new Vector2(this.size());
     const flexChildren = this.applyLayout().filter(c => c !== node);
-    const preWorld = new Map<Layout, Vector2>();
-    for (const child of flexChildren) {
-      preWorld.set(child, child.position.abs());
-    }
+    const preState = captureFlexState(flexChildren);
 
     const natural = node.size();
     const removalIndex = this.children().indexOf(node);
@@ -1849,10 +1867,7 @@ export class Layout extends Node {
     this.requestLayoutUpdate();
 
     const newSize = new Vector2(this.size());
-    const postWorld = new Map<Layout, Vector2>();
-    for (const child of flexChildren) {
-      postWorld.set(child, child.position.abs());
-    }
+    const postState = captureFlexState(flexChildren);
 
     const animationTask = animate
       ? animate(node, duration, timing)
@@ -1861,8 +1876,8 @@ export class Layout extends Node {
     try {
       yield* this.runFreezeThawTween(
         flexChildren,
-        preWorld,
-        postWorld,
+        preState,
+        postState,
         oldSize,
         newSize,
         duration,
@@ -1897,24 +1912,18 @@ export class Layout extends Node {
     interpolation: InterpolationFunction<Vector2> = Vector2.lerp,
   ): ThreadGenerator {
     const flexChildren = this.applyLayout();
-    const preWorld = new Map<Layout, Vector2>();
-    for (const child of flexChildren) {
-      preWorld.set(child, child.position.abs());
-    }
+    const preState = captureFlexState(flexChildren);
     const oldSize = new Vector2(this.size());
 
     mutator(this);
     this.requestLayoutUpdate();
-    const postWorld = new Map<Layout, Vector2>();
-    for (const child of flexChildren) {
-      postWorld.set(child, child.position.abs());
-    }
+    const postState = captureFlexState(flexChildren);
     const newSize = new Vector2(this.size());
 
     yield* this.runFreezeThawTween(
       flexChildren,
-      preWorld,
-      postWorld,
+      preState,
+      postState,
       oldSize,
       newSize,
       duration,
@@ -1926,8 +1935,8 @@ export class Layout extends Node {
   @threadable()
   protected *runFreezeThawTween(
     flexChildren: Layout[],
-    preWorld: Map<Layout, Vector2>,
-    postWorld: Map<Layout, Vector2>,
+    preState: Map<Layout, FlexState>,
+    postState: Map<Layout, FlexState>,
     oldSize: Vector2,
     newSize: Vector2,
     duration: number,
@@ -1935,16 +1944,26 @@ export class Layout extends Node {
     interpolation: InterpolationFunction<Vector2>,
     additionalTasks: ThreadGenerator[] = [],
   ): ThreadGenerator {
-    for (const child of flexChildren) {
-      const pre = preWorld.get(child);
-      if (pre) child.position.abs(pre);
-    }
+    const savedSizes = flexChildren.map(child => ({
+      child,
+      width: child.width.context.raw(),
+      height: child.height.context.raw(),
+    }));
     const savedLayoutChildren = this.layoutChildren.context.raw();
     const savedWidth = this.width.context.raw();
     const savedHeight = this.height.context.raw();
     this.layoutChildren(false);
     this.lockLayout();
     this.size(oldSize);
+    // Once detached from flex, children fall back to their own desired size,
+    // so grown or stretched children are pinned to their flex-resolved size.
+    for (const child of flexChildren) {
+      const pre = preState.get(child);
+      if (pre) {
+        child.size(pre.size);
+        child.position.abs(pre.world);
+      }
+    }
 
     try {
       yield* all(
@@ -1952,32 +1971,27 @@ export class Layout extends Node {
           const progress = timing(t);
           this.size(interpolation(oldSize, newSize, progress));
           for (const child of flexChildren) {
-            const pre = preWorld.get(child);
-            const post = postWorld.get(child);
+            const pre = preState.get(child);
+            const post = postState.get(child);
             if (pre && post) {
-              child.position.abs(interpolation(pre, post, progress));
+              child.size(interpolation(pre.size, post.size, progress));
+              child.position.abs(
+                interpolation(pre.world, post.world, progress),
+              );
             }
           }
         }),
         ...additionalTasks,
       );
     } finally {
+      for (const {child, width, height} of savedSizes) {
+        restoreRaw(child.width, width);
+        restoreRaw(child.height, height);
+      }
       this.releaseLayout();
-      if (savedWidth === undefined) {
-        this.width.context.reset();
-      } else {
-        this.width.context.setter(savedWidth);
-      }
-      if (savedHeight === undefined) {
-        this.height.context.reset();
-      } else {
-        this.height.context.setter(savedHeight);
-      }
-      if (savedLayoutChildren === undefined) {
-        this.layoutChildren.context.reset();
-      } else {
-        this.layoutChildren.context.setter(savedLayoutChildren);
-      }
+      restoreRaw(this.width, savedWidth);
+      restoreRaw(this.height, savedHeight);
+      restoreRaw(this.layoutChildren, savedLayoutChildren);
     }
   }
 
@@ -2003,7 +2017,8 @@ export class Layout extends Node {
     timing: TimingFunction = easeInOutCubic,
     interpolation: InterpolationFunction<Vector2> = Vector2.lerp,
   ): ThreadGenerator {
-    const children = this.applyLayout();
+    // While frozen, `applyLayout` reports no participating children.
+    const children = this.children();
     const pre = snapshotPositions(children);
     this.layoutChildren(true);
     this.requestLayoutUpdate();
@@ -2091,6 +2106,38 @@ export class Layout extends Node {
     }
 
     return null;
+  }
+}
+
+function slotLength(value: DesiredLength, natural: number): Length | undefined {
+  if (value === null) return undefined;
+  return typeof value === 'string' ? natural : value;
+}
+
+interface FlexState {
+  world: Vector2;
+  size: Vector2;
+}
+
+function captureFlexState(children: Layout[]): Map<Layout, FlexState> {
+  const state = new Map<Layout, FlexState>();
+  for (const child of children) {
+    state.set(child, {
+      world: child.position.abs(),
+      size: new Vector2(child.size()),
+    });
+  }
+  return state;
+}
+
+function restoreRaw<T>(
+  signal: {context: {setter(value: T): unknown; reset(): unknown}},
+  value: T | undefined,
+) {
+  if (value === undefined) {
+    signal.context.reset();
+  } else {
+    signal.context.setter(value);
   }
 }
 
