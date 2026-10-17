@@ -465,6 +465,10 @@ function ellipseOutline(size: Vector2): Vector2[] {
 
 /** Nested nodes already warned that their sizing props do nothing. */
 const WarnedSizing = new WeakSet<Txt>();
+const WarnedLineHeight = new WeakSet<Txt>();
+
+/** A line height below this share of the font size draws lines over others. */
+const TIGHT_LINE_HEIGHT = 0.7;
 
 function sameKey(a: readonly unknown[], b: readonly unknown[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i]);
@@ -796,6 +800,21 @@ export class Txt extends Shape {
       (ink.actualBoundingBoxAscent - descent - box.ascent + box.descent) / 2;
     return Number.isFinite(offset) ? offset : 0;
   }
+
+  /**
+   * Warn when the lines of a text are drawn over each other because its line
+   * height is well below its font size.
+   *
+   * @remarks
+   * Off by default. A numeric `lineHeight` is in pixels, so a multiplier
+   * written as a number, like `lineHeight={1.2}`, is the usual cause.
+   *
+   * @example
+   * ```ts
+   * Txt.warnTightLineHeight = true;
+   * ```
+   */
+  public static warnTightLineHeight = false;
 
   protected getText(): string {
     return this.innerText();
@@ -2622,6 +2641,7 @@ export class Txt extends Shape {
       this.drawChildren(context);
       return;
     }
+    if (Txt.warnTightLineHeight) this.warnTightLineHeight();
 
     const plan = this.paintPlan();
     if (plan.length === 0) {
@@ -2960,6 +2980,27 @@ export class Txt extends Shape {
       matrix = node.localToParent().multiply(matrix);
     }
     return matrix;
+  }
+
+  /** Warn once when the lines of this text overlap. */
+  private warnTightLineHeight(): void {
+    if (WarnedLineHeight.has(this) || this.positionedLines().length < 2) {
+      return;
+    }
+    const fontSize = this.effectiveFontSize();
+    const lineHeight = this.resolvedLineHeight();
+    if (lineHeight >= TIGHT_LINE_HEIGHT * fontSize) return;
+    WarnedLineHeight.add(this);
+    const text = this.innerText().replace(/\s+/g, ' ').trim();
+    const snippet = text.length > 24 ? `${text.slice(0, 24)}…` : text;
+    useLogger().warn({
+      message: `Txt "${snippet}" has a ${Math.round(lineHeight * 100) / 100}px line height at font size ${fontSize}, so its lines overlap.`,
+      remarks:
+        'A numeric <code>lineHeight</code> is in pixels. Use a percentage ' +
+        "of the font size (<code>lineHeight={'120%'}</code>) or pixels near " +
+        'the font size.',
+      inspect: this.key,
+    });
   }
 
   /** Warn once when a sizing prop is set on this nested node. */
