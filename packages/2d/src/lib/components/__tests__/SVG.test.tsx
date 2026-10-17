@@ -6,15 +6,24 @@ import {
   linear,
   waitFor,
 } from '@canvas-commons/core';
-import {describe, expect, it} from 'vitest';
+import {afterEach, describe, expect, it, vi} from 'vitest';
+import {PathMorpher} from '../../morphers';
 import {Path} from '../Path';
-import {SVG} from '../SVG';
-import {ShapeProps} from '../Shape';
+import {SVG, SVGShapeData} from '../SVG';
+import {Shape, ShapeProps} from '../Shape';
 import {generatorTest} from './generatorTest';
 import {mockScene2D} from './mockScene2D';
+import {polyfillSVGDom} from './svgDom';
 
-// jsdom builds SVG children as plain SVGElement, so the parser cannot run here.
 class TestSVG extends SVG {
+  public static parse(svg: string) {
+    return SVG.parseSVGData(svg);
+  }
+
+  public get pathMorpher() {
+    return this.morpher;
+  }
+
   public static transformProps(transform: DOMMatrix): ShapeProps {
     return SVG.getMatrixTransformation(transform);
   }
@@ -67,8 +76,135 @@ function hex(style: unknown) {
   return style instanceof Color ? style.hex() : style;
 }
 
+function only(svg: string): SVGShapeData {
+  const {nodes} = TestSVG.parse(svg);
+  expect(nodes).toHaveLength(1);
+  return nodes[0];
+}
+
+function rendered(svg: string, props: ShapeProps = {}): Shape {
+  const node = new TestSVG({svg, ...props}).wrapper.children()[0];
+  if (!(node instanceof Shape)) throw new Error('missing shape');
+  return node;
+}
+
+function withStylesheet(css: string) {
+  const style = window.document.createElement('style');
+  style.textContent = css;
+  window.document.head.appendChild(style);
+  return style;
+}
+
 describe('SVG', () => {
   mockScene2D();
+  polyfillSVGDom();
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe('default morpher', () => {
+    const original = SVG.defaultMorpher;
+    afterEach(() => {
+      SVG.defaultMorpher = original;
+    });
+
+    it('gives new nodes the default morpher', () => {
+      const morpher: PathMorpher = {
+        createInterpolator: (from, to) => value => (value < 1 ? from : to),
+      };
+      SVG.defaultMorpher = morpher;
+
+      const svg = new TestSVG({svg: '<svg viewBox="0 0 1 1"></svg>'});
+
+      expect(svg.pathMorpher).toBe(morpher);
+    });
+
+    it('prefers the morpher a node is given', () => {
+      const morpher: PathMorpher = {
+        createInterpolator: (from, to) => value => (value < 1 ? from : to),
+      };
+
+      const svg = new TestSVG({svg: '<svg viewBox="0 0 1 1"></svg>', morpher});
+
+      expect(svg.pathMorpher).toBe(morpher);
+      expect(svg.pathMorpher).not.toBe(SVG.defaultMorpher);
+    });
+  });
+
+  describe('document size', () => {
+    it('reads the size when the parsed lengths are missing', () => {
+      const {size} = TestSVG.parse(
+        '<svg width="20" height="10"><path d="M0 0L1 1"/></svg>',
+      );
+
+      expect(size.x).toBe(20);
+      expect(size.y).toBe(10);
+    });
+
+    it('resolves font-relative lengths', () => {
+      const {size} = TestSVG.parse(
+        '<svg width="2em" height="3ex" viewBox="0 0 1 1"><path d="M0 0L1 1"/></svg>',
+      );
+
+      expect(size.x).toBe(32);
+      expect(size.y).toBe(24);
+    });
+
+    it('reads the viewBox when the parsed one is missing', () => {
+      vi.spyOn(
+        window.SVGSVGElement.prototype,
+        'viewBox',
+        'get',
+      ).mockImplementation(() => {
+        throw new Error('unavailable');
+      });
+
+      const {size} = TestSVG.parse(
+        '<svg viewBox="0 0 40 30"><path d="M0 0L1 1"/></svg>',
+      );
+
+      expect(size.x).toBe(40);
+      expect(size.y).toBe(30);
+    });
+
+    it('still parses a document it cannot measure', () => {
+      const {size, nodes} = TestSVG.parse('<svg><path d="M0 0L10 10"/></svg>');
+
+      expect(size.x).toBeGreaterThan(0);
+      expect(size.y).toBeGreaterThan(0);
+      expect(nodes).toHaveLength(1);
+    });
+  });
+
+  describe('structure', () => {
+    it('maps a nested svg into its viewport', () => {
+      const {props} = only(
+        '<svg viewBox="0 0 10 10"><svg x="2" y="3" width="4" height="8" viewBox="0 0 2 4"><path d="M0 0L1 1"/></svg></svg>',
+      );
+
+      expect(props.position).toMatchObject({x: -3, y: -2});
+      expect(props.scale).toMatchObject({x: 2, y: 2});
+    });
+
+    it('paints a use target with the use element style', () => {
+      const {props} = only(
+        '<svg viewBox="0 0 10 10"><defs><path id="dot" d="M0 0L1 1"/></defs><use href="#dot" fill="rgb(255,0,0)" stroke-width="3"/></svg>',
+      );
+
+      expect(props.fill).toBe('rgb(255,0,0)');
+      expect(props.lineWidth).toBe(3);
+    });
+
+    it('paints a typeset glyph with the color of the node', () => {
+      const glyph = rendered(
+        '<svg viewBox="0 0 10 10"><defs><path id="MJX-1-TEX-I-1D465" d="M0 0L1 1"/></defs><g stroke="currentColor" fill="currentColor" stroke-width="0"><g data-mml-node="mi"><use data-c="1D465" xlink:href="#MJX-1-TEX-I-1D465"/></g></g></svg>',
+        {fill: 'rgb(0,0,255)'},
+      );
+
+      expect(hex(glyph.fill())).toBe('#0000ff');
+    });
+  });
 
   describe('matrix transformations', () => {
     it('keeps the shear of a sheared matrix', () => {
@@ -118,6 +254,86 @@ describe('SVG', () => {
 
       expect(hex(path.fill())).toBe('#f38ba8');
       expect(path.lineWidth()).toBe(2);
+    });
+
+    it('reads a dash array with commas and spaces', () => {
+      expect(painted(`<g stroke-dasharray="5, 3"/>`).lineDash()).toEqual([
+        5, 3,
+      ]);
+    });
+
+    it('reads a dash array of none as a solid line', () => {
+      const path = painted(`<g stroke-dasharray="none"/>`, {lineDash: [4]});
+
+      expect(path.lineDash()).toEqual([]);
+    });
+
+    it('ignores a dash array that starts with a percentage', () => {
+      const path = painted(`<g stroke-dasharray="10%, 5"/>`, {lineDash: [4]});
+
+      expect(path.lineDash()).toEqual([4]);
+    });
+
+    it('treats inherit as not set', () => {
+      const path = painted(`<g fill="inherit"/>`, {fill: 'rgb(249,226,175)'});
+
+      expect(hex(path.fill())).toBe('#f9e2af');
+    });
+
+    // jsdom ignores the stylesheets of an SVG and of a shadow root but applies
+    // the document's everywhere, which is enough to stand in for them here.
+    describe('from a stylesheet', () => {
+      let style: HTMLStyleElement | null = null;
+      afterEach(() => {
+        style?.remove();
+        style = null;
+      });
+
+      it('reads paint set by a class', () => {
+        style = withStylesheet(
+          '.cls-1{fill:rgb(255,0,0);stroke:rgb(0,0,255);stroke-width:4;opacity:0.5}',
+        );
+
+        const {props} = only(
+          '<svg viewBox="0 0 10 10"><path class="cls-1" d="M0 0L1 1"/></svg>',
+        );
+
+        expect(props.fill).toBe('rgb(255, 0, 0)');
+        expect(props.stroke).toBe('rgb(0, 0, 255)');
+        expect(props.lineWidth).toBe(4);
+        expect(props.opacity).toBe(0.5);
+      });
+
+      it('passes paint set by a class on a group to its children', () => {
+        style = withStylesheet('.cls-2{fill:rgb(255,0,0)}');
+
+        const {props} = only(
+          '<svg viewBox="0 0 10 10"><g class="cls-2"><path d="M0 0L1 1"/></g></svg>',
+        );
+
+        expect(props.fill).toBe('rgb(255, 0, 0)');
+      });
+
+      it('lets a use target inherit from the use site', () => {
+        style = withStylesheet('.cls-3{fill:rgb(255,0,0)}');
+
+        const {props} = only(
+          '<svg viewBox="0 0 10 10"><defs><path id="mark" d="M0 0L1 1"/></defs><g class="cls-3"><use href="#mark"/></g></svg>',
+        );
+
+        expect(props.fill).toBe('rgb(255, 0, 0)');
+      });
+
+      it('resolves currentColor to the color of the node', () => {
+        style = withStylesheet('.cls-4{fill:currentColor}');
+
+        const path = rendered(
+          '<svg viewBox="0 0 10 10"><path class="cls-4" d="M0 0L1 1"/></svg>',
+          {fill: 'rgb(0,255,0)'},
+        );
+
+        expect(hex(path.fill())).toBe('#00ff00');
+      });
     });
 
     it('inherits a property the element does not set', () => {

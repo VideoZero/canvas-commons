@@ -33,6 +33,9 @@ import {Path, PathProps} from './Path';
 import {Rect, RectProps} from './Rect';
 import {Shape, ShapeProps} from './Shape';
 
+const DEFAULT_FONT_SIZE = 16;
+const FALLBACK_SIZE = 100;
+
 /**
  * Represent SVG shape.
  * This only used single time because `node` may have reference to parent SVG renderer.
@@ -86,12 +89,35 @@ If you're not interested in animating SVG, you can use {@link Img} instead.
  */
 export class SVG extends Shape {
   @lazy(() => {
+    // A shadow root keeps the page's stylesheets from restyling the SVG.
+    const host = document.createElement('div');
+    getDomContainer().appendChild(host);
     const element = document.createElement('div');
-    getDomContainer().appendChild(element);
+    element.style.color = SVG.currentColorSentinel;
+    host.attachShadow({mode: 'open'}).appendChild(element);
     return element;
   })
   protected static containerElement: HTMLDivElement;
+  // What a computed paint resolves to when it says `currentColor`.
+  private static readonly currentColorSentinel = 'rgb(1, 2, 3)';
   private static svgNodesPool: Record<string, SVGDocumentData> = {};
+
+  /**
+   * The morpher an SVG uses when it is not given one.
+   *
+   * @remarks
+   * Set it before creating the nodes it should apply to: each node reads it
+   * once, when it is constructed. It covers every SVG-based node, including
+   * `Latex` and `Icon`.
+   *
+   * @example
+   * ```ts
+   * import {SVG, manimMorpher} from '@canvas-commons/2d';
+   *
+   * SVG.defaultMorpher = manimMorpher();
+   * ```
+   */
+  public static defaultMorpher: PathMorpher = defaultMorpher();
 
   /**
    * SVG string to be rendered
@@ -112,7 +138,7 @@ export class SVG extends Shape {
   public constructor(props: SVGProps) {
     const {morpher, ...rest} = props;
     super(rest);
-    this.morpher = morpher ?? defaultMorpher();
+    this.morpher = morpher ?? SVG.defaultMorpher;
     this.wrapper = new Node({});
     this.wrapper.children(this.documentNodes);
     this.wrapper.scale(this.wrapperScale);
@@ -451,31 +477,16 @@ export class SVG extends Shape {
       } as SVGDocumentData;
     }
 
-    let viewBox = new BBox();
-    let size = new Vector2();
-
-    const hasViewBox = svgRoot.hasAttribute('viewBox');
-    const hasSize =
-      svgRoot.hasAttribute('width') || svgRoot.hasAttribute('height');
-
-    if (hasViewBox) {
-      const {x, y, width, height} = svgRoot.viewBox.baseVal;
-      viewBox = new BBox(x, y, width, height);
-
-      if (!hasSize) size = viewBox.size;
-    }
-
-    if (hasSize) {
+    let viewBox = SVG.readViewBox(svgRoot);
+    let size: Vector2;
+    if (svgRoot.hasAttribute('width') || svgRoot.hasAttribute('height')) {
       size = new Vector2(
-        svgRoot.width.baseVal.value,
-        svgRoot.height.baseVal.value,
+        SVG.readLength(svgRoot, 'width'),
+        SVG.readLength(svgRoot, 'height'),
       );
-
-      if (!hasViewBox) viewBox = new BBox(0, 0, size.width, size.height);
-    }
-
-    if (!hasViewBox && !hasSize) {
-      viewBox = new BBox(svgRoot.getBBox());
+      viewBox ??= new BBox(0, 0, size.width, size.height);
+    } else {
+      viewBox ??= SVG.measureContent(svgRoot);
       size = viewBox.size;
     }
 
@@ -567,6 +578,94 @@ export class SVG extends Shape {
     return transformMatrix;
   }
 
+  private static readViewBox(svg: SVGSVGElement): BBox | null {
+    if (!svg.hasAttribute('viewBox')) return null;
+    try {
+      const {x, y, width, height} = svg.viewBox.baseVal;
+      return new BBox(x, y, width, height);
+    } catch {
+      // Safari can fail to expose the parsed viewBox.
+    }
+
+    const values = (svg.getAttribute('viewBox') ?? '')
+      .trim()
+      .split(/[\s,]+/)
+      .map(value => parseFloat(value));
+    if (values.length !== 4 || !values.every(Number.isFinite)) {
+      useLogger().warn(`SVG: invalid viewBox "${svg.getAttribute('viewBox')}"`);
+      return null;
+    }
+    const [x, y, width, height] = values;
+    return new BBox(x, y, width, height);
+  }
+
+  private static readLength(
+    svg: SVGSVGElement,
+    name: 'width' | 'height',
+  ): number {
+    try {
+      return svg[name].baseVal.value;
+    } catch {
+      // Safari can fail to expose the parsed length; jsdom never does.
+    }
+
+    const match = (svg.getAttribute(name) ?? '')
+      .trim()
+      .match(/^([+-]?[\d.]+(?:e[+-]?\d+)?)(px|em|ex|pt|pc|in|cm|mm)?$/i);
+    if (!match) return 0;
+    const value = parseFloat(match[1]);
+    const fontSize =
+      parseFloat(window.getComputedStyle(svg).fontSize) || DEFAULT_FONT_SIZE;
+    switch (match[2]?.toLowerCase()) {
+      case 'em':
+        return value * fontSize;
+      case 'ex':
+        return (value * fontSize) / 2;
+      case 'pt':
+        return (value * 4) / 3;
+      case 'pc':
+        return value * 16;
+      case 'in':
+        return value * 96;
+      case 'cm':
+        return (value * 96) / 2.54;
+      case 'mm':
+        return (value * 96) / 25.4;
+      default:
+        return value;
+    }
+  }
+
+  private static measureContent(svg: SVGSVGElement): BBox {
+    try {
+      return new BBox(svg.getBBox());
+    } catch {
+      // Safari can refuse to measure an element outside the document.
+    }
+
+    const container = document.createElement('div');
+    container.style.position = 'absolute';
+    container.style.visibility = 'hidden';
+    container.style.pointerEvents = 'none';
+    const clone = svg.cloneNode(true);
+    container.appendChild(clone);
+    document.body.appendChild(container);
+    try {
+      if (clone instanceof SVGSVGElement) {
+        return new BBox(clone.getBBox());
+      }
+    } catch {
+      // Handled below.
+    } finally {
+      container.remove();
+    }
+
+    useLogger().warn(
+      'SVG: could not measure the document. Give the root element a viewBox or a width and height.',
+    );
+    return new BBox(0, 0, FALLBACK_SIZE, FALLBACK_SIZE);
+  }
+
   private static parseLineCap(name: string | null): CanvasLineCap | null {
     if (!name) return null;
     if (name === 'butt' || name === 'round' || name === 'square') return name;
@@ -589,13 +688,15 @@ export class SVG extends Shape {
 
   private static parseLineDash(value: string | null): number[] | null {
     if (!value) return null;
+    if (value === 'none') return [];
 
-    const list = value.split(/,|\s+/);
-    if (list.findIndex(str => str.endsWith('%')) > 0) {
+    const list = value.split(/[\s,]+/).filter(str => str.length > 0);
+    if (list.some(str => str.endsWith('%'))) {
       useLogger().warn(`SVG: percentage line dash are ignored`);
       return null;
     }
-    return list.map(str => parseFloat(str));
+    const dash = list.map(str => parseFloat(str));
+    return dash.every(Number.isFinite) ? dash : null;
   }
 
   private static parseDashOffset(value: string | null): number | null {
@@ -613,12 +714,39 @@ export class SVG extends Shape {
     return parseFloat(value);
   }
 
-  /** Read a presentation property, preferring `style` over the attribute. */
+  /**
+   * Read a presentation property the element sets itself.
+   *
+   * @remarks
+   * The element's `style` wins over its attribute. Without either, the
+   * computed style still reveals a value set by a stylesheet rule, such as one
+   * in the document's own `<style>`: inherited properties set that way differ
+   * from the parent's, and `opacity` differs from its initial value. Anything
+   * else is left to `inheritedStyle`, which follows a `<use>` to its target
+   * where the computed style would follow the target's own ancestors.
+   */
   private static getPresentationProperty(
     element: SVGGraphicsElement,
     name: string,
   ): string | null {
-    return element.style.getPropertyValue(name) || element.getAttribute(name);
+    const own =
+      element.style.getPropertyValue(name) || element.getAttribute(name);
+    if (own) {
+      return own === 'inherit' ? null : own;
+    }
+
+    const computed = window.getComputedStyle(element).getPropertyValue(name);
+    if (!computed) return null;
+    if (name === 'opacity') {
+      return computed === '1' ? null : computed;
+    }
+
+    const parent = element.parentElement;
+    const inherited = parent
+      ? window.getComputedStyle(parent).getPropertyValue(name)
+      : '';
+    if (computed === inherited) return null;
+    return computed === SVG.currentColorSentinel ? 'currentColor' : computed;
   }
 
   /**
@@ -630,7 +758,9 @@ export class SVG extends Shape {
     element: SVGGraphicsElement,
     inheritedStyle: ShapeProps,
   ): ShapeProps {
-    const lineWidth = this.getPresentationProperty(element, 'stroke-width');
+    const lineWidth = parseFloat(
+      this.getPresentationProperty(element, 'stroke-width') ?? '',
+    );
 
     return {
       fill:
@@ -638,8 +768,9 @@ export class SVG extends Shape {
       stroke:
         this.getPresentationProperty(element, 'stroke') ??
         inheritedStyle.stroke,
-      lineWidth:
-        lineWidth === null ? inheritedStyle.lineWidth : parseFloat(lineWidth),
+      lineWidth: Number.isFinite(lineWidth)
+        ? lineWidth
+        : inheritedStyle.lineWidth,
       lineCap:
         this.parseLineCap(
           this.getPresentationProperty(element, 'stroke-linecap'),
@@ -727,8 +858,8 @@ export class SVG extends Shape {
     } else if (child.tagName === 'svg' && child instanceof SVGSVGElement) {
       let nestedTransform = transformMatrix;
 
-      if (child.hasAttribute('viewBox')) {
-        const vb = child.viewBox.baseVal;
+      const vb = SVG.readViewBox(child);
+      if (vb) {
         const width = SVG.parseNumberAttribute(child, 'width') || vb.width;
         const height = SVG.parseNumberAttribute(child, 'height') || vb.height;
 
@@ -754,7 +885,7 @@ export class SVG extends Shape {
         hrefElement,
         svgRoot,
         transformMatrix,
-        inheritedStyle,
+        style,
       );
     } else if (child.tagName === 'path') {
       const data = child.getAttribute('d');
