@@ -1,5 +1,6 @@
 import {BBox, Color, Spacing, Vector2} from '@canvas-commons/core';
 import {CanvasStyle, Gradient, Pattern, PossibleCanvasStyle} from '../partials';
+import {parseCSSGradient} from './parseCSSGradient';
 
 export function canvasStyleParser(style: PossibleCanvasStyle) {
   if (style === null) {
@@ -11,13 +12,31 @@ export function canvasStyleParser(style: PossibleCanvasStyle) {
   if (style instanceof Pattern) {
     return style;
   }
+  if (typeof style === 'string') {
+    const gradient = parseCSSGradient(style);
+    if (gradient) return gradient;
+  }
 
   return new Color(style);
 }
 
+/**
+ * Resolve a canvas style into something a canvas context can paint with.
+ *
+ * @example
+ * ```ts
+ * context.fillStyle = resolveCanvasStyle(this.fill(), context, box);
+ * ```
+ *
+ * @param style - The style to resolve.
+ * @param context - The context that will paint with the style.
+ * @param box - The box of the painted shape, which a
+ *              {@link Gradient.cssRelative} gradient fits.
+ */
 export function resolveCanvasStyle(
   style: CanvasStyle,
   context: CanvasRenderingContext2D,
+  box?: BBox,
 ): string | CanvasGradient | CanvasPattern {
   if (style === null) {
     return '';
@@ -26,7 +45,7 @@ export function resolveCanvasStyle(
     return (<Color>style).serialize();
   }
   if (style instanceof Gradient) {
-    return style.canvasGradient(context);
+    return style.canvasGradient(context, box);
   }
   if (style instanceof Pattern) {
     return style.canvasPattern(context) ?? '';

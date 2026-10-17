@@ -2536,13 +2536,16 @@ export class Txt extends Shape {
     const originX = width / -2;
     const originY = height / -2;
 
+    const paintBox = this.getCacheBBox();
     context.save();
-    this.applyStyle(context);
+    this.applyStyle(context, paintBox);
     this.applyText(context);
     context.textBaseline = 'alphabetic';
     const alpha = context.globalAlpha;
     const resolve = (ink: string | Gradient | Pattern) =>
-      typeof ink === 'string' ? ink : resolveCanvasStyle(ink, context);
+      typeof ink === 'string'
+        ? ink
+        : resolveCanvasStyle(ink, context, paintBox);
     // A canvas parses a font or a colour on each set, so an unchanged value
     // is not set again.
     let font: string | null = null;
@@ -2708,8 +2711,9 @@ export class Txt extends Shape {
       return (ascent - descent) / 2 - (anchor * (ascent + descent)) / 2;
     };
 
+    const paintBox = this.getCacheBBox();
     context.save();
-    this.applyStyle(context);
+    this.applyStyle(context, paintBox);
     this.applyText(context);
     context.textBaseline = 'alphabetic';
     const alpha = context.globalAlpha;
@@ -2779,8 +2783,12 @@ export class Txt extends Shape {
         context.font = style.font;
         context.letterSpacing = `${style.letterSpacing}px`;
         context.globalAlpha = alpha * style.opacity;
-        context.fillStyle = resolveCanvasStyle(style.fill, context);
-        context.strokeStyle = resolveCanvasStyle(style.stroke, context);
+        context.fillStyle = resolveCanvasStyle(style.fill, context, paintBox);
+        context.strokeStyle = resolveCanvasStyle(
+          style.stroke,
+          context,
+          paintBox,
+        );
         context.lineWidth = style.lineWidth;
 
         if (style.lineWidth <= 0) {

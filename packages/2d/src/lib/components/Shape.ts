@@ -222,9 +222,17 @@ export abstract class Shape extends Layout {
     context.direction = this.textDirection();
   }
 
-  protected applyStyle(context: CanvasRenderingContext2D) {
-    context.fillStyle = resolveCanvasStyle(this.fill(), context);
-    context.strokeStyle = resolveCanvasStyle(this.stroke(), context);
+  /**
+   * Apply the paint and line style of the shape to a context.
+   *
+   * @param context - The context to style.
+   * @param box - The box a {@link Gradient.cssRelative} gradient fits. Left
+   *              out when only measuring, as reading the box of a shape can
+   *              depend on its measured size.
+   */
+  protected applyStyle(context: CanvasRenderingContext2D, box?: BBox) {
+    context.fillStyle = resolveCanvasStyle(this.fill(), context, box);
+    context.strokeStyle = resolveCanvasStyle(this.stroke(), context, box);
     context.lineWidth = this.lineWidth();
     context.lineJoin = this.lineJoin();
     context.lineCap = this.lineCap();
@@ -253,7 +261,7 @@ export abstract class Shape extends Layout {
     const hasStroke = this.lineWidth() > 0 && this.stroke() !== null;
     const hasFill = this.fill() !== null;
     context.save();
-    this.applyStyle(context);
+    this.applyStyle(context, this.getCacheBBox());
     this.drawRipple(context);
 
     if (this.strokeFirst()) {
@@ -337,7 +345,7 @@ export abstract class Shape extends Layout {
     const context = canvas.getContext('2d');
     if (context === null) return null;
     context.translate(-bbox.x, -bbox.y);
-    this.applyStyle(context);
+    this.applyStyle(context, this.getCacheBBox());
 
     const path = this.getPath();
     context?.fill(path);
@@ -372,7 +380,7 @@ export abstract class Shape extends Layout {
     const context = canvas.getContext('2d');
     if (context === null) return null;
     context.translate(-bbox.x, -bbox.y);
-    this.applyStyle(context);
+    this.applyStyle(context, this.getCacheBBox());
 
     const path = this.getPath();
     context?.stroke(path);

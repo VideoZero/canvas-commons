@@ -436,7 +436,11 @@ export abstract class Curve extends Shape {
     if (this.startArrow()) {
       this.drawArrow(context, startPoint, startTangent, arrowSize);
     }
-    context.fillStyle = resolveCanvasStyle(this.stroke(), context);
+    context.fillStyle = resolveCanvasStyle(
+      this.stroke(),
+      context,
+      this.getCacheBBox(),
+    );
     context.closePath();
     context.fill();
     context.restore();
