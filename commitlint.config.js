@@ -30,6 +30,7 @@ module.exports = {
         'shiki',
         'rig',
         'three',
+        'videozero',
         'vite-plugin',
         'webcodecs',
       ],

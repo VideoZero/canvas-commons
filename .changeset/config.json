@@ -32,6 +32,7 @@
     "@canvas-commons/docs",
     "@canvas-commons/e2e",
     "@canvas-commons/examples",
-    "@canvas-commons/template"
+    "@canvas-commons/template",
+    "@videozero/compat"
   ]
 }
