@@ -1,9 +1,11 @@
-import {Browser, firefox, Page} from 'playwright';
+import {Browser, Page} from 'playwright';
 import {inject} from 'vitest';
+import {BrowserName, browserType} from './browser';
 
 let BrowserPromise: Promise<Browser> | null = null;
 let BrowserWsEndpointOverride: string | null = null;
 let VitePortOverride: number | null = null;
+let BrowserNameOverride: BrowserName | null = null;
 
 /**
  * Point the shared browser and dev server at instances the caller manages, for
@@ -12,9 +14,18 @@ let VitePortOverride: number | null = null;
 export function useStandaloneServer(
   vitePort: number,
   browserWsEndpoint: string,
+  browser: BrowserName = 'firefox',
 ): void {
   VitePortOverride = vitePort;
   BrowserWsEndpointOverride = browserWsEndpoint;
+  BrowserNameOverride = browser;
+}
+
+/**
+ * The browser the suite renders in, chosen once by the global setup.
+ */
+export function browserName(): BrowserName {
+  return BrowserNameOverride ?? inject('browserName');
 }
 
 export interface PageOptions {
@@ -32,7 +43,7 @@ export interface PageOptions {
 }
 
 export async function getSharedBrowser(): Promise<Browser> {
-  BrowserPromise ??= firefox.connect(
+  BrowserPromise ??= browserType(browserName()).connect(
     BrowserWsEndpointOverride ?? inject('browserWsEndpoint'),
   );
   return BrowserPromise;

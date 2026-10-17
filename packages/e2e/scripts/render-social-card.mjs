@@ -3,7 +3,6 @@
 import * as fs from 'node:fs/promises';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {firefox} from 'playwright';
 import {createServer} from 'vite';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -14,11 +13,18 @@ const server = await createServer({
   root: e2eRoot,
   configFile: resolve(e2eRoot, 'vite.config.ts'),
 }).then(s => s.listen());
-const browserServer = await firefox.launchServer({headless: true});
+const {resolveBrowserName, browserType} =
+  await server.ssrLoadModule('/src/browser.ts');
+const browser = resolveBrowserName();
+const browserServer = await launchBrowserServer(browser);
 
 try {
   const {useStandaloneServer} = await server.ssrLoadModule('/src/app.ts');
-  useStandaloneServer(server.config.server.port, browserServer.wsEndpoint());
+  useStandaloneServer(
+    server.config.server.port,
+    browserServer.wsEndpoint(),
+    browser,
+  );
 
   const {openScene, renderFrame} = await server.ssrLoadModule(
     '/src/helpers/render.ts',

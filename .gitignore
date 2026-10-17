@@ -55,3 +55,6 @@ AGENTS.local.md
 .worktrees/
 .trees/
 .agents/
+
+# Local e2e baselines of browsers other than Firefox
+/packages/e2e/src/__image_snapshots__/chromium/

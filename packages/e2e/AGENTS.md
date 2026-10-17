@@ -18,6 +18,24 @@ scene render plus snapshot compare costs ~2–5s per frame after the first; the
 first scene navigated to pays an extra ~3–10s for dep optimization depending on
 what the scene imports (MathJax, CodeMirror, etc).
 
+### Browser
+
+The committed baselines are rendered by Firefox, which CI uses. When the Firefox
+build Playwright expects isn't installed, the suite falls back to Chromium and
+warns. Pick one explicitly with `E2E_BROWSER=firefox|chromium`, and point at a
+browser installed outside Playwright's cache with `E2E_FIREFOX_EXECUTABLE` /
+`E2E_CHROMIUM_EXECUTABLE`:
+
+```bash
+E2E_CHROMIUM_EXECUTABLE=/path/to/chrome pnpm e2e:test
+```
+
+Chromium renders differently, so it compares against its own baselines in
+`src/__image_snapshots__/chromium/`, which are git-ignored: the first run writes
+them. To check a branch for rendering changes without Firefox, run the suite on
+`main` first, then on the branch. Scenes whose video the browser can't decode
+(H.264 in Chromium builds without proprietary codecs) are skipped.
+
 ### Running a subset
 
 The full suite takes ~3–4 minutes. When you're iterating on one scene, pass
