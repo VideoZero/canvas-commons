@@ -90,6 +90,39 @@ describe('Latex', () => {
     );
   });
 
+  describe('fragment queries', () => {
+    it('returns the shapes of each occurrence of a fragment', () => {
+      const tex = new TestLatex({tex: '{{x}}+{{x}}'});
+
+      const occurrences = tex.getShapesById('x');
+
+      expect(occurrences).toHaveLength(2);
+      expect(occurrences.map(shapes => shapes.length)).toEqual([1, 1]);
+      expect(occurrences[0][0]).not.toBe(occurrences[1][0]);
+      expect(tex.getShapes()).toHaveLength(3);
+    });
+
+    it('measures a fragment in each space', () => {
+      const parent = new Node({position: [100, 0]});
+      const tex = new TestLatex({tex: '{{ab}}{{c}}', position: [0, 50]});
+      parent.add(tex);
+
+      const [local] = tex.getLocalFragmentBBox('ab');
+      expect(local.x).toBeCloseTo(-15);
+      expect(local.width).toBeCloseTo(20);
+      expect(local.height).toBeCloseTo(20);
+
+      const [inParent] = tex.getFragmentBBox('ab', 2);
+      expect(inParent.x).toBeCloseTo(-17);
+      expect(inParent.y).toBeCloseTo(38);
+      expect(inParent.width).toBeCloseTo(24);
+
+      const [absolute] = tex.getAbsoluteFragmentBBox('ab');
+      expect(absolute.x).toBeCloseTo(85);
+      expect(absolute.y).toBeCloseTo(40);
+    });
+  });
+
   describe('tweening', () => {
     it(
       'animates the size when mapping fragments',

@@ -378,6 +378,128 @@ export class Latex extends SVGNode {
     });
   }
 
+  /**
+   * Get the shapes that make up the formula, in document order.
+   *
+   * @example
+   * ```ts
+   * yield* all(...tex().getShapes().map(shape => shape.fill('red', 0.5)));
+   * ```
+   */
+  public getShapes(): Curve[] {
+    return this.getDisplayedFragments().flatMap(({shapes}) => shapes);
+  }
+
+  /**
+   * Get the shapes of each occurrence of a fragment.
+   *
+   * @remarks
+   * {@link getChildrenById} returns the node grouping a fragment's glyphs. This
+   * returns the glyphs themselves, which can be filled and faded.
+   *
+   * @example
+   * ```ts
+   * // tex="{{x}} + {{x}}"
+   * const [first, second] = tex().getShapesById('x');
+   * yield* all(...first.map(shape => shape.fill('red', 0.5)));
+   * ```
+   *
+   * @param id - The sub-tex of the fragment, as written inside `{{}}`.
+   */
+  public getShapesById(id: string): Curve[][] {
+    return this.getDisplayedFragments()
+      .filter(fragment => fragment.id === id)
+      .map(({shapes}) => shapes);
+  }
+
+  /**
+   * Get the bounding box of each occurrence of a fragment in the parent space.
+   *
+   * @remarks
+   * The boxes share the space of {@link position}, so they can place a sibling
+   * of this node.
+   *
+   * @example
+   * ```tsx
+   * <Rect
+   *   position={() => tex().getFragmentBBox('a')[0].center}
+   *   size={() => tex().getFragmentBBox('a', 8)[0].size}
+   * />
+   * ```
+   *
+   * @param id - The sub-tex of the fragment, as written inside `{{}}`.
+   * @param padding - The padding added on each side of the box.
+   */
+  public getFragmentBBox(id: string, padding = 0): BBox[] {
+    return this.getFragmentBBoxes(id, padding, this.worldToParent());
+  }
+
+  /**
+   * Get the bounding box of each occurrence of a fragment in the local space of
+   * this node.
+   *
+   * @remarks
+   * The boxes can place a child of this node.
+   *
+   * @example
+   * ```tsx
+   * <Latex ref={tex} tex="{{a}}x^2">
+   *   <Rect
+   *     layout={false}
+   *     position={() => tex().getLocalFragmentBBox('a')[0].center}
+   *     size={() => tex().getLocalFragmentBBox('a')[0].size}
+   *   />
+   * </Latex>
+   * ```
+   *
+   * @param id - The sub-tex of the fragment, as written inside `{{}}`.
+   * @param padding - The padding added on each side of the box.
+   */
+  public getLocalFragmentBBox(id: string, padding = 0): BBox[] {
+    return this.getFragmentBBoxes(id, padding, this.worldToLocal());
+  }
+
+  /**
+   * Get the bounding box of each occurrence of a fragment in world space.
+   *
+   * @remarks
+   * The boxes share the space of {@link absolutePosition}.
+   *
+   * @example
+   * ```ts
+   * marker().absolutePosition(tex().getAbsoluteFragmentBBox('a')[0].center);
+   * ```
+   *
+   * @param id - The sub-tex of the fragment, as written inside `{{}}`.
+   * @param padding - The padding added on each side of the box.
+   */
+  public getAbsoluteFragmentBBox(id: string, padding = 0): BBox[] {
+    return this.getFragmentBBoxes(id, padding, new DOMMatrix());
+  }
+
+  private getDisplayedFragments(): LatexFragment[] {
+    // Reading the children attaches the shapes, so they can be measured before
+    // the first render.
+    this.wrapper.children();
+    return this.getFragments(this.document().nodes);
+  }
+
+  private getFragmentBBoxes(
+    id: string,
+    padding: number,
+    worldToSpace: DOMMatrix,
+  ): BBox[] {
+    return this.getShapesById(id).map(shapes =>
+      BBox.fromPoints(
+        ...shapes.flatMap(shape =>
+          shape
+            .cacheBBox()
+            .transformCorners(worldToSpace.multiply(shape.localToWorld())),
+        ),
+      ).expand(padding),
+    );
+  }
+
   private alignFragments(
     from: LatexFragment[],
     to: LatexFragment[],
