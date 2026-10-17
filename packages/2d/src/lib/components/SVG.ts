@@ -33,6 +33,9 @@ import {Path, PathProps} from './Path';
 import {Rect, RectProps} from './Rect';
 import {Shape, ShapeProps} from './Shape';
 
+const DEFAULT_FONT_SIZE = 16;
+const FALLBACK_SIZE = 100;
+
 /**
  * Represent SVG shape.
  * This only used single time because `node` may have reference to parent SVG renderer.
@@ -468,31 +471,16 @@ export class SVG extends Shape {
       } as SVGDocumentData;
     }
 
-    let viewBox = new BBox();
-    let size = new Vector2();
-
-    const hasViewBox = svgRoot.hasAttribute('viewBox');
-    const hasSize =
-      svgRoot.hasAttribute('width') || svgRoot.hasAttribute('height');
-
-    if (hasViewBox) {
-      const {x, y, width, height} = svgRoot.viewBox.baseVal;
-      viewBox = new BBox(x, y, width, height);
-
-      if (!hasSize) size = viewBox.size;
-    }
-
-    if (hasSize) {
+    let viewBox = SVG.readViewBox(svgRoot);
+    let size: Vector2;
+    if (svgRoot.hasAttribute('width') || svgRoot.hasAttribute('height')) {
       size = new Vector2(
-        svgRoot.width.baseVal.value,
-        svgRoot.height.baseVal.value,
+        SVG.readLength(svgRoot, 'width'),
+        SVG.readLength(svgRoot, 'height'),
       );
-
-      if (!hasViewBox) viewBox = new BBox(0, 0, size.width, size.height);
-    }
-
-    if (!hasViewBox && !hasSize) {
-      viewBox = new BBox(svgRoot.getBBox());
+      viewBox ??= new BBox(0, 0, size.width, size.height);
+    } else {
+      viewBox ??= SVG.measureContent(svgRoot);
       size = viewBox.size;
     }
 
@@ -582,6 +570,94 @@ export class SVG extends Shape {
       SVG.parseNumberAttribute(element, 'y'),
     );
     return transformMatrix;
+  }
+
+  private static readViewBox(svg: SVGSVGElement): BBox | null {
+    if (!svg.hasAttribute('viewBox')) return null;
+    try {
+      const {x, y, width, height} = svg.viewBox.baseVal;
+      return new BBox(x, y, width, height);
+    } catch {
+      // Safari can fail to expose the parsed viewBox.
+    }
+
+    const values = (svg.getAttribute('viewBox') ?? '')
+      .trim()
+      .split(/[\s,]+/)
+      .map(value => parseFloat(value));
+    if (values.length !== 4 || !values.every(Number.isFinite)) {
+      useLogger().warn(`SVG: invalid viewBox "${svg.getAttribute('viewBox')}"`);
+      return null;
+    }
+    const [x, y, width, height] = values;
+    return new BBox(x, y, width, height);
+  }
+
+  private static readLength(
+    svg: SVGSVGElement,
+    name: 'width' | 'height',
+  ): number {
+    try {
+      return svg[name].baseVal.value;
+    } catch {
+      // Safari can fail to expose the parsed length; jsdom never does.
+    }
+
+    const match = (svg.getAttribute(name) ?? '')
+      .trim()
+      .match(/^([+-]?[\d.]+(?:e[+-]?\d+)?)(px|em|ex|pt|pc|in|cm|mm)?$/i);
+    if (!match) return 0;
+    const value = parseFloat(match[1]);
+    const fontSize =
+      parseFloat(window.getComputedStyle(svg).fontSize) || DEFAULT_FONT_SIZE;
+    switch (match[2]?.toLowerCase()) {
+      case 'em':
+        return value * fontSize;
+      case 'ex':
+        return (value * fontSize) / 2;
+      case 'pt':
+        return (value * 4) / 3;
+      case 'pc':
+        return value * 16;
+      case 'in':
+        return value * 96;
+      case 'cm':
+        return (value * 96) / 2.54;
+      case 'mm':
+        return (value * 96) / 25.4;
+      default:
+        return value;
+    }
+  }
+
+  private static measureContent(svg: SVGSVGElement): BBox {
+    try {
+      return new BBox(svg.getBBox());
+    } catch {
+      // Safari can refuse to measure an element outside the document.
+    }
+
+    const container = document.createElement('div');
+    container.style.position = 'absolute';
+    container.style.visibility = 'hidden';
+    container.style.pointerEvents = 'none';
+    const clone = svg.cloneNode(true);
+    container.appendChild(clone);
+    document.body.appendChild(container);
+    try {
+      if (clone instanceof SVGSVGElement) {
+        return new BBox(clone.getBBox());
+      }
+    } catch {
+      // Handled below.
+    } finally {
+      container.remove();
+    }
+
+    useLogger().warn(
+      'SVG: could not measure the document. Give the root element a viewBox or a width and height.',
+    );
+    return new BBox(0, 0, FALLBACK_SIZE, FALLBACK_SIZE);
   }
 
   private static parseLineCap(name: string | null): CanvasLineCap | null {
@@ -744,8 +820,8 @@ export class SVG extends Shape {
     } else if (child.tagName === 'svg' && child instanceof SVGSVGElement) {
       let nestedTransform = transformMatrix;
 
-      if (child.hasAttribute('viewBox')) {
-        const vb = child.viewBox.baseVal;
+      const vb = SVG.readViewBox(child);
+      if (vb) {
         const width = SVG.parseNumberAttribute(child, 'width') || vb.width;
         const height = SVG.parseNumberAttribute(child, 'height') || vb.height;
 

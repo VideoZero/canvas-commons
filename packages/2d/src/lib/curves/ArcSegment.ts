@@ -84,8 +84,41 @@ export class ArcSegment extends Segment {
     );
     this.length = ArcSegment.el.getTotalLength();
 
-    const bbox = new BBox(ArcSegment.el.getBBox());
+    let bbox: BBox;
+    try {
+      bbox = new BBox(ArcSegment.el.getBBox());
+    } catch {
+      // Safari can refuse to measure an element that is not rendered.
+      bbox = this.computeBBox(radius);
+    }
     this.points = [bbox.topLeft, bbox.bottomRight];
+  }
+
+  private computeBBox(radius: Vector2): BBox {
+    const sin = Math.sin(this.xAxisRotation);
+    const cos = Math.cos(this.xAxisRotation);
+    const extremes = [
+      Math.atan2(-radius.y * sin, radius.x * cos),
+      Math.atan2(radius.y * cos, radius.x * sin),
+    ].flatMap(angle => [angle, angle + Math.PI]);
+
+    const from = Math.min(this.startAngle, this.startAngle + this.deltaAngle);
+    const to = Math.max(this.startAngle, this.startAngle + this.deltaAngle);
+    const turn = Math.PI * 2;
+    const points = [this.startPoint, this.endPoint];
+    for (const extreme of extremes) {
+      let angle = extreme + Math.ceil((from - extreme) / turn) * turn;
+      for (; angle <= to; angle += turn) {
+        points.push(
+          radius
+            .mul(Vector2.fromRadians(angle))
+            .transform(this.xAxisRotationMatrix)
+            .add(this.center),
+        );
+      }
+    }
+
+    return BBox.fromPoints(...points);
   }
 
   public getAnglePosition(angle: number) {
