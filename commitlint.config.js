@@ -19,6 +19,7 @@ module.exports = {
         'deps-dev',
         'docs',
         'e2e',
+        'echarts',
         'editor',
         'examples',
         'ffmpeg',

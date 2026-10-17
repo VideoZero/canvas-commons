@@ -21,6 +21,7 @@ COPY packages/core/package.json ./packages/core/
 COPY packages/create/package.json ./packages/create/
 COPY packages/docs/package.json ./packages/docs/
 COPY packages/e2e/package.json ./packages/e2e/
+COPY packages/echarts/package.json ./packages/echarts/
 COPY packages/editor/package.json ./packages/editor/
 COPY packages/examples/package.json ./packages/examples/
 COPY packages/ffmpeg/package.json ./packages/ffmpeg/
