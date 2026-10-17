@@ -1,5 +1,5 @@
 import {DependencyContext} from '@canvas-commons/core';
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import * as Langs from './Langs';
 import {ShikiHighlighter} from './ShikiHighlighter';
 import * as Themes from './Themes';
@@ -58,6 +58,24 @@ describe('ShikiHighlighter', () => {
     const number = highlighter.highlight(code.indexOf('42'), cache);
     expect(number.color).not.toBe(keyword.color);
     expect(number.skipAhead).toBe(2);
+  });
+
+  it('tokenizes slow lines completely', async () => {
+    const highlighter = await ready(
+      new ShikiHighlighter({lang: Langs.typescript, theme: Themes.githubDark}),
+    );
+    let now = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => (now += 1000));
+    try {
+      const code = 'const answer = 42;';
+      const cache = highlighter.prepare(code);
+      expect(highlighter.highlight(code.indexOf('42'), cache).skipAhead).toBe(
+        2,
+      );
+      expect(highlighter.tokenize(code)).toContain('42');
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('tokenizes losslessly across lines', async () => {

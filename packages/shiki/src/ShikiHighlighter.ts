@@ -145,6 +145,9 @@ export class ShikiHighlighter implements CodeHighlighter<ThemedToken[]> {
     return this.highlighter.codeToTokens(code, {
       lang: this.langs[this.langs.length - 1].name,
       theme,
+      // Shiki stops tokenizing a line after 500ms by default, so slow frames
+      // would render it differently.
+      tokenizeTimeLimit: 0,
     }).tokens;
   }
 }
