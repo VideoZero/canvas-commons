@@ -154,6 +154,26 @@ describe('Mesh3D surface content', () => {
     expect(canvasCalls(canvas)).toHaveLength(fills);
   });
 
+  test('is uploaded premultiplied and un-premultiplied in the shader', () => {
+    const mesh = new Mesh3D({children: [new Rect({width: 10, height: 10})]});
+    const texture = surfaceTexture(mesh);
+    expect(texture.premultiplyAlpha).toBe(true);
+    expect(texture.colorSpace).toBe(THREE.NoColorSpace);
+
+    const shader = {
+      vertexShader: THREE.ShaderLib.standard.vertexShader,
+      fragmentShader: THREE.ShaderLib.standard.fragmentShader,
+      uniforms: {},
+    };
+    surfaceMaterial(mesh).onBeforeCompile(
+      shader as unknown as THREE.WebGLProgramParametersWithUniforms,
+      {} as THREE.WebGLRenderer,
+    );
+    expect(shader.fragmentShader).toContain(
+      'sampledDiffuseColor.rgb /= max( sampledDiffuseColor.a, 1e-4 );',
+    );
+  });
+
   test('content is not tone mapped', () => {
     const mesh = new Mesh3D({children: [new Rect({width: 10, height: 10})]});
     expect(surfaceMaterial(mesh).toneMapped).toBe(false);

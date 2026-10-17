@@ -123,3 +123,46 @@ describe('Object3D opacity', () => {
     expect(material.transparent).toBe(false);
   });
 });
+
+describe('Object3D disposal', () => {
+  test('disposes the GPU resources of an object built by `create`', () => {
+    const instanced = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshBasicMaterial(),
+      4,
+    );
+    const node = new Object3D({
+      create: three => {
+        const group = new three.Group();
+        group.add(box(three), instanced);
+        return group;
+      },
+    });
+    new Three({width: 400, height: 300, children: [node]}).sceneObject();
+    const mesh = node.raw()?.children[0] as THREE.Mesh;
+    const disposed: string[] = [];
+    mesh.geometry.addEventListener('dispose', () => disposed.push('geometry'));
+    (mesh.material as THREE.Material).addEventListener('dispose', () =>
+      disposed.push('material'),
+    );
+    instanced.addEventListener('dispose', () => disposed.push('instances'));
+
+    node.dispose();
+
+    expect(disposed).toEqual(['geometry', 'material', 'instances']);
+  });
+
+  test('leaves a supplied object to its owner', () => {
+    const shared = box(THREE);
+    const node = new Object3D({object: shared});
+    new Three({width: 400, height: 300, children: [node]}).sceneObject();
+    const disposed: string[] = [];
+    shared.geometry.addEventListener('dispose', () =>
+      disposed.push('geometry'),
+    );
+
+    node.dispose();
+
+    expect(disposed).toEqual([]);
+  });
+});
