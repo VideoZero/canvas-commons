@@ -65,10 +65,11 @@ describe('Mesh3D geometry', () => {
     expect(size.z).toBeCloseTo(0.5, 3);
   });
 
-  test('a rounded box re-derives face UVs', () => {
+  test('a rounded box re-derives face UVs and adds a surface group', () => {
     const node = new Mesh3D({geometry: 'box', radius: 30, size: 200});
     const geometry = node.mesh().geometry;
-    expect(geometry.groups).toHaveLength(6);
+    // Six faces plus the extra front-face group for surface content.
+    expect(geometry.groups).toHaveLength(7);
     const front = geometry.groups[4];
     const uv = geometry.attributes.uv.array;
     let min = Infinity;

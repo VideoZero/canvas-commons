@@ -20,6 +20,11 @@ import {toRadians} from './units';
 export interface Object3DRoot {
   three(): ThreeModule | null;
   projectObject(object: THREE.Object3D): Vector2;
+  /**
+   * Texels per pixel the root currently renders at (its on-screen scale times
+   * `quality`). Off-screen surfaces rasterize at this scale to stay crisp.
+   */
+  renderScale(): number;
 }
 
 export function isObject3DRoot(node: unknown): node is Node & Object3DRoot {
@@ -149,6 +154,25 @@ export abstract class Object3DNode extends Node {
   }
 
   /**
+   * A 3D node draws nothing on the 2D canvas, so it passes no opacity down
+   * to 2D descendants (the surface content of a {@link Mesh3D}); the
+   * material's opacity ({@link opacity3D}) and the enclosing {@link Three}
+   * node's own fade cover it. Keeping this at `1` means a fade of the mesh
+   * or the viewport does not re-rasterize the surface content every frame.
+   */
+  public override absoluteOpacity(): number {
+    return 1;
+  }
+
+  /**
+   * Whether 2D children are meaningful for this node ({@link Mesh3D} shows
+   * them on its surface). Elsewhere they are dropped with a warning.
+   */
+  protected acceptsContent(): boolean {
+    return false;
+  }
+
+  /**
    * The Three.js object, synced to the current signal values.
    *
    * @remarks
@@ -194,7 +218,7 @@ export abstract class Object3DNode extends Node {
   }
 
   private checkContent() {
-    if (this.warnedContent) {
+    if (this.warnedContent || this.acceptsContent()) {
       return;
     }
     const stray = this.children().find(
@@ -205,7 +229,7 @@ export abstract class Object3DNode extends Node {
       useLogger().warn({
         message: `${this.constructor.name}: 2D children are not rendered.`,
         remarks:
-          'Put labels next to the 3D nodes as children of the Three node and pin them with screenPosition().',
+          'Only a Mesh3D shows 2D children (on its surface). Put labels next to the 3D nodes as children of the Three node and pin them with screenPosition().',
         inspect: stray.key,
       });
     }
@@ -250,7 +274,8 @@ export abstract class Object3DNode extends Node {
 
   /**
    * 3D nodes are drawn by the enclosing {@link Three} root through Three.js,
-   * never onto the 2D canvas, so the regular render pass skips them.
+   * never onto the 2D canvas, so the regular render pass skips them (and any
+   * 2D children they use as surface content).
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   public override render(_context: CanvasRenderingContext2D) {

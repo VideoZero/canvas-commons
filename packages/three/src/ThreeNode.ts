@@ -302,7 +302,7 @@ export class Three extends Rect implements Object3DRoot {
    * @remarks
    * Multiplies the scale the node is drawn at, which already includes the
    * project's resolution scale (a 4K export at `resolutionScale: 2` renders
-   * the 3D image at twice the pixels with
+   * the 3D image, and rasterizes surface content, at twice the pixels with
    * `quality` left at `1`), a preview scale below `1`, a 2D `Camera` zoom and
    * cached ancestors.
    */
@@ -391,6 +391,16 @@ export class Three extends Rect implements Object3DRoot {
   private fogScene: THREE.Scene | null = null;
   private ownBackground: THREE.Color | null = null;
   private lastRenderError: string | null = null;
+  /**
+   * Texels per pixel of the last render (on-screen scale times
+   * {@link quality}). Updated by {@link draw}; surface content inside
+   * {@link Mesh3D} rasterizes at this scale.
+   *
+   * @internal
+   */
+  @initial(1)
+  @signal()
+  declare public readonly renderScale: SimpleSignal<number, this>;
 
   private warnedCamera = false;
   private warnedEarlyRead = false;
@@ -781,7 +791,8 @@ export class Three extends Rect implements Object3DRoot {
       const m = context.getTransform();
       const onScreen =
         Math.max(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d)) || 1;
-      // Capped so the largest edge stays within 4096 texels.
+      // Capped so the largest edge stays within 4096 texels; surfaces
+      // rasterize at the same (capped) scale, so they match the image 1:1.
       const q = Math.min(
         Math.max(0.05, this.quality() * onScreen),
         4096 / size.width,
@@ -789,6 +800,13 @@ export class Three extends Rect implements Object3DRoot {
       );
       const w = Math.max(1, Math.round(size.width * q));
       const h = Math.max(1, Math.round(size.height * q));
+      // Published before the sync so surfaces rasterize at the same scale.
+      // `zoom` magnifies the image, so surfaces need that many more texels
+      // to stay crisp (a zoom tween therefore re-rasterizes them, like a 2D
+      // Camera zoom does). The setter is a no-op when unchanged, so steady
+      // frames stay cached.
+      this.renderScale(q * Math.max(1e-3, this.zoom()));
+
       const scene = this.syncScene();
       const camera = this.syncCamera();
       // A sync that threw has already been logged; it yields no scene on its

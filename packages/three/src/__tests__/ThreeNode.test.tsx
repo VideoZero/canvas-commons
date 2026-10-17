@@ -276,12 +276,22 @@ describe('3D nodes', () => {
     expect(child.object3D().parent).toBe(parent.object3D());
   });
 
-  test('2D children of a 3D node warn once', () => {
+  test('pass no opacity down to 2D content', () => {
+    const content = new Rect({width: 10, height: 10});
+    const mesh = new Mesh3D({opacity: 0.25, children: [content]});
+    new Three({width: 200, height: 100, opacity: 0.5, children: [mesh]});
+    expect(mesh.absoluteOpacity()).toBe(1);
+    expect(content.absoluteOpacity()).toBe(1);
+    expect(mesh.opacity3D()).toBeCloseTo(0.25);
+  });
+
+  test('2D children of a node without a surface warn once', () => {
     const logs = captureLogs(SCENE);
     const group = new Group3D({children: [new Rect({})]});
     group.object3D();
     group.x(10);
     group.object3D();
+    new Mesh3D({children: [new Rect({})]}).object3D();
     expect(logs.warnings).toHaveLength(1);
     expect(logs.warnings[0].message).toContain('2D children are not rendered');
   });
