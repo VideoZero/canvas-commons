@@ -125,4 +125,13 @@ describe('media loading', () => {
     element.dispatchEvent(new Event('loadedmetadata'));
     expect(Video.unavailable).not.toContain(element.src);
   });
+
+  it('loads media anonymously so frames can be exported', () => {
+    const image = new ProbeImg({src: '/photo.png'});
+    const video = new ProbeVideo({src: '/clip.mp4'});
+    useScene2D().getView().add([image, video]);
+
+    expect(image.element().crossOrigin).toBe('anonymous');
+    expect(video.element().crossOrigin).toBe('anonymous');
+  });
 });
