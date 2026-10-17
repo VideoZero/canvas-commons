@@ -198,6 +198,12 @@ export function drawImage(
   first: BBox,
   second?: BBox,
 ): void {
+  if (
+    (image instanceof HTMLImageElement && image.naturalWidth === 0) ||
+    (image instanceof HTMLVideoElement && image.videoWidth === 0)
+  ) {
+    return;
+  }
   if (second) {
     context.drawImage(
       image,

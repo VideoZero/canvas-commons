@@ -73,11 +73,44 @@ describe('media loading', () => {
     expect(video.element()).not.toBe(failed);
   });
 
-  it('settles the wait for a video that fails to load', async () => {
+  it('plays on with an image that fails to load', async () => {
+    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined);
+    vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(
+      false,
+    );
+    const image = new ProbeImg({src: '/broken.png'});
+    useScene2D().getView().add(image);
+    image.element().dispatchEvent(new Event('error'));
+
+    expect(await settle()).toBe('resolved');
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it('plays on with a video that fails to load', async () => {
+    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined);
     const video = new ProbeVideo({src: '/broken.mp4'});
     useScene2D().getView().add(video);
     video.element().dispatchEvent(new Event('error'));
 
-    expect(await settle()).toBe('rejected');
+    expect(await settle()).toBe('resolved');
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it('draws an image that failed to load blank', () => {
+    const image = new ProbeImg({src: '/broken.png', size: 100});
+    useScene2D().getView().add(image);
+    const drawImage = vi.fn();
+    const context = new Proxy(
+      {drawImage},
+      {
+        get: (target: Record<string, unknown>, property: string) =>
+          property in target ? target[property] : () => undefined,
+        set: () => true,
+      },
+    ) as unknown as CanvasRenderingContext2D;
+
+    image.render(context);
+
+    expect(drawImage).not.toHaveBeenCalled();
   });
 });

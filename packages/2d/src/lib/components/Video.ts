@@ -1,7 +1,6 @@
 import {
   BBox,
   DependencyContext,
-  DetailedError,
   PlaybackState,
   SerializedVector2,
   SignalValue,
@@ -189,9 +188,10 @@ export class Video extends Rect {
     }
 
     if (video.readyState < 2) {
+      const logger = useLogger();
       const failed = () =>
-        new DetailedError({
-          message: `Failed to load a video`,
+        logger.warn({
+          message: `Failed to load a video, it will be drawn blank`,
           remarks: `\
 The <code>src</code> property was set to:
 <pre><code>${this.src()}</code></pre>
@@ -202,19 +202,19 @@ Make sure that source is correct and that the video exists.`,
         });
       const element = video;
       DependencyContext.collectPromise(
-        new Promise<void>((resolve, reject) => {
+        new Promise<void>(resolve => {
           if (element.error) {
-            reject(failed());
+            failed();
+            resolve();
             return;
           }
           const listener = (event: Event) => {
             element.removeEventListener('canplay', listener);
             element.removeEventListener('error', listener);
             if (event.type === 'error') {
-              reject(failed());
-            } else {
-              resolve();
+              failed();
             }
+            resolve();
           };
           element.addEventListener('canplay', listener);
           element.addEventListener('error', listener);
