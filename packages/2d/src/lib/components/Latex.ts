@@ -163,6 +163,41 @@ function isMorphable(node: Node): node is Curve {
 
 const MAX_TEX_REPAIRS = 4;
 
+function findFragmentEnd(tex: string, start: number): number {
+  let depth = 0;
+  for (let i = start; i < tex.length; i++) {
+    const char = tex[i];
+    if (char === '\\') {
+      i++;
+    } else if (char === '{') {
+      depth++;
+    } else if (char === '}' && depth > 0) {
+      depth--;
+    } else if (char === '}' && tex[i + 1] === '}') {
+      return i;
+    }
+  }
+  return -1;
+}
+
+// A regular expression cannot balance braces, so `{{\frac{a}{b}}}` would end
+// at the first `}}`.
+function splitFragments(tex: string): string[] {
+  const parts: string[] = [];
+  let cursor = 0;
+  while (cursor < tex.length) {
+    const start = tex.indexOf('{{', cursor);
+    const end = start === -1 ? -1 : findFragmentEnd(tex, start + 2);
+    if (end === -1) {
+      parts.push(tex.slice(cursor));
+      break;
+    }
+    parts.push(tex.slice(cursor, start), tex.slice(start + 2, end));
+    cursor = end + 2;
+  }
+  return parts;
+}
+
 function repairTex(tex: string, error: string): string | null {
   if (/^Missing (argument for|superscript or subscript)/.test(error)) {
     return `${tex}{\\quad}`;
@@ -238,7 +273,7 @@ export class Latex extends SVGNode {
     const array = typeof value === 'string' ? [value] : value;
     return array
       .reduce<string[]>((prev, current) => {
-        prev.push(...current.split(/{{(.*?)}}/));
+        prev.push(...splitFragments(current));
         return prev;
       }, [])
       .filter(sub => sub.trim().length > 0);
@@ -438,7 +473,7 @@ export class Latex extends SVGNode {
     return svg;
   }
 
-  private subTexToSVG(subTex: string) {
+  protected subTexToSVG(subTex: string) {
     let tex = subTex.trim();
     if (tex === '\\substack') tex = '\\quad';
 
