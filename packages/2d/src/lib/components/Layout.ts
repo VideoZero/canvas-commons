@@ -60,7 +60,7 @@ import {
   WordBreak,
 } from '../partials';
 import {buildCanvasFontString, resolveLineHeight} from '../text';
-import {drawLine, drawPivot, is} from '../utils';
+import {drawLine, drawPivot} from '../utils';
 import {
   affectedLayouts,
   invertPositions,
@@ -882,9 +882,24 @@ export class Layout extends Node {
     this.layoutLockCounter(this.layoutLockCounter() - 1);
   }
 
+  /**
+   * The nearest {@link Layout} ancestor rendered into the same view.
+   *
+   * @remarks
+   * An ancestor with a different {@link view} is a boundary: nothing above it
+   * takes part in this node's layout, so the node lays itself out as a root.
+   */
   @computed()
   protected parentTransform(): Layout | null {
-    return this.findAncestor(is(Layout));
+    const view = this.view();
+    let parent = this.parent();
+    while (parent && parent.view() === view) {
+      if (parent instanceof Layout) {
+        return parent;
+      }
+      parent = parent.parent();
+    }
+    return null;
   }
 
   @computed()
@@ -1184,14 +1199,32 @@ export class Layout extends Node {
     if (typeof value === 'number') return value;
     if (typeof value !== 'string' || !value.endsWith('%')) return undefined;
 
+    let top: Layout | null = null;
     let basis = this.parentTransform();
     while (basis && !basis.sizesPercentChildren(axis)) {
+      top = basis;
       basis = basis.parentTransform();
     }
-    if (!basis) return undefined;
-    const basisSize = basis.computedSize();
+    const basisSize = (basis ?? (top ?? this).boundaryView())?.computedSize();
+    if (!basisSize) return undefined;
     const available = axis === 'width' ? basisSize.x : basisSize.y;
     return isFinite(available) ? available : undefined;
+  }
+
+  /**
+   * The view a layout root inside a view boundary measures against: its own
+   * {@link view}, when an ancestor renders into a different one.
+   */
+  private boundaryView(): Layout | null {
+    const view = this.view();
+    let parent = this.parent();
+    while (parent) {
+      if (parent.view() !== view) {
+        return view;
+      }
+      parent = parent.parent();
+    }
+    return null;
   }
 
   private sizesPercentChildren(axis: 'width' | 'height'): boolean {
@@ -1260,13 +1293,17 @@ export class Layout extends Node {
   private participatingChildren(): Layout[] {
     const queue = [...this.children()];
     const result: Layout[] = [];
+    const view = this.view();
     while (queue.length) {
       const child = queue.shift();
+      if (!child || child.view() !== view) {
+        continue;
+      }
       if (child instanceof Layout) {
         if (child.layoutEnabled()) {
           result.push(child);
         }
-      } else if (child) {
+      } else {
         queue.unshift(...child.children());
       }
     }
