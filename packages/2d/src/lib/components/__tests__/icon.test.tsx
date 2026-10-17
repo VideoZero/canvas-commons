@@ -90,4 +90,19 @@ describe('Icon', () => {
     expect(fetch).toHaveBeenCalledOnce();
     expect(error).toHaveBeenCalledOnce();
   });
+
+  it('shows nothing for a null icon', async () => {
+    const fetch = mockFetch({});
+    const error = vi.spyOn(useLogger(), 'error');
+    // Scenes built from data can end up without an icon name.
+    const icon = new Icon({icon: null as unknown as string});
+
+    const svg = icon.svg();
+    await icon.toPromise();
+
+    expect(icon.svg()).toBe(svg);
+    expect(DependencyContext.hasPromises()).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+  });
 });
