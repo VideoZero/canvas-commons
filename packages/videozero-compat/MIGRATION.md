@@ -379,6 +379,11 @@ a layout boundary.
   credit scales relative to the view.
 - Images and videos that fail to load log a warning and draw blank instead of
   failing the scene; `Video.unavailable` lists them.
+- A failed image or video is requested and reported once per asset load.
+  VideoZero dropped it from the pool and asked again on the next frame;
+  canvas-commons asks again only after an asset change (HMR) or a new project
+  load. To retry within one load, change the view's asset hash:
+  `view.assetHash(Date.now().toString())`.
 - `Video.clampTime` returns `0` (not `NaN`) while the duration is unknown.
 
 ### Core
