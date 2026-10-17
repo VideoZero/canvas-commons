@@ -25,6 +25,7 @@ module.exports = {
         'fiddle',
         'legacy',
         'player',
+        'shiki',
         'vite-plugin',
         'webcodecs',
       ],
