@@ -20,6 +20,7 @@ export * from './Rect';
 export * from './Shape';
 export * from './Spline';
 export * from './SVG';
+export * from './Transform3D';
 export * from './Txt';
 export * from './types';
 export * from './Video';
