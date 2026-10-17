@@ -11,7 +11,7 @@
 //   are kept and a red "scene failed" card with the error is appended.
 //
 // Environment: CHROMIUM_PATH (default /opt/pw-browsers/chromium),
-//   FFMPEG (default: ffmpeg on PATH).
+//   FFMPEG (default: ffmpeg on PATH), KEEP_FRAMES=1 to keep the PNG frames.
 import {execFileSync} from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -261,6 +261,9 @@ try {
         result.logs.length
       } warnings/errors, ${((Date.now() - started) / 1000).toFixed(1)}s`,
     );
+    if (!process.env.KEEP_FRAMES) {
+      fs.rmSync(frames, {recursive: true, force: true});
+    }
   }
 } finally {
   await browser.close();

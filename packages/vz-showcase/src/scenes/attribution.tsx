@@ -1,5 +1,5 @@
-import {Img, Txt, makeScene2D} from '@canvas-commons/2d';
-import {all, createSignal, waitFor} from '@canvas-commons/core';
+import {Circle, Img, Txt, makeScene2D} from '@canvas-commons/2d';
+import {createSignal, waitFor} from '@canvas-commons/core';
 import photo from '../assets/photo.png';
 import {Colors, Mono, Sans, caption, from2d, intro} from '../shared/ui';
 
@@ -60,10 +60,19 @@ export default makeScene2D(function* (view) {
         .join(' · '),
     );
   }
-  yield* waitFor(1);
-  // Zoom into the bottom-left corner, where the credit is drawn.
-  yield* all(img.scale(2.6, 1.5), img.position([330, -200], 1.5));
-  yield* waitFor(1.5);
-  yield* all(img.scale(1, 1), img.position([0, -20], 1));
+  // Point at the bottom-left corner, where the credit is drawn.
+  const marker = (
+    <Circle
+      x={-200}
+      y={140}
+      size={150}
+      stroke={Colors.yellow}
+      lineWidth={4}
+      end={0}
+    />
+  ) as Circle;
+  view.add(marker);
+  yield* marker.end(1, 0.8);
+  yield* waitFor(3);
   yield* waitFor(0.5);
 });

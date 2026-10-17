@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Render the before/after showcase videos for the cc/* branches.
 #
-#   packages/vz-showcase/render.sh [--out DIR] [--skip-before] [--skip-all] [name ...]
+#   packages/vz-showcase/render.sh [--out DIR] [--force] [--skip-before] [--skip-all] [name ...]
 #
 # For every cc/<name> branch that has a project in src/projects (or only the
 # names given), this
@@ -12,7 +12,8 @@
 #   5. writes contact-sheet.png with one frame per branch.
 # Each ref is rendered in a temporary detached worktree (WT_ROOT/render-*)
 # that gets this package copied in, `pnpm install`, the needed packages
-# built, and is removed again afterwards.
+# built, and is removed again afterwards. Clips that already exist in <out>
+# are kept (so an interrupted run resumes) unless --force is given.
 #
 # Environment: REPO (git repository, default: the one this file lives in),
 #   WT_ROOT (default /home/user/wt), BEFORE_REF (default cc/main),
@@ -29,12 +30,14 @@ FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
 OUT="$PKG/output/showcase"
 SKIP_BEFORE=0
 SKIP_ALL=0
+FORCE=0
 NAMES=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2 ;;
     --skip-before) SKIP_BEFORE=1; shift ;;
     --skip-all) SKIP_ALL=1; shift ;;
+    --force) FORCE=1; shift ;;
     *) NAMES+=("$1"); shift ;;
   esac
 done
@@ -105,28 +108,45 @@ stitch() {
     -map '[v]' -t "$d" -r 30 -c:v libx264 -pix_fmt yuv420p -crf 21 "$OUT/$name.mp4"
 }
 
+# todo <side> <name...>: the names whose clip is missing on that side
+todo() {
+  local side="$1"
+  shift
+  for name in "$@"; do
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$OUT/$side/$name.mp4" ]; then
+      echo "$name"
+    fi
+  done
+}
+
 if [ "$SKIP_BEFORE" -eq 0 ]; then
-  dir="$WT_ROOT/render-main"
-  prepare "$BEFORE_REF" "$dir"
-  render "$dir" "$OUT/before" "${NAMES[@]}"
-  cleanup "$dir"
+  mapfile -t pending < <(todo before "${NAMES[@]}")
+  if [ ${#pending[@]} -gt 0 ]; then
+    dir="$WT_ROOT/render-main"
+    prepare "$BEFORE_REF" "$dir"
+    render "$dir" "$OUT/before" "${pending[@]}"
+    cleanup "$dir"
+  fi
 fi
 
 for name in "${NAMES[@]}"; do
-  dir="$WT_ROOT/render-$name"
-  prepare "cc/$name" "$dir"
-  render "$dir" "$OUT/after" "$name"
-  cleanup "$dir"
+  if [ -n "$(todo after "$name")" ]; then
+    dir="$WT_ROOT/render-$name"
+    prepare "cc/$name" "$dir"
+    render "$dir" "$OUT/after" "$name"
+    cleanup "$dir"
+  fi
   stitch "$name"
 done
 
-if [ "$SKIP_ALL" -eq 0 ]; then
+if [ "$SKIP_ALL" -eq 0 ] && [ -n "$(todo after all)" ]; then
   dir="$WT_ROOT/render-videozero-cc"
   prepare "$ALL_REF" "$dir"
   render "$dir" "$OUT/after" all
   cleanup "$dir"
-  cp "$OUT/after/all.mp4" "$OUT/all-videozero-cc.mp4"
 fi
+[ -f "$OUT/after/all.mp4" ] && cp "$OUT/after/all.mp4" "$OUT/all-videozero-cc.mp4"
+
 
 # Contact sheet: one frame per branch at 70% of the clip, 4 columns.
 cells=()
