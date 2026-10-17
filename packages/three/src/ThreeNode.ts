@@ -506,6 +506,7 @@ export class Three extends Rect implements Object3DRoot {
   private rig: THREE.Group | null = null;
   private perspective: THREE.PerspectiveCamera | null = null;
   private ortho: THREE.OrthographicCamera | null = null;
+  private paintPass: 'all' | 'fill' | 'stroke' = 'all';
 
   public constructor(props?: ThreeProps) {
     const {onRender, onUpdate, ...rest} = props ?? {};
@@ -868,17 +869,7 @@ export class Three extends Rect implements Object3DRoot {
       this.lineWidth() > 0 &&
       this.stroke() !== null &&
       !this.strokeFirst();
-    if (strokeLast) {
-      context.save();
-      this.applyStyle(context);
-      this.drawRipple(context);
-      if (this.fill() !== null) {
-        this.drawFill(context);
-      }
-      context.restore();
-    } else {
-      this.drawShape(context);
-    }
+    this.drawShapePass(context, strokeLast ? 'fill' : 'all');
 
     const three = this.three();
     const size = this.computedSize();
@@ -914,16 +905,47 @@ export class Three extends Rect implements Object3DRoot {
     }
 
     if (strokeLast) {
-      context.save();
-      this.applyStyle(context);
-      this.drawStroke(context);
-      context.restore();
+      this.drawShapePass(context, 'stroke');
     }
 
     if (this.clip()) {
       context.clip(this.getPath());
     }
     this.drawChildren(context);
+  }
+
+  /**
+   * Paint the shape, or only its fill or stroke, through `drawShape` so both
+   * halves are styled exactly like a plain shape.
+   */
+  private drawShapePass(
+    context: CanvasRenderingContext2D,
+    pass: 'all' | 'fill' | 'stroke',
+  ) {
+    this.paintPass = pass;
+    try {
+      this.drawShape(context);
+    } finally {
+      this.paintPass = 'all';
+    }
+  }
+
+  protected override drawRipple(context: CanvasRenderingContext2D) {
+    if (this.paintPass !== 'stroke') {
+      super.drawRipple(context);
+    }
+  }
+
+  protected override drawFill(context: CanvasRenderingContext2D) {
+    if (this.paintPass !== 'stroke') {
+      super.drawFill(context);
+    }
+  }
+
+  protected override drawStroke(context: CanvasRenderingContext2D) {
+    if (this.paintPass !== 'fill') {
+      super.drawStroke(context);
+    }
   }
 
   private renderImage(

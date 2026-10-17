@@ -1,4 +1,4 @@
-import {Rect, useScene2D} from '@canvas-commons/2d';
+import {Rect, Shape, useScene2D} from '@canvas-commons/2d';
 import {createComputed} from '@canvas-commons/core';
 import * as THREE from 'three';
 import {describe, expect, test, vi} from 'vitest';
@@ -107,6 +107,27 @@ describe('Three', () => {
     expect(paint(draw(stage))).toEqual(['fill', 'drawImage', 'stroke']);
     stage.strokeFirst(true);
     expect(paint(draw(stage))).toEqual(['stroke', 'fill', 'drawImage']);
+  });
+
+  test('paints the fill and the stroke through drawShape', () => {
+    const stage = new Three({
+      width: 200,
+      height: 100,
+      fill: '#123456',
+      stroke: '#ffffff',
+      lineWidth: 8,
+    });
+    useScene2D().getView().add(stage);
+    const shapes = vi.spyOn(
+      Shape.prototype as unknown as {drawShape(context: unknown): void},
+      'drawShape',
+    );
+    const paint = (calls: string[]) =>
+      calls.filter(call => ['fill', 'stroke', 'drawImage'].includes(call));
+
+    expect(paint(draw(stage))).toEqual(['fill', 'drawImage', 'stroke']);
+    expect(shapes).toHaveBeenCalledTimes(2);
+    shapes.mockRestore();
   });
 
   test('a translucent background keeps its colour and alpha', () => {
