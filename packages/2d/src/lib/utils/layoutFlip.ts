@@ -85,7 +85,7 @@ export function invertPositions(
 
     // World-space delta projected into the parent's local frame so it lines
     // up with translate / position, which operate in the same frame.
-    const matrix = parent.worldToLocal();
+    const matrix = node.worldToParent();
     const preLocal = preData.world.transformAsPoint(matrix);
     const postLocal = postData.world.transformAsPoint(matrix);
     const delta = preLocal.sub(postLocal);

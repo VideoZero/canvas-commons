@@ -17,6 +17,14 @@ import {Shape, ShapeProps} from './Shape';
 
 export interface CurveProps extends ShapeProps {
   /**
+   * {@inheritDoc Curve.alignChildren}
+   */
+  alignChildren?: SignalValue<boolean>;
+  /**
+   * {@inheritDoc Curve.rotateChildren}
+   */
+  rotateChildren?: SignalValue<boolean>;
+  /**
    * {@inheritDoc Curve.closed}
    */
   closed?: SignalValue<boolean>;
@@ -52,6 +60,33 @@ export interface CurveProps extends ShapeProps {
 
 @nodeName('Curve')
 export abstract class Curve extends Shape {
+  /**
+   * Whether to place the children at the midpoint of the curve.
+   *
+   * @remarks
+   * When enabled, the children are positioned relative to the point halfway
+   * along the curve, with their x-axis following its tangent. Set
+   * {@link rotateChildren} to `false` to keep them upright instead.
+   *
+   * @example
+   * ```tsx
+   * <Line points={[[-200, 0], [200, -100]]} alignChildren>
+   *   <Txt text="label" y={-30} />
+   * </Line>
+   * ```
+   */
+  @initial(false)
+  @signal()
+  declare public readonly alignChildren: SimpleSignal<boolean, this>;
+
+  /**
+   * Whether children placed by {@link alignChildren} follow the tangent of the
+   * curve.
+   */
+  @initial(true)
+  @signal()
+  declare public readonly rotateChildren: SimpleSignal<boolean, this>;
+
   /**
    * Whether the curve should be closed.
    *
@@ -378,6 +413,46 @@ export abstract class Curve extends Shape {
   @computed()
   protected override getPathData(): string {
     return profileToSVGPathData(this.profile());
+  }
+
+  /**
+   * Get the rotation that keeps a child placed by {@link alignChildren}
+   * readable.
+   *
+   * @remarks
+   * Counters the tangent at the midpoint of the curve in steps of 90 degrees,
+   * so a label turns with the curve without ever ending up upside down.
+   *
+   * @example
+   * ```tsx
+   * <Line ref={line} points={points} alignChildren>
+   *   <Txt text="label" rotation={() => line().uprightRotation()} />
+   * </Line>
+   * ```
+   */
+  @computed()
+  public uprightRotation(): number {
+    if (!this.alignChildren() || !this.rotateChildren()) {
+      return 0;
+    }
+    return -Math.round(this.midpointAngle() / 90) * 90;
+  }
+
+  private midpointAngle(): number {
+    return this.getPointAtPercentage(0.5).normal.flipped.perpendicular.degrees;
+  }
+
+  @computed()
+  protected override childrenToLocal(): DOMMatrix | null {
+    if (!this.alignChildren()) {
+      return null;
+    }
+
+    const {position} = this.getPointAtPercentage(0.5);
+    const matrix = new DOMMatrix().translateSelf(position.x, position.y);
+    return this.rotateChildren()
+      ? matrix.rotateSelf(0, 0, this.midpointAngle())
+      : matrix;
   }
 
   protected override getCacheBBox(): BBox {
