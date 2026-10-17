@@ -235,7 +235,8 @@ export class Camera extends Node {
       const t = timing(value);
       const point = curve
         .getPointAtPercentage(t)
-        .position.transformAsPoint(curve.localToWorld());
+        .position.transformAsPoint(curve.localToWorld())
+        .transformAsPoint(this.scene().worldToLocal());
 
       this.position(point);
     });
@@ -265,7 +266,8 @@ export class Camera extends Node {
       const t = 1 - timing(value);
       const point = curve
         .getPointAtPercentage(t)
-        .position.transformAsPoint(curve.localToWorld());
+        .position.transformAsPoint(curve.localToWorld())
+        .transformAsPoint(this.scene().worldToLocal());
 
       this.position(point);
     });
@@ -295,7 +297,9 @@ export class Camera extends Node {
     yield* tween(duration, value => {
       const t = timing(value);
       const {position, normal} = curve.getPointAtPercentage(t);
-      const point = position.transformAsPoint(curve.localToWorld());
+      const point = position
+        .transformAsPoint(curve.localToWorld())
+        .transformAsPoint(this.scene().worldToLocal());
       const angle = normal.flipped.perpendicular.degrees;
 
       this.position(point);
@@ -327,7 +331,9 @@ export class Camera extends Node {
     yield* tween(duration, value => {
       const t = 1 - timing(value);
       const {position, normal} = curve.getPointAtPercentage(t);
-      const point = position.transformAsPoint(curve.localToWorld());
+      const point = position
+        .transformAsPoint(curve.localToWorld())
+        .transformAsPoint(this.scene().worldToLocal());
       const angle = normal.flipped.perpendicular.degrees;
 
       this.position(point);
@@ -378,7 +384,13 @@ export class Camera extends Node {
   }
 
   protected override drawChildren(context: CanvasRenderingContext2D) {
-    this.scene().render(context);
+    const scene = this.scene();
+    // Cameras can share a scene, and its cached nodes must be rasterized in
+    // the space of the camera currently drawing it.
+    if (scene.parent() !== this) {
+      scene.parent(this);
+    }
+    scene.render(context);
   }
 
   // eslint-disable-next-line @typescript-eslint/naming-convention
