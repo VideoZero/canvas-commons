@@ -71,4 +71,24 @@ describe('Txt.split (geometry)', () => {
     expect(piece.textWrap()).toBe(false);
     expect(piece.size.x()).toBeCloseTo(2 * charWidth, 5);
   });
+
+  it('splits into one piece per line, without the spaces around it', () => {
+    const txt = (
+      <Txt fontSize={10} lineHeight={20} width={65}>
+        aaa bbb ccc
+      </Txt>
+    ) as Txt;
+    const pieces = txt.splitPieces('line');
+    expect(pieces.map(piece => piece.node.text())).toEqual([
+      'aaa',
+      'bbb',
+      'ccc',
+    ]);
+    expect(pieces.map(piece => piece.unit.lineIndex)).toEqual([0, 1, 2]);
+    expect(txt.split('line').map(piece => piece.text())).toEqual([
+      'aaa',
+      'bbb',
+      'ccc',
+    ]);
+  });
 });

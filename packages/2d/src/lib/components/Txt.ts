@@ -257,6 +257,21 @@ export type TextUnit = {
   indexInLine: number;
 };
 
+/**
+ * How {@link Txt.split} cuts text into pieces: a Unicode segmentation
+ * granularity, or `'line'` for one piece per laid-out line.
+ */
+export type TxtSplitGranularity = SegmentGranularity | 'line';
+
+/**
+ * A piece returned by {@link Txt.splitPieces}: the standalone node and the
+ * unit of the source it reproduces.
+ */
+export type TxtSplitPiece = {
+  node: Txt;
+  unit: TextUnit;
+};
+
 /** The endpoint layouts a stabilized text tween reads every frame. */
 type TextTweenPlan = {
   from: LineBreakOffset[] | null;
@@ -3046,7 +3061,7 @@ export class Txt extends Shape {
 
   /** Walk every line, pairing segmented units with the paints on them. */
   private walkUnits(
-    granularity: SegmentGranularity,
+    granularity: TxtSplitGranularity,
     keepPunctuation: boolean,
   ): PlacedUnit[] {
     const root = this.rootTxt();
@@ -3091,7 +3106,11 @@ export class Txt extends Shape {
       }
 
       const pending: {unit: PlacedUnit; lastPiece: number}[] = [];
-      for (const seg of segment(logical, granularity)) {
+      const segments =
+        granularity === 'line'
+          ? Txt.lineSegment(logical)
+          : segment(logical, granularity);
+      for (const seg of segments) {
         if (seg.segment.length === 0) continue;
         if (granularity === 'word' && !seg.isWordLike) {
           // keepPunctuation keeps units like '.'; split() needs them so no
@@ -3287,21 +3306,53 @@ export class Txt extends Shape {
    * label().opacity(0);
    * ```
    *
+   * `splitText` does the mounting and the cleanup for you.
+   *
    * Returns an empty array in headless environments without a 2D canvas (e.g.
    * jsdom). Caveats: grapheme splitting breaks ligature shaping; `'sentence'`
    * on justified lines is sub-pixel-approximate; per-node `filters`, `shadow*`,
    * and `cache` on the source are not transferred.
    *
-   * @param granularity - `'grapheme'` (default), `'word'`, or `'sentence'`.
+   * @param granularity - `'grapheme'` (default), `'word'`, `'sentence'`, or
+   *                      `'line'`. A hyphen a line break inserts is a piece
+   *                      of its own.
    */
-  public split(granularity: SegmentGranularity = 'grapheme'): Txt[] {
+  public split(granularity: TxtSplitGranularity = 'grapheme'): Txt[] {
+    return this.splitPieces(granularity).map(piece => piece.node);
+  }
+
+  /**
+   * Like {@link split}, but pair each piece with the unit it reproduces, so
+   * the pieces can be grouped by line or ordered by position.
+   *
+   * @example
+   * ```ts
+   * const firstLine = label()
+   *   .splitPieces('word')
+   *   .filter(piece => piece.unit.lineIndex === 0)
+   *   .map(piece => piece.node);
+   * ```
+   *
+   * @param granularity - How to cut the text, see {@link split}.
+   */
+  public splitPieces(
+    granularity: TxtSplitGranularity = 'grapheme',
+  ): TxtSplitPiece[] {
     const root = this.unitsRoot();
     if (root.pathProfile() || root.positionedLines().length === 0) {
       return [];
     }
-    return this.walkUnits(granularity, true).map(entry =>
-      this.createPiece(entry),
-    );
+    return this.walkUnits(granularity, true).map(entry => ({
+      node: this.createPiece(entry),
+      unit: entry.unit,
+    }));
+  }
+
+  /** The whole line, without the whitespace around it, as one segment. */
+  private static lineSegment(text: string) {
+    const index = text.search(/\S/);
+    if (index < 0) return [];
+    return [{segment: text.trimEnd().slice(index), index, isWordLike: true}];
   }
 
   /** Everything a split piece needs of one owner's paint and typeface. */
