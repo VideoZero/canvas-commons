@@ -1,0 +1,324 @@
+import {colorSignal, initial, nodeName, signal} from '@canvas-commons/2d';
+import {
+  ColorSignal,
+  PossibleColor,
+  SignalValue,
+  SimpleSignal,
+} from '@canvas-commons/core';
+import type * as THREE from 'three';
+import {Object3DNode, Object3DNodeProps} from './Object3DNode';
+import {applyColor} from './color';
+import {ThreeModule} from './loader';
+import {PIXELS_PER_UNIT, PossibleVector3, toRadians} from './units';
+
+/**
+ * Light types.
+ *
+ * - `ambient`: uniform fill from everywhere; no shading, no shadows.
+ * - `hemisphere`: sky colour from above blending to `groundColor` below —
+ *   the cheapest "looks lit" fill.
+ * - `directional`: parallel rays like the sun, from the light's position
+ *   toward {@link Light3D.target}. Casts crisp shadows.
+ * - `point`: a bulb radiating in all directions from its position.
+ * - `spot`: a cone from the position toward {@link Light3D.target}.
+ */
+export type Light3DKind =
+  'ambient' | 'hemisphere' | 'directional' | 'point' | 'spot';
+
+export interface Light3DProps extends Object3DNodeProps {
+  /**
+   * {@inheritDoc Light3D.kind}
+   */
+  kind?: SignalValue<Light3DKind>;
+  /**
+   * {@inheritDoc Light3D.color}
+   */
+  color?: SignalValue<PossibleColor>;
+  /**
+   * {@inheritDoc Light3D.intensity}
+   */
+  intensity?: SignalValue<number>;
+  /**
+   * {@inheritDoc Light3D.groundColor}
+   */
+  groundColor?: SignalValue<PossibleColor>;
+  /**
+   * {@inheritDoc Light3D.target}
+   */
+  target?: SignalValue<PossibleVector3>;
+  /**
+   * {@inheritDoc Light3D.angle}
+   */
+  angle?: SignalValue<number>;
+  /**
+   * {@inheritDoc Light3D.penumbra}
+   */
+  penumbra?: SignalValue<number>;
+  /**
+   * {@inheritDoc Light3D.decay}
+   */
+  decay?: SignalValue<number>;
+  /**
+   * {@inheritDoc Light3D.castShadow}
+   */
+  castShadow?: SignalValue<boolean>;
+  /**
+   * {@inheritDoc Light3D.shadowArea}
+   */
+  shadowArea?: SignalValue<number>;
+  /**
+   * {@inheritDoc Light3D.shadowRadius}
+   */
+  shadowRadius?: SignalValue<number>;
+  /**
+   * {@inheritDoc Light3D.shadowFar}
+   */
+  shadowFar?: SignalValue<number | null>;
+}
+
+/**
+ * A light source inside a {@link Three} scene.
+ *
+ * @remarks
+ * Position it like any 3D node (pixels; `z` toward the camera). A scene with
+ * no lights gets a neutral default rig from {@link Three}, so add lights only
+ * when you want to art-direct them.
+ *
+ * @example
+ * ```tsx
+ * <Three width={800} height={600} shadows>
+ *   <Light3D kind="hemisphere" intensity={0.6} />
+ *   <Light3D kind="directional" position={[-300, -500]} z={600} intensity={2} castShadow />
+ *   <Mesh3D geometry="sphere" size={200} color="#f43f5e" />
+ *   <Mesh3D geometry="plane" size={[1200, 1200]} rotationX={90} y={120} color="#1f2937" />
+ * </Three>
+ * ```
+ */
+@nodeName('Light3D')
+export class Light3D extends Object3DNode {
+  /**
+   * The type of light.
+   */
+  @initial('directional')
+  @signal()
+  declare public readonly kind: SimpleSignal<Light3DKind, this>;
+
+  /**
+   * Light colour. Alpha multiplies {@link intensity}.
+   */
+  @initial('#ffffff')
+  @colorSignal()
+  declare public readonly color: ColorSignal<this>;
+
+  /**
+   * Brightness. `1` is a sensible default for every kind; sunlight-strength
+   * directionals sit around `2`–`3`.
+   */
+  @initial(1)
+  @signal()
+  declare public readonly intensity: SimpleSignal<number, this>;
+
+  /**
+   * `hemisphere` only: the colour bounced up from below. Alpha scales how
+   * much of it reaches the objects (`transparent` means no ground light).
+   */
+  @initial('#444444')
+  @colorSignal()
+  declare public readonly groundColor: ColorSignal<this>;
+
+  /**
+   * `directional` / `spot` only: the point (in pixels) the light aims at.
+   */
+  @initial([0, 0, 0])
+  @signal()
+  declare public readonly target: SimpleSignal<PossibleVector3, this>;
+
+  /**
+   * `spot` only: cone half-angle in degrees.
+   */
+  @initial(30)
+  @signal()
+  declare public readonly angle: SimpleSignal<number, this>;
+
+  /**
+   * `spot` only: softness of the cone edge, 0–1.
+   */
+  @initial(0.3)
+  @signal()
+  declare public readonly penumbra: SimpleSignal<number, this>;
+
+  /**
+   * `point` / `spot` only: distance falloff. `0` (default) means none, so
+   * intensity reads the same wherever the light sits; `2` is physically
+   * correct inverse-square falloff (then raise intensity a lot).
+   */
+  @initial(0)
+  @signal()
+  declare public readonly decay: SimpleSignal<number, this>;
+
+  /**
+   * Whether this light casts shadows. Also needs `shadows` on the
+   * {@link Three} node.
+   */
+  @initial(false)
+  @signal()
+  declare public readonly castShadow: SimpleSignal<boolean, this>;
+
+  /**
+   * `directional` only: side length in pixels of the square area around the
+   * target that receives shadows.
+   */
+  @initial(2400)
+  @signal()
+  declare public readonly shadowArea: SimpleSignal<number, this>;
+
+  /**
+   * Shadow softness: blur radius in shadow-map texels. `1` (default) is
+   * Three's crisp default. Takes effect with the {@link Three} node's
+   * `shadowType` set to `vsm` (try `8`–`16` for a soft studio contact
+   * shadow) and, on Three.js r180 and later, with `pcf` as well — though
+   * `pcf` samples only five points, so a large radius there looks grainy.
+   */
+  @initial(1)
+  @signal()
+  declare public readonly shadowRadius: SimpleSignal<number, this>;
+
+  /**
+   * `directional` only: how far from the light, in pixels, shadow casters
+   * are still captured. `null` (default) reaches 20000 px. A range that
+   * just covers the stage (the light's distance to its target plus about
+   * half the {@link shadowArea}) spends the shadow map's depth precision
+   * where it matters, which keeps soft `vsm` shadows free of light bleeding.
+   * Anything beyond it casts no shadow.
+   */
+  @initial(null)
+  @signal()
+  declare public readonly shadowFar: SimpleSignal<number | null, this>;
+
+  private light: THREE.Light | null = null;
+  private lightKind: Light3DKind | null = null;
+
+  public constructor(props?: Light3DProps) {
+    super(props ?? {});
+  }
+
+  protected override createObject(three: ThreeModule): THREE.Object3D {
+    // A holder group keeps the node's object stable while the light inside
+    // is swapped when `kind` changes.
+    return new three.Group();
+  }
+
+  protected override updateObject(three: ThreeModule, object: THREE.Object3D) {
+    const kind = this.kind();
+    if (!this.light || this.lightKind !== kind) {
+      if (this.light) {
+        object.remove(this.light);
+        targetOf(this.light)?.removeFromParent();
+        this.light.dispose();
+      }
+      this.light = createLight(three, kind);
+      this.lightKind = kind;
+      object.add(this.light);
+    }
+
+    const light = this.light;
+    const alpha = applyColor(three, light.color, this.color());
+    light.intensity = this.intensity() * alpha * this.opacity3D();
+
+    if (light instanceof three.HemisphereLight) {
+      // One intensity drives both colours, so the ground alpha darkens the
+      // ground colour instead.
+      const ground = applyColor(three, light.groundColor, this.groundColor());
+      light.groundColor.multiplyScalar(ground);
+    }
+
+    if (
+      light instanceof three.DirectionalLight ||
+      light instanceof three.SpotLight
+    ) {
+      // `target` is given in the same space as the node's `position` (its
+      // parent's, in pixels). The target object lives inside the holder so
+      // it follows a transformed parent; express the point in holder space.
+      if (light.target.parent !== object) {
+        object.add(light.target);
+      }
+      const [tx, ty, tz] = this.target();
+      object.updateMatrix();
+      light.target.position
+        .set(tx, -ty, tz)
+        .applyMatrix4(object.matrix.clone().invert());
+      light.castShadow = this.castShadow();
+      light.shadow.mapSize.set(2048, 2048);
+      light.shadow.bias = -0.0005;
+      light.shadow.normalBias = 0.02;
+      applyShadowRadius(light.shadow, this.shadowRadius());
+    }
+
+    if (light instanceof three.DirectionalLight) {
+      const half = this.shadowArea() / 2 / PIXELS_PER_UNIT;
+      const cam = light.shadow.camera;
+      cam.left = -half;
+      cam.right = half;
+      cam.top = half;
+      cam.bottom = -half;
+      cam.near = 0.1;
+      const far = this.shadowFar();
+      cam.far = far === null ? 200 : Math.max(1, far / PIXELS_PER_UNIT);
+      cam.updateProjectionMatrix();
+    }
+
+    if (light instanceof three.SpotLight) {
+      light.angle = toRadians(this.angle());
+      light.penumbra = this.penumbra();
+      light.decay = this.decay();
+      light.distance = 0;
+    }
+
+    if (light instanceof three.PointLight) {
+      light.decay = this.decay();
+      light.distance = 0;
+      light.castShadow = this.castShadow();
+      light.shadow.mapSize.set(1024, 1024);
+      light.shadow.bias = -0.0005;
+      applyShadowRadius(light.shadow, this.shadowRadius());
+    }
+  }
+
+  public override dispose() {
+    if (this.light) {
+      targetOf(this.light)?.removeFromParent();
+      this.light.dispose();
+      this.light = null;
+    }
+    super.dispose();
+  }
+}
+
+/**
+ * Set the blur radius, with enough VSM blur taps to cover it smoothly (the
+ * tap count is a shader define, so it only grows in a few steps).
+ */
+function applyShadowRadius(shadow: THREE.LightShadow, radius: number) {
+  const r = Math.max(0, radius);
+  shadow.radius = r;
+  shadow.blurSamples = r > 8 ? 16 : 8;
+}
+
+function targetOf(light: THREE.Light): THREE.Object3D | null {
+  return (light as THREE.DirectionalLight).target ?? null;
+}
+
+function createLight(three: ThreeModule, kind: Light3DKind): THREE.Light {
+  switch (kind) {
+    case 'ambient':
+      return new three.AmbientLight();
+    case 'hemisphere':
+      return new three.HemisphereLight();
+    case 'directional':
+      return new three.DirectionalLight();
+    case 'point':
+      return new three.PointLight();
+    case 'spot':
+      return new three.SpotLight();
+  }
+}

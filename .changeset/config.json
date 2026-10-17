@@ -19,7 +19,8 @@
       "@canvas-commons/shiki",
       "@canvas-commons/echarts",
       "@canvas-commons/rig",
-      "@canvas-commons/d3-geo"
+      "@canvas-commons/d3-geo",
+      "@canvas-commons/three"
     ]
   ],
   "linked": [],

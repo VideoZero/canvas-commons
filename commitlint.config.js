@@ -29,6 +29,7 @@ module.exports = {
         'player',
         'shiki',
         'rig',
+        'three',
         'vite-plugin',
         'webcodecs',
       ],

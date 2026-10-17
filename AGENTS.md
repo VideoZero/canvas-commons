@@ -27,6 +27,7 @@ This is a `pnpm` monorepo containing the following packages:
 - `player` - Custom element for displaying animations in a browser
 - `rig` - 2D rigging, inverse kinematics, and character animation
 - `template` - Template project included for developer's convenience
+- `three` - Three.js 3D scenes as nodes
 - `vite-plugin` - Vite plugin for developing and bundling animations
 
 ## Key Commands
@@ -148,6 +149,7 @@ Available scopes are:
 - `player`
 - `shiki`
 - `rig`
+- `three`
 - `vite-plugin`
 
 Commit subjects should be in the imperative mood, and should be no more than 50
