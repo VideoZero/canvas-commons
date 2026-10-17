@@ -357,6 +357,11 @@ export class Video extends Rect {
 
   public clampTime(time: number): number {
     const duration = this.video().duration;
+    // The duration is NaN until the metadata loads, and assigning a
+    // non-finite time to the video throws.
+    if (!isFinite(duration) || duration <= 0 || !isFinite(time)) {
+      return 0;
+    }
     if (this.loop()) {
       time %= duration;
     }
