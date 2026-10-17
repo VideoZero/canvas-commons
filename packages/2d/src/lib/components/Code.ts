@@ -34,6 +34,7 @@ import {
 } from '../code';
 import {computed, initial, nodeName, parser, signal} from '../decorators';
 import {DesiredLength} from '../partials';
+import {fontsVersion, requestFontLoad} from '../utils/fonts';
 import {sharedMeasurementContext} from '../utils/measurement';
 import {Shape, ShapeProps} from './Shape';
 
@@ -526,7 +527,11 @@ export class Code extends Shape {
 
   protected override applyText(context: CanvasRenderingContext2D) {
     super.applyText(context);
-    context.font = this.canvasFont();
+    const font = this.canvasFont();
+    requestFontLoad(font);
+    // A finished web font load changes what the code measures.
+    fontsVersion();
+    context.font = font;
     context.textBaseline = 'top';
     if ('letterSpacing' in context) {
       context.letterSpacing = `${this.letterSpacing()}px`;

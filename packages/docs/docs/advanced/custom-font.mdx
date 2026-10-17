@@ -61,6 +61,25 @@ const txt = new Txt({fontFamily: 'Fira Code', text: 'Fira Code'});
 </TabItem>
 </Tabs>
 
+## Loading fonts on demand
+
+Instead of declaring every font up front, you can set a font resolver in
+`project.ts`. Whenever text uses a family that no stylesheet declares, the
+resolver is asked to declare it in the weight and style the text uses, and the
+scene waits for the face before drawing. `googleFontsResolver` declares faces
+from Google Fonts:
+
+```ts
+import {googleFontsResolver, setFontResolver} from '@canvas-commons/2d';
+
+setFontResolver(googleFontsResolver({families: ['Fira Code', 'Fraunces']}));
+```
+
+Leave out `families` to ask Google Fonts for every undeclared family, and pass
+`baseUrl` to request the stylesheets through a proxy. A resolver can also be any
+function that declares the face itself, for example by adding a `FontFace` to
+`document.fonts`, and returns a promise the scene waits for.
+
 ## Loading fonts from local
 
 For local fonts, make a directory `fonts` and put your font inside it.
