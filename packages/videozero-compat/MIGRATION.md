@@ -99,23 +99,24 @@ export default makeScene2D(function* (view) {
 `applyVideoZeroDefaults()` returns a function restoring the previous values
 (useful in tests). Importing the package never changes a default.
 
-| VideoZero default                                                   | Canvas Commons default            | Covered by                                                                                                                                                               |
-| ------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Txt.defaultTextCenter = 'cap'`                                     | `'line'`                          | `applyVideoZeroDefaults()`                                                                                                                                               |
-| `strokeFirst` `true` on shapes (VideoZero's renderer)               | `false`                           | `applyVideoZeroDefaults()` (sets the `strokeFirst` metadata default of `Shape`, so every shape, `Txt` included)                                                          |
-| `lineJoin: 'round'` on `Txt`                                        | `'miter'`                         | `applyVideoZeroDefaults()` for **`AnimTxt` only** (`AnimTxt.defaultLineJoin`). A plain `Txt` stays `'miter'`: use `AnimTxt` or pass `lineJoin="round"`                   |
-| Tight line height warning on (`Layout.warnTightLineHeight`)         | off (`Txt.warnTightLineHeight`)   | `applyVideoZeroDefaults()` sets `Txt.warnTightLineHeight = true`                                                                                                         |
-| Visible-before-entrance warning on (validation runs)                | off                               | `applyVideoZeroDefaults()` sets `Node.warnVisibleBeforeEntrance = true`                                                                                                  |
-| Attribution query parameter `vz_attribution`                        | `attribution`                     | `applyVideoZeroDefaults()` (`configureAttribution({queryParam: 'vz_attribution'})`)                                                                                      |
-| Attribution font: rounded stack (`ui-rounded, "SF Pro Rounded", …`) | `sans-serif`                      | `applyVideoZeroDefaults()`                                                                                                                                               |
-| Default font `Inter, system-ui, sans-serif`                         | `Roboto`                          | `applyVideoZeroViewDefaults(view)` sets `fontFamily` on the view, which every node inherits. Nodes with `layout={false}` don't inherit: set it on them                   |
-| `Latex` fragment box padding `8` (`getFragmentBBox(id)` etc.)       | `0`                               | **not covered** (a parameter default). Pass it: `latex.getFragmentBBox(id, 8)`, `getLocalFragmentBBox(id, 8)`, `getAbsoluteFragmentBBox(id, 8)`                          |
-| `Txt.defaultSmooth = true` (sub-pixel smoothing)                    | no smoothing switch               | not needed: Canvas Commons doesn't round text positions. `AnimTxt.smooth`/`enableSmooth()`/`disableSmooth()` exist but do nothing                                        |
-| Numeric `lineHeight <= 4` is a multiplier (`1.2` → `120%`)          | numbers are pixels                | **not covered**. Write `lineHeight="120%"` (or pixels). `Txt.warnTightLineHeight` reports the forgotten ones                                                             |
-| Literal `\n` (backslash, n) in text is a line break                 | drawn as `\n`                     | **not covered**. Use a real newline: `text={'a\nb'}` or a template literal                                                                                               |
-| `Txt.fonts` / `fontRegistry` alias map (`fontFamily="warmPlayful"`) | gone                              | **not covered**. Keep a map in your code and resolve it: `fontFamily={Fonts.warmPlayful}`. For loading undeclared web fonts use `setFontResolver(googleFontsResolver())` |
-| `textWrap` default `false`                                          | `true` (width-bounded text wraps) | **not covered**. Pass `textWrap={false}` where text must not wrap                                                                                                        |
-| `roundPx` utility                                                   | gone                              | `const roundPx = (n: number) => Math.round(n * 2) / 2;`                                                                                                                  |
+| VideoZero default                                                     | Canvas Commons default               | Covered by                                                                                                                                                               |
+| --------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Txt.defaultTextCenter = 'cap'`                                       | `'line'`                             | `applyVideoZeroDefaults()`                                                                                                                                               |
+| Letter-spaced text centred on its ink (trailing spacing split evenly) | ink starts at the aligned edge (CSS) | `applyVideoZeroDefaults()` sets `Txt.defaultCenterLetterSpacing = true`                                                                                                  |
+| `strokeFirst` `true` on shapes (VideoZero's renderer)                 | `false`                              | `applyVideoZeroDefaults()` (sets the `strokeFirst` metadata default of `Shape`, so every shape, `Txt` included)                                                          |
+| `lineJoin: 'round'` on `Txt`                                          | `'miter'`                            | `applyVideoZeroDefaults()` for **`AnimTxt` only** (`AnimTxt.defaultLineJoin`). A plain `Txt` stays `'miter'`: use `AnimTxt` or pass `lineJoin="round"`                   |
+| Tight line height warning on (`Layout.warnTightLineHeight`)           | off (`Txt.warnTightLineHeight`)      | `applyVideoZeroDefaults()` sets `Txt.warnTightLineHeight = true`                                                                                                         |
+| Visible-before-entrance warning on (validation runs)                  | off                                  | `applyVideoZeroDefaults()` sets `Node.warnVisibleBeforeEntrance = true`                                                                                                  |
+| Attribution query parameter `vz_attribution`                          | `attribution`                        | `applyVideoZeroDefaults()` (`configureAttribution({queryParam: 'vz_attribution'})`)                                                                                      |
+| Attribution font: rounded stack (`ui-rounded, "SF Pro Rounded", …`)   | `sans-serif`                         | `applyVideoZeroDefaults()`                                                                                                                                               |
+| Default font `Inter, system-ui, sans-serif`                           | `Roboto`                             | `applyVideoZeroViewDefaults(view)` sets `fontFamily` on the view, which every node inherits. Nodes with `layout={false}` don't inherit: set it on them                   |
+| `Latex` fragment box padding `8` (`getFragmentBBox(id)` etc.)         | `0`                                  | **not covered** (a parameter default). Pass it: `latex.getFragmentBBox(id, 8)`, `getLocalFragmentBBox(id, 8)`, `getAbsoluteFragmentBBox(id, 8)`                          |
+| `Txt.defaultSmooth = true` (sub-pixel smoothing)                      | no smoothing switch                  | not needed: Canvas Commons doesn't round text positions. `AnimTxt.smooth`/`enableSmooth()`/`disableSmooth()` exist but do nothing                                        |
+| Numeric `lineHeight <= 4` is a multiplier (`1.2` → `120%`)            | numbers are pixels                   | **not covered**. Write `lineHeight="120%"` (or pixels). `Txt.warnTightLineHeight` reports the forgotten ones                                                             |
+| Literal `\n` (backslash, n) in text is a line break                   | drawn as `\n`                        | **not covered**. Use a real newline: `text={'a\nb'}` or a template literal                                                                                               |
+| `Txt.fonts` / `fontRegistry` alias map (`fontFamily="warmPlayful"`)   | gone                                 | **not covered**. Keep a map in your code and resolve it: `fontFamily={Fonts.warmPlayful}`. For loading undeclared web fonts use `setFontResolver(googleFontsResolver())` |
+| `textWrap` default `false`                                            | `true` (width-bounded text wraps)    | **not covered**. Pass `textWrap={false}` where text must not wrap                                                                                                        |
+| `roundPx` utility                                                     | gone                                 | `const roundPx = (n: number) => Math.round(n * 2) / 2;`                                                                                                                  |
 
 ## 3. Text animations: `AnimTxt`
 
@@ -333,6 +334,11 @@ where the port differs from the fork.
 - `Txt.fonts`, `fontRegistry`, `resolveFontFamily` are gone (section 2).
 - `textWrap: 'balance'` is available as in VideoZero.
 - `Code` waits for its web font before drawing.
+- `alignItems="baseline"` does **not** align text baselines: Yoga has no
+  baseline callback, so a `Txt`'s baseline is its bottom edge. VideoZero (DOM
+  layout) aligned real baselines, e.g. a large "42" next to a small "%". Align
+  such pairs by hand (e.g. `alignItems="end"` plus a `marginBottom` equal to the
+  descent difference) or put them in one `Txt` with nested runs.
 
 ### 2d: layout
 

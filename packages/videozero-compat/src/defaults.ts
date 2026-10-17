@@ -35,6 +35,7 @@ export const VideoZeroAttributionParam = 'vz_attribution';
  * @remarks
  * Sets:
  * - `Txt.defaultTextCenter` to `'cap'`,
+ * - `Txt.defaultCenterLetterSpacing` to `true`,
  * - `Txt.warnTightLineHeight` and `Node.warnVisibleBeforeEntrance` to `true`,
  * - the default `strokeFirst` of every shape to `true`,
  * - `AnimTxt.defaultLineJoin` to `'round'` (plain `Txt` keeps `'miter'`),
@@ -61,6 +62,7 @@ export function applyVideoZeroDefaults(): () => void {
   const strokeFirst = getPropertyMeta<boolean>(Shape.prototype, 'strokeFirst');
   const previous = {
     textCenter: Txt.defaultTextCenter,
+    centerLetterSpacing: Txt.defaultCenterLetterSpacing,
     tightLineHeight: Txt.warnTightLineHeight,
     visibleBeforeEntrance: Node.warnVisibleBeforeEntrance,
     strokeFirst: strokeFirst?.default,
@@ -70,6 +72,7 @@ export function applyVideoZeroDefaults(): () => void {
   };
 
   Txt.defaultTextCenter = 'cap' satisfies TextCenter;
+  Txt.defaultCenterLetterSpacing = true;
   Txt.warnTightLineHeight = true;
   Node.warnVisibleBeforeEntrance = true;
   if (strokeFirst) strokeFirst.default = true;
@@ -81,6 +84,7 @@ export function applyVideoZeroDefaults(): () => void {
 
   return () => {
     Txt.defaultTextCenter = previous.textCenter;
+    Txt.defaultCenterLetterSpacing = previous.centerLetterSpacing;
     Txt.warnTightLineHeight = previous.tightLineHeight;
     Node.warnVisibleBeforeEntrance = previous.visibleBeforeEntrance;
     if (strokeFirst) strokeFirst.default = previous.strokeFirst;

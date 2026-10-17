@@ -20,6 +20,7 @@ describe('applyVideoZeroDefaults', () => {
 
   it('changes nothing until it is called', () => {
     expect(Txt.defaultTextCenter).toBe('line');
+    expect(Txt.defaultCenterLetterSpacing).toBe(false);
     expect(Txt.warnTightLineHeight).toBe(false);
     expect(Node.warnVisibleBeforeEntrance).toBe(false);
     expect(AnimTxt.defaultLineJoin).toBeNull();
@@ -30,6 +31,7 @@ describe('applyVideoZeroDefaults', () => {
   it('applies the VideoZero defaults and restores the previous ones', () => {
     restore = applyVideoZeroDefaults();
     expect(Txt.defaultTextCenter).toBe('cap');
+    expect(Txt.defaultCenterLetterSpacing).toBe(true);
     expect(Txt.warnTightLineHeight).toBe(true);
     expect(Node.warnVisibleBeforeEntrance).toBe(true);
     expect(AnimTxt.defaultLineJoin).toBe('round');
@@ -46,6 +48,7 @@ describe('applyVideoZeroDefaults', () => {
     restore();
     restore = null;
     expect(Txt.defaultTextCenter).toBe('line');
+    expect(Txt.defaultCenterLetterSpacing).toBe(false);
     expect(Txt.warnTightLineHeight).toBe(false);
     expect(Node.warnVisibleBeforeEntrance).toBe(false);
     expect(AnimTxt.defaultLineJoin).toBeNull();
