@@ -25,6 +25,7 @@ module.exports = {
         'fiddle',
         'legacy',
         'player',
+        'rig',
         'vite-plugin',
         'webcodecs',
       ],

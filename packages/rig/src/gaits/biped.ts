@@ -1,0 +1,119 @@
+import type {SkeletonTemplate} from '../skeleton/types';
+
+/**
+ * A humanoid skeleton: pelvis root, spine, head, two arms, and two legs.
+ *
+ * @example
+ * ```ts
+ * const rig = new Rig(parseCharacterSvg(heroSvg), BIPED);
+ * ```
+ */
+export const BIPED: SkeletonTemplate = {
+  id: 'biped',
+  root: 'root',
+  parents: {
+    root: null,
+    neck: 'root',
+    headCenter: 'neck',
+    leftShoulder: 'neck',
+    leftElbow: 'leftShoulder',
+    leftWrist: 'leftElbow',
+    rightShoulder: 'neck',
+    rightElbow: 'rightShoulder',
+    rightWrist: 'rightElbow',
+    leftHip: 'root',
+    leftKnee: 'leftHip',
+    leftAnkle: 'leftKnee',
+    leftToe: 'leftAnkle',
+    rightHip: 'root',
+    rightKnee: 'rightHip',
+    rightAnkle: 'rightKnee',
+    rightToe: 'rightAnkle',
+  },
+  bones: [
+    {name: 'spine', pivot: 'root', end: 'neck', kind: 'line', width: 8},
+    {
+      name: 'head',
+      pivot: 'neck',
+      end: 'headCenter',
+      kind: 'circle',
+      radius: 26,
+    },
+    {
+      name: 'leftUpperArm',
+      pivot: 'leftShoulder',
+      end: 'leftElbow',
+      kind: 'line',
+      width: 7,
+    },
+    {
+      name: 'leftForearm',
+      pivot: 'leftElbow',
+      end: 'leftWrist',
+      kind: 'line',
+      width: 7,
+    },
+    {
+      name: 'rightUpperArm',
+      pivot: 'rightShoulder',
+      end: 'rightElbow',
+      kind: 'line',
+      width: 7,
+    },
+    {
+      name: 'rightForearm',
+      pivot: 'rightElbow',
+      end: 'rightWrist',
+      kind: 'line',
+      width: 7,
+    },
+    {
+      name: 'leftUpperLeg',
+      pivot: 'leftHip',
+      end: 'leftKnee',
+      kind: 'line',
+      width: 8,
+    },
+    {
+      name: 'leftLowerLeg',
+      pivot: 'leftKnee',
+      end: 'leftAnkle',
+      kind: 'line',
+      width: 8,
+    },
+    {
+      name: 'leftFoot',
+      pivot: 'leftAnkle',
+      end: 'leftToe',
+      kind: 'line',
+      width: 8,
+    },
+    {
+      name: 'rightUpperLeg',
+      pivot: 'rightHip',
+      end: 'rightKnee',
+      kind: 'line',
+      width: 8,
+    },
+    {
+      name: 'rightLowerLeg',
+      pivot: 'rightKnee',
+      end: 'rightAnkle',
+      kind: 'line',
+      width: 8,
+    },
+    {
+      name: 'rightFoot',
+      pivot: 'rightAnkle',
+      end: 'rightToe',
+      kind: 'line',
+      width: 8,
+    },
+  ],
+  chains: [
+    {name: 'legL', joints: ['leftHip', 'leftKnee', 'leftAnkle']},
+    {name: 'legR', joints: ['rightHip', 'rightKnee', 'rightAnkle']},
+    {name: 'armL', joints: ['leftShoulder', 'leftElbow', 'leftWrist']},
+    {name: 'armR', joints: ['rightShoulder', 'rightElbow', 'rightWrist']},
+  ],
+};
