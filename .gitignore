@@ -55,3 +55,6 @@ AGENTS.local.md
 .worktrees/
 .trees/
 .agents/
+
+# macOS
+.DS_Store
