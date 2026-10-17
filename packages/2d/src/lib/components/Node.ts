@@ -687,8 +687,29 @@ export class Node implements Promisable<Node> {
     return new DOMMatrix();
   }
 
+  /**
+   * The view this node is rendered into.
+   *
+   * @remarks
+   * Resolved through the parent chain, so a node that draws its children
+   * somewhere other than the scene canvas, such as an offscreen surface, can
+   * present a view of its own by overriding this method. Its descendants then
+   * clip their caches against that view, and their layout stops at it.
+   *
+   * @example
+   * ```tsx
+   * class Surface extends Layout {
+   *   private readonly surface = new View2D({assetHash: '', size: 256});
+   *
+   *   public override view(): View2D {
+   *     return this.surface;
+   *   }
+   * }
+   * ```
+   */
+  @computed()
   public view(): View2D {
-    return this.view2D;
+    return this.parent()?.view() ?? this.view2D;
   }
 
   /**
