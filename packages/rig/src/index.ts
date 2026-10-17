@@ -12,9 +12,13 @@
  * - Bind: {@link Rig} builds nodes for a character and binds them to joint
  *   signals, drawn either as primitive bones or as the character's own art.
  *
+ * Animations are pure functions of time ({@link PoseFn}) bound to a rig with
+ * {@link bindPose}, so seeking stays deterministic.
+ *
  * @packageDocumentation
  */
 
+export * from './characters';
 export {detectTemplate, rigFromSvg} from './extract';
 export type {RigFromSvgOptions} from './extract';
 export {BIPED, QUADRUPED, curveTemplate} from './gaits';

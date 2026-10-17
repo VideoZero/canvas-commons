@@ -10,6 +10,10 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./characters": {
+      "types": "./lib/characters/index.d.ts",
+      "default": "./lib/characters/index.js"
+    },
     "./gaits": {
       "types": "./lib/gaits/index.d.ts",
       "default": "./lib/gaits/index.js"

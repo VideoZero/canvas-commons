@@ -4,6 +4,7 @@ export default defineConfig({
   /* eslint-disable @typescript-eslint/naming-convention -- output paths */
   entry: {
     index: 'src/index.ts',
+    'characters/index': 'src/characters/index.ts',
     'gaits/index': 'src/gaits/index.ts',
     'ik/index': 'src/ik/index.ts',
     'svg/index': 'src/svg/index.ts',
