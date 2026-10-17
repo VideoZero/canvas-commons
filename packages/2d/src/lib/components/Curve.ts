@@ -273,6 +273,19 @@ export abstract class Curve extends Shape {
     }
 
     const distance = end - start;
+    if (distance <= 0) {
+      // An empty stroke still draws its caps, which would leave a dot where
+      // a curve that is drawn on starts.
+      return {
+        startPoint: Vector2.zero,
+        startTangent: Vector2.right,
+        endPoint: Vector2.zero,
+        endTangent: Vector2.right,
+        arrowSize: 0,
+        path,
+        startOffset: start,
+      };
+    }
     const arrowSize = Math.min(distance / 2, this.arrowSize());
 
     if (this.startArrow()) {
