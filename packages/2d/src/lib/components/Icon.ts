@@ -10,6 +10,7 @@ import {
   useLogger,
 } from '@canvas-commons/core';
 import {colorSignal, computed, initial, signal} from '../decorators';
+import {ResourceCache} from '../utils/ResourceCache';
 import {SVG, SVGProps} from './SVG';
 
 export interface IconProps extends Omit<SVGProps, 'svg'> {
@@ -32,8 +33,7 @@ const PLACEHOLDER_SVG =
  * See https://icones.js.org/collection/all for all available Icons.
  */
 export class Icon extends SVG {
-  private static iconSvgCache: Map<string, string> = new Map();
-  private static pendingFetches: Map<string, Promise<string>> = new Map();
+  private static readonly svgCache = new ResourceCache<string>();
 
   /**
    * The identifier of the icon.
@@ -79,61 +79,46 @@ export class Icon extends SVG {
   @computed()
   protected iconSvg(): string {
     const iconId = this.icon();
-    const color = this.color().hex();
-    const cacheKey = `${iconId}::${color}`;
-
-    const cached = Icon.iconSvgCache.get(cacheKey);
-    if (cached !== undefined) {
-      return cached;
-    }
-
     if (iconId === null || iconId === undefined) {
       return PLACEHOLDER_SVG;
     }
 
-    const fetchPromise = this.fetchIconSvg(iconId, color);
-    DependencyContext.collectPromise(fetchPromise);
-
-    return PLACEHOLDER_SVG;
-  }
-
-  private async fetchIconSvg(iconId: string, color: string): Promise<string> {
-    const cacheKey = `${iconId}::${color}`;
-
-    const cached = Icon.iconSvgCache.get(cacheKey);
+    const color = this.color().hex();
+    const cached = Icon.svgCache.get(Icon.cacheKey(iconId, color));
     if (cached !== undefined) {
       return cached;
     }
 
-    const pending = Icon.pendingFetches.get(cacheKey);
-    if (pending !== undefined) {
-      return pending;
-    }
+    // Collecting the fetch while the SVG is computed lets a render wait for the
+    // icon instead of drawing the placeholder, and recomputes it once loaded.
+    DependencyContext.collectPromise(Icon.fetchIconSvg(iconId, color));
+    return PLACEHOLDER_SVG;
+  }
 
-    const iconPath = iconId.replace(':', '/');
-    const encodedColor = encodeURIComponent(color);
-    const url = `https://api.iconify.design/${iconPath}.svg?color=${encodedColor}`;
+  private static cacheKey(iconId: string, color: string) {
+    return `${iconId}::${color}`;
+  }
 
-    const fetchPromise = fetch(url)
-      .then(response => {
+  private static fetchIconSvg(iconId: string, color: string): Promise<string> {
+    // A failed icon is cached as the placeholder, so it is reported once
+    // instead of being fetched again on every frame.
+    return Icon.svgCache.request(Icon.cacheKey(iconId, color), async () => {
+      const logger = useLogger();
+      const iconPath = iconId.replace(':', '/');
+      const encodedColor = encodeURIComponent(color);
+      const url = `https://api.iconify.design/${iconPath}.svg?color=${encodedColor}`;
+
+      try {
+        const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`Failed to fetch icon: ${iconId}`);
         }
-        return response.text();
-      })
-      .then(svg => {
-        Icon.iconSvgCache.set(cacheKey, svg);
-        Icon.pendingFetches.delete(cacheKey);
-        return svg;
-      })
-      .catch(error => {
-        Icon.pendingFetches.delete(cacheKey);
-        useLogger().error(`Error fetching icon ${iconId}: ${error}`);
+        return await response.text();
+      } catch (error) {
+        logger.error(`Error fetching icon ${iconId}: ${error}`);
         return PLACEHOLDER_SVG;
-      });
-
-    Icon.pendingFetches.set(cacheKey, fetchPromise);
-    return fetchPromise;
+      }
+    });
   }
 
   @threadable()
@@ -145,7 +130,7 @@ export class Icon extends SVG {
     const newIconId = isReactive(value) ? value() : value;
     const color = this.color().hex();
 
-    const newSvg: string = yield this.fetchIconSvg(newIconId, color);
+    const newSvg: string = yield Icon.fetchIconSvg(newIconId, color);
 
     yield* this.svg(newSvg, time, timingFunction);
     this.icon.context.setter(newIconId);
