@@ -226,9 +226,9 @@ export abstract class Shape extends Layout {
    * Apply the paint and line style of the shape to a context.
    *
    * @param context - The context to style.
-   * @param box - The box a {@link Gradient.cssRelative} gradient fits. Left
-   *              out when only measuring, as reading the box of a shape can
-   *              depend on its measured size.
+   * @param box - The box a {@link partials.Gradient.cssRelative} gradient
+   *              fits. Left out when only measuring, as reading the box of a
+   *              shape can depend on its measured size.
    */
   protected applyStyle(context: CanvasRenderingContext2D, box?: BBox) {
     context.fillStyle = resolveCanvasStyle(this.fill(), context, box);
