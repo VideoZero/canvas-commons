@@ -128,6 +128,21 @@ export type PathAlign =
 export type PathSplit = 'grapheme' | 'word';
 
 /**
+ * Which band of the text {@link Txt.textCenter} centers in its line box:
+ *
+ * - `'line'` - the font box (ascent and descent), as the line box is laid out.
+ *   Fonts with uneven metrics make the glyphs sit visibly high or low.
+ * - `'cap'` - the band from cap height to baseline. It depends only on the
+ *   font, so it stays put while the text changes. Text without Latin, Greek or
+ *   Cyrillic letters or digits has no caps to measure and uses `'ink'`.
+ * - `'ink'` - the glyphs actually drawn, measured for the current text. It
+ *   suits numbers in fonts with old-style figures, and moves when the text does.
+ */
+export type TextCenter = 'line' | 'cap' | 'ink';
+
+const CapScripts = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}0-9]/u;
+
+/**
  * Resolve a non-`smooth` {@link PathAlign} to a normalized cross-path offset
  * (`-1` top, `0` middle, `1` bottom), or `null` for the alphabetic baseline.
  * `smooth` also returns `null` here — it is computed per glyph instead.
@@ -161,6 +176,7 @@ export interface TxtProps extends ShapeProps {
   pathAlign?: SignalValue<PathAlign>;
   pathSmoothness?: SignalValue<number>;
   pathSplit?: SignalValue<PathSplit>;
+  textCenter?: SignalValue<TextCenter | null>;
 }
 
 type FontComponents = {
@@ -698,6 +714,73 @@ export class Txt extends Shape {
   @initial('grapheme')
   @signal()
   declare public readonly pathSplit: SimpleSignal<PathSplit, this>;
+
+  /**
+   * Default for {@link textCenter} on text nodes that leave it unset.
+   *
+   * @example
+   * ```ts
+   * Txt.defaultTextCenter = 'cap';
+   * ```
+   */
+  public static defaultTextCenter: TextCenter = 'line';
+
+  /**
+   * Which band of the text is centered in its line box.
+   *
+   * @remarks
+   * Only the drawn glyphs, their units and inline children move: the layout
+   * box keeps its size, so stacks and paddings are unaffected. Nested text
+   * follows its root `Txt`, whose font the band is measured in. Text on a
+   * {@link textPath} is placed by {@link pathAlign} instead. See
+   * {@link TextCenter} for the modes; `null` uses {@link Txt.defaultTextCenter}.
+   *
+   * @example
+   * ```tsx
+   * <Rect layout alignItems={'center'} height={120} padding={[0, 40]}>
+   *   <Txt textCenter={'cap'}>Centered on its capitals</Txt>
+   * </Rect>
+   * ```
+   */
+  @initial(null)
+  @signal()
+  declare public readonly textCenter: SimpleSignal<TextCenter | null, this>;
+
+  /**
+   * How far {@link textCenter} moves the glyphs down from where the line box
+   * puts them, in local pixels.
+   */
+  @computed()
+  public textCenterOffset(): number {
+    const root = this.rootTxt();
+    if (root !== this) return root.textCenterOffset();
+
+    let mode = this.textCenter() ?? Txt.defaultTextCenter;
+    if (mode === 'line' || this.pathProfile()) return 0;
+    const metrics = this.paragraph()?.metrics[0];
+    const context = this.measurementContext();
+    if (!metrics || !context) return 0;
+
+    const text = this.innerText().replace(/\s+/g, ' ');
+    if (mode === 'cap' && !CapScripts.test(text)) mode = 'ink';
+    const font = this.canvasFont();
+    const box = canvasParagraphMeasurer.measureFontBox({...metrics, font});
+    context.font = font;
+    let ink = context.measureText(mode === 'ink' ? text : 'H');
+    if (
+      mode === 'ink' &&
+      !(ink.actualBoundingBoxAscent + ink.actualBoundingBoxDescent > 0)
+    ) {
+      mode = 'cap';
+      ink = context.measureText('H');
+    }
+    const descent = mode === 'cap' ? 0 : ink.actualBoundingBoxDescent;
+    // A line box centers the font box, (ascent - descent) / 2 above the
+    // baseline; the glyphs move so the chosen band is centered there instead.
+    const offset =
+      (ink.actualBoundingBoxAscent - descent - box.ascent + box.descent) / 2;
+    return Number.isFinite(offset) ? offset : 0;
+  }
 
   protected getText(): string {
     return this.innerText();
@@ -2452,7 +2535,7 @@ export class Txt extends Shape {
         if (piece.sourceStart !== object.at) continue;
         return new Vector2(
           width / -2 + piece.center,
-          height / -2 + line.middle,
+          height / -2 + line.middle + root.textCenterOffset(),
         );
       }
     }
@@ -2534,7 +2617,7 @@ export class Txt extends Shape {
 
     const {width, height} = this.size();
     const originX = width / -2;
-    const originY = height / -2;
+    const originY = height / -2 + this.textCenterOffset();
 
     context.save();
     this.applyStyle(context);
@@ -2816,7 +2899,9 @@ export class Txt extends Shape {
       ? this.ownedTextBox()
       : BBox.fromSizeCentered(this.computedSize());
     // Pad vertically for glyphs that overshoot the line box.
-    return box.expand([0, this.fontSize() * 0.5]).expand(stroke);
+    return box
+      .expand([0, this.fontSize() * 0.5 + Math.abs(this.textCenterOffset())])
+      .expand(stroke);
   }
 
   @computed()
@@ -3059,7 +3144,8 @@ export class Txt extends Shape {
     const origin = root
       .size()
       .scale(0.5)
-      .add(root === this ? Vector2.zero : this.offsetInRoot());
+      .add(root === this ? Vector2.zero : this.offsetInRoot())
+      .addY(-root.textCenterOffset());
     const result: PlacedUnit[] = [];
 
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {

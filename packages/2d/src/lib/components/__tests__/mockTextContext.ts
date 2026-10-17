@@ -14,6 +14,8 @@ export type TextState = {font: string; letterSpacing: string};
  *   for font-sensitive fixtures.
  * @param fontBounds - Font box metrics for the state. Left out, `measureText`
  *   reports none and the caller falls back to em-square metrics.
+ * @param inkBounds - Ink box metrics of a text in the state. Left out,
+ *   `measureText` reports none.
  *
  * @remarks
  * Each canvas keeps its own state, so one caller's letter spacing cannot reach
@@ -22,6 +24,10 @@ export type TextState = {font: string; letterSpacing: string};
 export function mockTextContext(
   charWidth: number | ((text: string, state: TextState) => number) = 10,
   fontBounds?: (state: TextState) => {ascent: number; descent: number},
+  inkBounds?: (
+    text: string,
+    state: TextState,
+  ) => {ascent: number; descent: number},
 ): void {
   const measure =
     typeof charWidth === 'number'
@@ -58,10 +64,13 @@ export function mockTextContext(
             letterSpacing: context.letterSpacing,
           };
           const bounds = fontBounds?.(state);
+          const ink = inkBounds?.(text, state);
           return {
             width: measure(text, state),
             fontBoundingBoxAscent: bounds?.ascent,
             fontBoundingBoxDescent: bounds?.descent,
+            actualBoundingBoxAscent: ink?.ascent,
+            actualBoundingBoxDescent: ink?.descent,
           } as TextMetrics;
         },
         fillText() {},
