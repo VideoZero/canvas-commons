@@ -594,6 +594,22 @@ importers:
         specifier: 'catalog:'
         version: 8.3.0(@types/node@20.19.43)(jiti@2.6.1)(sass@1.104.1)(terser@5.51.2)(yaml@2.9.1)
 
+  packages/rig:
+    dependencies:
+      '@canvas-commons/2d':
+        specifier: workspace:^
+        version: link:../2d
+      '@canvas-commons/core':
+        specifier: workspace:^
+        version: link:../core
+    devDependencies:
+      jsdom:
+        specifier: 'catalog:'
+        version: 29.1.1
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.11(@types/node@20.19.43)(jsdom@29.1.1)(vite@8.3.0(@types/node@20.19.43)(jiti@2.6.1)(sass@1.104.1)(terser@5.51.2)(yaml@2.9.1))
+
   packages/shiki:
     dependencies:
       '@canvas-commons/2d':
@@ -13632,7 +13648,7 @@ snapshots:
   '@types/react-router@5.1.20':
     dependencies:
       '@types/history': 4.7.11
-      '@types/react': 18.3.28
+      '@types/react': 18.3.31
 
   '@types/react@18.3.28':
     dependencies:

@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "noImplicitAny": true,
+    "esModuleInterop": true,
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "strict": true,
+    "module": "esnext",
+    "target": "es2022",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "declaration": true,
+    "declarationMap": true,
+    "experimentalDecorators": true
+  },
+  "include": ["src", "tsdown.config.ts", "vitest.config.ts"]
+}

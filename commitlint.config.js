@@ -27,6 +27,7 @@ module.exports = {
         'legacy',
         'player',
         'shiki',
+        'rig',
         'vite-plugin',
         'webcodecs',
       ],

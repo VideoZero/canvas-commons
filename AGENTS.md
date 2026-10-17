@@ -24,6 +24,7 @@ This is a `pnpm` monorepo containing the following packages:
 - `examples` - Animation examples used in documentation
 - `ffmpeg` - FFmpeg renderer
 - `player` - Custom element for displaying animations in a browser
+- `rig` - 2D rigging, inverse kinematics, and character animation
 - `template` - Template project included for developer's convenience
 - `vite-plugin` - Vite plugin for developing and bundling animations
 
@@ -144,6 +145,7 @@ Available scopes are:
 - `legacy`
 - `player`
 - `shiki`
+- `rig`
 - `vite-plugin`
 
 Commit subjects should be in the imperative mood, and should be no more than 50
@@ -197,6 +199,7 @@ short usage examples. Read the one for the package you're touching:
 - [`packages/editor/AGENTS.md`](packages/editor/AGENTS.md)
 - [`packages/vite-plugin/AGENTS.md`](packages/vite-plugin/AGENTS.md)
 - [`packages/player/AGENTS.md`](packages/player/AGENTS.md)
+- [`packages/rig/AGENTS.md`](packages/rig/AGENTS.md)
 - [`packages/ffmpeg/AGENTS.md`](packages/ffmpeg/AGENTS.md)
 - [`packages/webcodecs/AGENTS.md`](packages/webcodecs/AGENTS.md)
 - [`packages/fiddle/AGENTS.md`](packages/fiddle/AGENTS.md)

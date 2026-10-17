@@ -17,7 +17,8 @@
       "@canvas-commons/create",
       "@canvas-commons/fiddle",
       "@canvas-commons/shiki",
-      "@canvas-commons/echarts"
+      "@canvas-commons/echarts",
+      "@canvas-commons/rig"
     ]
   ],
   "linked": [],
