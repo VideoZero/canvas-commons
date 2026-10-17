@@ -1,6 +1,12 @@
-import {SerializedVector2, Vector2} from '@canvas-commons/core';
+import {
+  SerializedVector2,
+  Vector2,
+  linear,
+  waitFor,
+} from '@canvas-commons/core';
 import {describe, expect, it} from 'vitest';
 import {Latex, Node, Rect, SVGDocument, SVGShapeData} from '..';
+import {generatorTest} from './generatorTest';
 import {mockScene2D} from './mockScene2D';
 
 const GLYPH = new Vector2(10, 20);
@@ -81,6 +87,53 @@ describe('Latex', () => {
 
         expect(tex.renderFragment(fragment)).not.toContain('data-mjx-error');
       },
+    );
+  });
+
+  describe('tweening', () => {
+    it(
+      'animates the size when mapping fragments',
+      generatorTest(function* (view) {
+        const tex = new TestLatex({tex: '{{ab}}'});
+        view.add(tex);
+        expect(tex.width()).toBeCloseTo(20);
+
+        yield tex.map('{{ab}}{{cd}}', [[0]], 1, linear);
+        yield* waitFor(0.5);
+        expect(tex.width()).toBeCloseTo(30, 0);
+
+        yield* waitFor(0.6);
+        expect(tex.width()).toBeCloseTo(40);
+        expect(tex.width.isInitial()).toBe(true);
+      }),
+    );
+
+    it(
+      'keeps an explicit width after tweening the tex',
+      generatorTest(function* (view) {
+        const tex = new TestLatex({tex: '{{ab}}', width: 100});
+        view.add(tex);
+
+        yield* tex.tex('{{ab}}{{cd}}', 1, linear);
+
+        expect(tex.width.isInitial()).toBe(false);
+        expect(tex.width()).toBeCloseTo(100);
+        expect(tex.height()).toBeCloseTo(50);
+      }),
+    );
+
+    it(
+      'scales the formula into an explicit width while tweening',
+      generatorTest(function* (view) {
+        const tex = new TestLatex({tex: '{{ab}}', width: 100});
+        view.add(tex);
+        expect(tex.wrapper.scale.x()).toBeCloseTo(5);
+
+        yield tex.tex('{{ab}}{{cd}}', 1, linear);
+        yield* waitFor(0.5);
+
+        expect(tex.wrapper.scale.x()).toBeCloseTo(3.75, 1);
+      }),
     );
   });
 });

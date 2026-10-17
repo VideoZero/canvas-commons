@@ -654,14 +654,6 @@ export class Latex extends SVGNode {
     time: number,
     timingFunction: TimingFunction,
   ) {
-    const newSize = target.document.size.mul(
-      this.calculateWrapperScale(target.document.size, this.getCurrentSize()),
-    );
-    const lockedScale = new Vector2(this.wrapper.scale());
-
-    this.lockLayout();
-    this.wrapper.scale(lockedScale);
-
     const animations: ThreadGenerator[] = [];
     for (const {from, to, transition} of pairs) {
       // An unchanged fragment has nothing to cross over with.
@@ -688,15 +680,47 @@ export class Latex extends SVGNode {
       );
     }
 
-    yield* all(...animations, this.size(newSize, time, timingFunction));
+    yield* this.tweenToDocument(animations, target, time, timingFunction);
+  }
+
+  @threadable()
+  private *tweenToDocument(
+    animations: ThreadGenerator[],
+    target: {svg: string; tex: string[]; document: SVGDocument},
+    time: number,
+    timingFunction: TimingFunction,
+  ) {
+    const autoWidth = this.width.isInitial();
+    const autoHeight = this.height.isInitial();
+    const targetScale = this.calculateWrapperScale(
+      target.document.size,
+      this.getCurrentSize(),
+    );
+    const newSize = target.document.size.mul(targetScale);
+
+    this.lockLayout();
+    this.wrapper.scale(new Vector2(this.wrapper.scale()));
+
+    if (autoWidth && autoHeight) {
+      animations.push(this.size(newSize, time, timingFunction));
+    } else if (autoWidth) {
+      animations.push(this.width(newSize.width, time, timingFunction));
+    } else if (autoHeight) {
+      animations.push(this.height(newSize.height, time, timingFunction));
+    }
+
+    yield* all(
+      ...animations,
+      this.wrapper.scale(targetScale, time, timingFunction),
+    );
 
     this.svg.context.setter(target.svg);
     this.tex.context.setter(target.tex);
     this.wrapper.children(this.documentNodes);
     this.wrapper.scale(this.wrapperScale);
     this.releaseLayout();
-    this.width.reset();
-    this.height.reset();
+    if (autoWidth) this.width.reset();
+    if (autoHeight) this.height.reset();
   }
 
   /**
@@ -1022,10 +1046,11 @@ export class Latex extends SVGNode {
       );
     }
 
-    yield* all(...animations);
-
-    this.svg.context.setter(newSVG);
-    this.tex.context.setter(parsedValue);
-    this.wrapper.children(this.documentNodes);
+    yield* this.tweenToDocument(
+      animations,
+      {svg: newSVG, tex: parsedValue, document: targetDoc},
+      time,
+      timing,
+    );
   }
 }
