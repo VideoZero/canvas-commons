@@ -201,9 +201,10 @@ export function resetAttributions(): void {
  * Register the attribution encoded in the query of a media source.
  *
  * @remarks
- * {@link Img} and {@link Video} call this for their sources. The query
- * parameter named by {@link AttributionConfig.queryParam} holds URI-encoded
- * JSON in the shape of `{text, html?, download_notification?}`.
+ * {@link components.Img} and {@link components.Video} call this for their
+ * sources. The query parameter named by
+ * {@link AttributionConfig.queryParam} holds URI-encoded JSON in the shape of
+ * `{text, html?, download_notification?}`.
  * Sources are parsed only once, so calling this repeatedly is cheap.
  *
  * @example
