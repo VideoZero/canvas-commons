@@ -199,6 +199,24 @@ describe('EChart', () => {
   );
 
   it(
+    'waits at least one frame even without an animation',
+    generatorTest(function* (view) {
+      const chart = new EChart({
+        size: [400, 300],
+        initialOption: {...barChart([20]), animation: false},
+      });
+      view.add(chart);
+      yield* chart.waitForAnimation();
+
+      chart.setOption({series: [{data: [80]}]});
+      const startTime = useTime();
+      yield* chart.waitForAnimation();
+
+      expect(useTime()).toBeGreaterThan(startTime);
+    }),
+  );
+
+  it(
     'waits for animations of lazy updates',
     generatorTest(function* (view) {
       const chart = new EChart({
