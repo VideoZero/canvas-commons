@@ -135,7 +135,7 @@ export interface NodeProps {
   /**
    * @experimental
    */
-  shaders?: PossibleShaderConfig;
+  shaders?: SignalValue<PossibleShaderConfig>;
 }
 
 @nodeName('Node')
