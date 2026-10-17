@@ -1681,6 +1681,56 @@ export class Layout extends Node {
     return (function* (): ThreadGenerator {})();
   }
 
+  /**
+   * Rearrange the children of this layout. With a `duration`, the call
+   * returns a `ThreadGenerator` that slides each child from its old slot to
+   * its new one; without one, the new order applies immediately and the call
+   * returns `this`.
+   *
+   * @example
+   * ```tsx
+   * const [a, b, c] = list().children();
+   * yield* list().reorder([c, a, b], 0.6);
+   * ```
+   *
+   * @param order - The current children in their new order.
+   * @param duration - The duration of the animation in seconds.
+   * @param timing - The timing function of the animation.
+   */
+  public reorder(order: Node[]): this;
+  public reorder(
+    order: Node[],
+    duration: number,
+    timing?: TimingFunction,
+  ): ThreadGenerator;
+  public reorder(
+    order: Node[],
+    duration?: number,
+    timing: TimingFunction = easeInOutCubic,
+  ): this | ThreadGenerator {
+    const children = this.children();
+    const current = new Set(children);
+    if (
+      order.length !== children.length ||
+      new Set(order).size !== order.length ||
+      !order.every(node => current.has(node))
+    ) {
+      throw new Error(
+        'reorder() expects every current child exactly once in the new order.',
+      );
+    }
+
+    if (duration === undefined) {
+      this.setParsedChildren([...order]);
+      return this;
+    }
+    return this.editLayout(
+      duration,
+      layout => layout.setParsedChildren([...order]),
+      timing,
+    );
+  }
+
   @threadable()
   protected *animateInsert(
     node: ComponentChildren,

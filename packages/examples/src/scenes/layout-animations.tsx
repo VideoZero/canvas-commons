@@ -109,6 +109,9 @@ export default makeScene2D(function* (view) {
   yield* waitFor(0.2);
   yield* fourth().remove(0.6);
 
+  yield* waitFor(0.2);
+  yield* row().reorder([...row().children()].reverse(), 0.6);
+
   yield* waitFor(0.3);
 
   yield* wrapping().add(
