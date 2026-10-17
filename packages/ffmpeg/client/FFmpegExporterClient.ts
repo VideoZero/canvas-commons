@@ -32,9 +32,6 @@ type FFmpegExporterOptions = ValueOf<
 
 type InvokeStrategy = 'ws' | 'octet-stream';
 
-const EXPORT_FRAME_LIMIT = 256;
-const EXPORT_RETRY_DELAY = 1000;
-
 /**
  * FFmpeg video exporter.
  *
@@ -82,8 +79,7 @@ export class FFmpegExporterClient implements Exporter {
     }
   }
 
-  private concurrentFrames = 0;
-  private error: unknown = false;
+  private lastFrame: Promise<void> = Promise.resolve();
 
   public constructor(
     private readonly project: Project,
@@ -111,33 +107,22 @@ export class FFmpegExporterClient implements Exporter {
     _signal: AbortSignal,
     context: CanvasRenderingContext2D,
   ): Promise<void> {
-    while (this.concurrentFrames >= EXPORT_FRAME_LIMIT) {
-      await new Promise(resolve => setTimeout(resolve, EXPORT_RETRY_DELAY));
-    }
-
-    if (this.error) {
-      throw this.error;
-    }
-
     const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    this.concurrentFrames++;
-    this.invoke('handleFrame', data, 'octet-stream')
-      .then(() => {
-        this.concurrentFrames--;
-      })
-      .catch(error => {
-        this.error = error;
-        this.concurrentFrames--;
-      });
+    // Concurrent requests can reach the server out of order, so each frame is
+    // sent only once the previous one has been received.
+    const previous = this.lastFrame;
+    this.lastFrame = previous.then(async () => {
+      await this.invoke('handleFrame', data, 'octet-stream');
+    });
+    this.lastFrame.catch(() => undefined);
+    await previous;
   }
 
   public async stop(result: RendererResult): Promise<void> {
-    while (this.concurrentFrames >= EXPORT_FRAME_LIMIT) {
-      await new Promise(resolve => setTimeout(resolve, EXPORT_RETRY_DELAY));
-    }
-
-    if (this.error) {
-      throw this.error;
+    try {
+      await this.lastFrame;
+    } finally {
+      this.lastFrame = Promise.resolve();
     }
 
     await this.invoke('end', result);
