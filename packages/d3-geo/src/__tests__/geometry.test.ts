@@ -1,4 +1,4 @@
-import {geoArea, geoContains} from 'd3-geo';
+import {geoArea, geoBounds, geoContains} from 'd3-geo';
 import type {
   FeatureCollection,
   LineString,
@@ -57,6 +57,23 @@ describe('sanitizePolygons', () => {
     };
     const sane = sanitizePolygons(degenerate);
     expect(sane.coordinates.length).toBe(1);
+  });
+
+  test('turns a fully collapsed polygon into an empty multipolygon', () => {
+    const collapsed: Polygon = {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [50, 0],
+          [51, 0],
+          [50.5, 0],
+          [50, 0],
+        ],
+      ],
+    };
+    const sane = sanitizePolygons(collapsed);
+    expect(sane).toEqual({type: 'MultiPolygon', coordinates: []});
+    expect(() => geoBounds(sane)).not.toThrow();
   });
 
   test('recurses through features and collections', () => {

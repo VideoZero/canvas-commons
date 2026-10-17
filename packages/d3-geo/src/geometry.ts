@@ -4,6 +4,7 @@ import type {
   Feature,
   FeatureCollection,
   Geometry,
+  MultiPolygon,
   Polygon,
   Position,
 } from 'geojson';
@@ -50,11 +51,14 @@ function sanitizeGeometry(geometry: Geometry, rewind: boolean): Geometry {
           sanitizeGeometry(item, rewind),
         ),
       };
-    case 'Polygon':
-      return {
-        ...geometry,
-        coordinates: cleanRings(geometry.coordinates, rewind) ?? [],
-      };
+    case 'Polygon': {
+      const coordinates = cleanRings(geometry.coordinates, rewind);
+      // d3's geoBounds throws on a polygon without rings; an empty
+      // multipolygon is handled everywhere.
+      return coordinates
+        ? {...geometry, coordinates}
+        : {...geometry, type: 'MultiPolygon', coordinates: []};
+    }
     case 'MultiPolygon':
       return {
         ...geometry,
@@ -85,7 +89,8 @@ function sanitizeFeature(feature: Feature, rewind: boolean): Feature {
  * d3's polygon clipping the same way.
  *
  * This function drops degenerate rings, drops polygons whose exterior ring
- * collapsed, and rewinds any polygon that covers more than a hemisphere. Map
+ * collapsed (a polygon without any left becomes an empty `MultiPolygon`), and
+ * rewinds any polygon that covers more than a hemisphere. Map
  * data is sanitized automatically; use this for custom geometry.
  *
  * @example
@@ -102,7 +107,7 @@ function sanitizeFeature(feature: Feature, rewind: boolean): Feature {
 export function sanitizePolygons<T extends GeoObject>(
   object: T,
   rewind?: boolean,
-): T;
+): T extends Polygon ? Polygon | MultiPolygon : T;
 export function sanitizePolygons(object: GeoObject, rewind = true): GeoObject {
   switch (object.type) {
     case 'Sphere':
