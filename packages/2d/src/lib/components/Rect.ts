@@ -155,6 +155,10 @@ export class Rect extends Curve {
 
   @computed()
   protected override getPathData(): string {
+    if (this.isClipped()) {
+      return super.getPathData();
+    }
+
     const box = BBox.fromSizeCentered(this.size());
     const radius = this.radius();
     const hasRoundedCorners =

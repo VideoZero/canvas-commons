@@ -390,7 +390,58 @@ export abstract class Curve extends Shape {
 
   @computed()
   protected override getPathData(): string {
+    if (this.isClipped()) {
+      return this.visiblePathData();
+    }
     return profileToSVGPathData(this.profile());
+  }
+
+  /**
+   * Whether {@link start} or {@link end} hide part of the curve.
+   */
+  protected isClipped(): boolean {
+    return this.start() !== 0 || this.end() !== 1;
+  }
+
+  /**
+   * The path data of the part of the curve between {@link start} and
+   * {@link end}.
+   */
+  @computed()
+  protected visiblePathData(): string {
+    let start = this.percentageToDistance(this.start());
+    let end = this.percentageToDistance(this.end());
+    if (start > end) {
+      [start, end] = [end, start];
+    }
+
+    const commands: string[] = [];
+    let length = 0;
+    let last: Vector2 | null = null;
+    for (const segment of this.profile().segments) {
+      const previousLength = length;
+      length += segment.arcLength;
+      if (length <= start || segment.arcLength === 0) continue;
+      if (previousLength >= end) break;
+
+      const relativeStart = clamp(
+        0,
+        1,
+        (start - previousLength) / segment.arcLength,
+      );
+      const relativeEnd = clamp(
+        0,
+        1,
+        (end - previousLength) / segment.arcLength,
+      );
+      if (relativeEnd > relativeStart) {
+        const from = segment.getPoint(relativeStart).position;
+        const move = last === null || !from.equals(last);
+        commands.push(segment.toSVGCommands(relativeStart, relativeEnd, move));
+        last = segment.getPoint(relativeEnd).position;
+      }
+    }
+    return commands.join(' ');
   }
 
   protected override getCacheBBox(): BBox {
