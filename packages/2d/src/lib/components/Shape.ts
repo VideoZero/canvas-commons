@@ -310,7 +310,7 @@ export abstract class Shape extends Layout {
     context.restore();
   }
 
-  private drawFill(context: CanvasRenderingContext2D) {
+  protected drawFill(context: CanvasRenderingContext2D) {
     const shaders = this.fillShaders();
     if (shaders.length === 0) {
       context.fill(this.getPath());
@@ -345,7 +345,7 @@ export abstract class Shape extends Layout {
     return canvas;
   }
 
-  private drawStroke(context: CanvasRenderingContext2D) {
+  protected drawStroke(context: CanvasRenderingContext2D) {
     const shaders = this.strokeShaders();
     if (shaders.length === 0) {
       context.stroke(this.getPath());
