@@ -207,6 +207,10 @@ importing a second copy.
   image. Per-object `opacity` makes materials transparent, which is right for
   thin or convex shapes but shows the far side of a knot or a model through its
   near side.
+- **3D entrances.** Tween `reveal` from `0` to `1` instead of `opacity` or
+  `scale`: the mesh dissolves in through object-space noise with a glowing edge
+  (`revealColor`) while staying opaque, so depth sorting and shadows stay right.
+  At `reveal={1}` the material renders exactly as without it.
 - **Nest transforms.** 3D children move with their parent, like Three.js
   objects. A parent's `size` scales only its own shape, so a child at `y={-120}`
   under a `300 × 100` box sits 120 px above the box's pivot.
@@ -400,8 +404,19 @@ the load); `opacity3D()` → opacity accumulated through 3D ancestors.
 | `map`               | `string \| null`                                                                       | `null`       | Image URL wrapped around the surface; a failed load is logged, not fatal                                                                                                                                            |
 | `contentMaterial`   | material name \| `null`                                                                | `null`       | Shading of the surface content; `null` follows `material`. Never tone mapped; `basic` = exact authored colours                                                                                                      |
 | `contentScale`      | `number \| null`                                                                       | `null`       | Texels per pixel for the content; `null` follows the viewport and `zoom`                                                                                                                                            |
-| `castShadow`        | `boolean`                                                                              | `true`       |                                                                                                                                                                                                                     |
+| `castShadow`        | `boolean \| null`                                                                      | `null`       | `null` = on, except `glass` (a clear body would cast a solid shadow); set `true` to opt glass in; `false` also keeps a receiving mesh out of a VSM shadow map                                                       |
 | `receiveShadow`     | `boolean`                                                                              | `true`       |                                                                                                                                                                                                                     |
+| `reveal`            | `number`                                                                               | `1`          | Noise dissolve `0..1` for entrances; stays opaque, its shadow dissolves too; ignored by `shadow` and custom materials                                                                                               |
+| `revealColor`       | color                                                                                  | `color`      | Glowing edge of the dissolve, drawn after tone mapping; near-white / near-black `color` (luma > 0.85 or < 0.2) falls back to amber `#f59e0b`; set an accent on pastels                                              |
+
+Material presets (also valid `material` values): `clay` — matte, sheen and a
+soft rim, made for `environment="studio"` + `toneMapping="neutral"`; `metalness`
+/ `roughness` default to `0` / `0.88` until set; rim and sheen are toned down on
+dark colours (no grey halo). `glass` — a clear body whose silhouette glows in
+`color`; always transparent, no depth write, drawn after other transparent
+meshes; no refraction (one cheap pass). Glass reads best on curved shapes (flat
+faces get no fresnel), and casts no shadow unless `castShadow` is set (it still
+receives shadows).
 
 Methods: `mesh()` → the inner `THREE.Mesh` (geometry, material); `surfaceSize()`
 → the content area in pixels; `hasSurface()`.
@@ -414,19 +429,19 @@ Primitives: `box` (with `radius`), `sphere`, `plane`, `circle`, `cylinder`,
 
 ### `Light3D`
 
-| Prop           | Type                                                              | Default         | Notes                                                                                         |
-| -------------- | ----------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
-| `kind`         | `'ambient' \| 'hemisphere' \| 'directional' \| 'point' \| 'spot'` | `'directional'` |                                                                                               |
-| `color`        | color                                                             | `'#ffffff'`     | Alpha multiplies `intensity`                                                                  |
-| `intensity`    | `number`                                                          | `1`             | Sunlight-strength directionals sit around 2–3                                                 |
-| `groundColor`  | color                                                             | `'#444444'`     | `hemisphere` only; alpha dims the ground light                                                |
-| `target`       | `[x, y, z]`                                                       | `[0,0,0]`       | `directional` / `spot`; in the same space as `position`                                       |
-| `angle`        | `number`                                                          | `30`            | `spot` cone half-angle                                                                        |
-| `penumbra`     | `number`                                                          | `0.3`           | `spot` edge softness, 0–1                                                                     |
-| `decay`        | `number`                                                          | `0`             | `point` / `spot` falloff; `2` is physical                                                     |
-| `castShadow`   | `boolean`                                                         | `false`         | Needs `shadows` on the `Three` node                                                           |
-| `shadowArea`   | `number`                                                          | `2400`          | `directional`: side of the shadowed square                                                    |
-| `shadowRadius` | `number`                                                          | `1`             | Shadow blur in texels; with `shadowType="vsm"` try 8–16 (large radii look grainy under `pcf`) |
+| Prop           | Type                                                              | Default         | Notes                                                                                                               |
+| -------------- | ----------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `kind`         | `'ambient' \| 'hemisphere' \| 'directional' \| 'point' \| 'spot'` | `'directional'` |                                                                                                                     |
+| `color`        | color                                                             | `'#ffffff'`     | Alpha multiplies `intensity`                                                                                        |
+| `intensity`    | `number`                                                          | `1`             | Sunlight-strength directionals sit around 2–3                                                                       |
+| `groundColor`  | color                                                             | `'#444444'`     | `hemisphere` only; alpha dims the ground light                                                                      |
+| `target`       | `[x, y, z]`                                                       | `[0,0,0]`       | `directional` / `spot`; in the same space as `position`                                                             |
+| `angle`        | `number`                                                          | `30`            | `spot` cone half-angle                                                                                              |
+| `penumbra`     | `number`                                                          | `0.3`           | `spot` edge softness, 0–1                                                                                           |
+| `decay`        | `number`                                                          | `0`             | `point` / `spot` falloff; `2` is physical                                                                           |
+| `castShadow`   | `boolean`                                                         | `false`         | Needs `shadows` on the `Three` node                                                                                 |
+| `shadowArea`   | `number`                                                          | `2400`          | `directional`: side of the shadowed square                                                                          |
+| `shadowRadius` | `number`                                                          | `1`             | Shadow blur in texels; with `shadowType="vsm"` try 8–16 (large radii look grainy under `pcf`)                       |
 | `shadowFar`    | `number \| null`                                                  | `null`          | `directional`: far plane of the shadow camera in pixels; `null` keeps Three's range. Tighter = more depth precision |
 
 ### `Object3D`
@@ -462,8 +477,8 @@ Transform only. Use it to rotate or move a set of nodes together.
 bundled). `loadThreeAddon(name)` fetches a vendored addon bound to the loaded
 runtime instead; the host provides the files through
 `configureThree({loadAddon: (name, revision) => import(url)})`. A module with a
-default export is treated as a `factory(THREE)`, any other module is returned
-as it is. Names are listed in `THREE_ADDONS`.
+default export is treated as a `factory(THREE)`, any other module is returned as
+it is. Names are listed in `THREE_ADDONS`.
 
 ```ts
 const {RoundedBoxGeometry} = yield loadThreeAddon('RoundedBoxGeometry');

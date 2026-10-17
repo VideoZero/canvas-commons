@@ -23,3 +23,14 @@ export function applyColor(
   target.setRGB(r, g, b, three.SRGBColorSpace);
   return a;
 }
+
+/**
+ * Perceptual brightness of a Motion Canvas colour, `0`–`1`: Rec. 709 luma
+ * of its sRGB-encoded channels (alpha ignored).
+ *
+ * @internal
+ */
+export function colorLuma(color: Color): number {
+  const [r, g, b] = color.gl();
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
