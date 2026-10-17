@@ -44,6 +44,34 @@ export class DependencyContext<TOwner = void> implements Promisable<
     return handle;
   }
 
+  /**
+   * Run an asynchronous callback with its own collection of promises.
+   *
+   * @remarks
+   * Promises are collected globally. Without isolation, a scene running
+   * inside another one would wait for, and consume, the promises collected by
+   * the outer scene, and vice versa. Promises collected by the callback that
+   * it didn't consume are handed back to the outer collection.
+   *
+   * @example
+   * ```ts
+   * await DependencyContext.isolatePromises(() => playback.seek(frame));
+   * ```
+   *
+   * @param callback - The callback to run.
+   */
+  public static async isolatePromises<T>(
+    callback: () => Promise<T>,
+  ): Promise<T> {
+    const outer = this.promises;
+    this.promises = [];
+    try {
+      return await callback();
+    } finally {
+      this.promises = [...outer, ...this.promises];
+    }
+  }
+
   public static hasPromises() {
     return this.promises.length > 0;
   }
