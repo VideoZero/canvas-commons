@@ -6,7 +6,8 @@ import {
   linear,
   waitFor,
 } from '@canvas-commons/core';
-import {describe, expect, it} from 'vitest';
+import {afterEach, describe, expect, it} from 'vitest';
+import {PathMorpher} from '../../morphers';
 import {Path} from '../Path';
 import {SVG} from '../SVG';
 import {ShapeProps} from '../Shape';
@@ -15,6 +16,10 @@ import {mockScene2D} from './mockScene2D';
 
 // jsdom builds SVG children as plain SVGElement, so the parser cannot run here.
 class TestSVG extends SVG {
+  public get pathMorpher() {
+    return this.morpher;
+  }
+
   public static transformProps(transform: DOMMatrix): ShapeProps {
     return SVG.getMatrixTransformation(transform);
   }
@@ -69,6 +74,35 @@ function hex(style: unknown) {
 
 describe('SVG', () => {
   mockScene2D();
+
+  describe('default morpher', () => {
+    const original = SVG.defaultMorpher;
+    afterEach(() => {
+      SVG.defaultMorpher = original;
+    });
+
+    it('gives new nodes the default morpher', () => {
+      const morpher: PathMorpher = {
+        createInterpolator: (from, to) => value => (value < 1 ? from : to),
+      };
+      SVG.defaultMorpher = morpher;
+
+      const svg = new TestSVG({svg: '<svg viewBox="0 0 1 1"></svg>'});
+
+      expect(svg.pathMorpher).toBe(morpher);
+    });
+
+    it('prefers the morpher a node is given', () => {
+      const morpher: PathMorpher = {
+        createInterpolator: (from, to) => value => (value < 1 ? from : to),
+      };
+
+      const svg = new TestSVG({svg: '<svg viewBox="0 0 1 1"></svg>', morpher});
+
+      expect(svg.pathMorpher).toBe(morpher);
+      expect(svg.pathMorpher).not.toBe(SVG.defaultMorpher);
+    });
+  });
 
   describe('matrix transformations', () => {
     it('keeps the shear of a sheared matrix', () => {

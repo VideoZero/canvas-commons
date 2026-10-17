@@ -94,6 +94,23 @@ export class SVG extends Shape {
   private static svgNodesPool: Record<string, SVGDocumentData> = {};
 
   /**
+   * The morpher an SVG uses when it is not given one.
+   *
+   * @remarks
+   * Set it before creating the nodes it should apply to: each node reads it
+   * once, when it is constructed. It covers every SVG-based node, including
+   * `Latex` and `Icon`.
+   *
+   * @example
+   * ```ts
+   * import {SVG, manimMorpher} from '@canvas-commons/2d';
+   *
+   * SVG.defaultMorpher = manimMorpher();
+   * ```
+   */
+  public static defaultMorpher: PathMorpher = defaultMorpher();
+
+  /**
    * SVG string to be rendered
    */
   @signal()
@@ -112,7 +129,7 @@ export class SVG extends Shape {
   public constructor(props: SVGProps) {
     const {morpher, ...rest} = props;
     super(rest);
-    this.morpher = morpher ?? defaultMorpher();
+    this.morpher = morpher ?? SVG.defaultMorpher;
     this.wrapper = new Node({});
     this.wrapper.children(this.documentNodes);
     this.wrapper.scale(this.wrapperScale);
