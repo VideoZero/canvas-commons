@@ -109,10 +109,29 @@ export class Sounds {
   }
 
   public add(settings: SoundSettings, offset?: number) {
-    const playbackTime = this.scene.playback.time + (offset ?? 0);
+    this.addAt(settings, this.scene.playback.time + (offset ?? 0));
+  }
 
+  /**
+   * Register a sound at an absolute time instead of relative to the current
+   * frame.
+   *
+   * @remarks
+   * Useful for sounds whose timing is only known after the scene has been
+   * calculated, for example in a handler of {@link Scene.onRecalculated}.
+   *
+   * @example
+   * ```ts
+   * scene.sounds.addAt({audio: whoosh, gain: -6}, 2.5);
+   * ```
+   *
+   * @param settings - The sound to play.
+   * @param time - The time in seconds, from the start of the project, at which
+   *               the sound starts.
+   */
+  public addAt(settings: SoundSettings, time: number) {
     this.registeredSounds.push({
-      offset: playbackTime,
+      offset: time,
       realPlaybackRate:
         Math.pow(2, (settings.detune ?? 0) / 1200) *
         (settings.playbackRate ?? 1),
