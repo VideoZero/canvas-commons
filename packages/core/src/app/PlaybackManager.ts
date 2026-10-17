@@ -182,8 +182,8 @@ export class PlaybackManager {
       this.speed = speed;
     }
 
-    this.scenes.current = scenes;
     this.duration = this.frame;
+    this.scenes.current = scenes;
   }
 
   private async next(): Promise<boolean> {

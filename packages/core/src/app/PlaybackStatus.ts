@@ -28,6 +28,32 @@ export class PlaybackStatus {
     return this.framesToSeconds(this.playback.frame);
   }
 
+  /**
+   * Triggered when the scenes get recalculated.
+   *
+   * @remarks
+   * After a recalculation, the timing of all scenes is final and {@link frame}
+   * is the duration of the entire project. Scene code can use it to resolve
+   * timelines that span multiple scenes.
+   *
+   * Like other value events, it also dispatches the current scenes to new
+   * subscribers. Pass `false` as the second argument of `subscribe` to only
+   * get notified about future recalculations.
+   *
+   * @example
+   * ```ts
+   * const unsubscribe = useScene().playback.onScenesRecalculated.subscribe(
+   *   scenes => console.log(scenes.at(-1)?.lastFrame),
+   *   false,
+   * );
+   * ```
+   *
+   * @eventProperty
+   */
+  public get onScenesRecalculated() {
+    return this.playback.onScenesRecalculated;
+  }
+
   public get frame(): number {
     return this.playback.frame;
   }
