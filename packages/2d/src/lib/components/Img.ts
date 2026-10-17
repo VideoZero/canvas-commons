@@ -17,7 +17,11 @@ import {
 } from '@canvas-commons/core';
 import {computed, initial, nodeName, signal} from '../decorators';
 import {DesiredLength} from '../partials';
-import {drawImage} from '../utils';
+import {
+  drawAttribution,
+  drawImage,
+  registerAttributionForSource,
+} from '../utils';
 import {resolveAssetUrl} from '../utils/assetUrl';
 import {Rect, RectProps} from './Rect';
 import imageWithoutSource from './__logs__/image-without-source';
@@ -156,6 +160,7 @@ export class Img extends Rect {
   protected image(): HTMLImageElement {
     const rawSrc = this.src();
     const {key, src} = resolveAssetUrl(rawSrc, this.view().assetHash);
+    registerAttributionForSource(rawSrc);
 
     let image = Img.pool[key];
     if (!image) {
@@ -229,6 +234,7 @@ about working with images.`,
       context.imageSmoothingEnabled = this.smoothing();
       drawImage(context, this.image(), box);
       context.restore();
+      drawAttribution(context, box, this.src(), this, alpha, this.getPath());
     }
 
     if (this.clip()) {

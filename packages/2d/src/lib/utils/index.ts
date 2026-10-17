@@ -1,3 +1,4 @@
+export * from './attribution';
 export * from './CanvasUtils';
 export * from './fonts';
 export * from './is';

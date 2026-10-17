@@ -12,7 +12,11 @@ import {
 } from '@canvas-commons/core';
 import {computed, initial, nodeName, signal} from '../decorators';
 import {DesiredLength} from '../partials';
-import {drawImage} from '../utils';
+import {
+  drawAttribution,
+  drawImage,
+  registerAttributionForSource,
+} from '../utils';
 import {resolveAssetUrl} from '../utils/assetUrl';
 import {Rect, RectProps} from './Rect';
 import reactivePlaybackRate from './__logs__/reactive-playback-rate';
@@ -170,7 +174,9 @@ export class Video extends Rect {
 
   @computed()
   protected video(): HTMLVideoElement {
-    const {key, src} = resolveAssetUrl(this.src(), this.view().assetHash);
+    const rawSrc = this.src();
+    const {key, src} = resolveAssetUrl(rawSrc, this.view().assetHash);
+    registerAttributionForSource(rawSrc);
 
     const poolKey = `${this.key}/${key}`;
     let video = Video.pool[poolKey];
@@ -268,6 +274,7 @@ export class Video extends Rect {
       context.imageSmoothingEnabled = this.smoothing();
       drawImage(context, video, box);
       context.restore();
+      drawAttribution(context, box, this.src(), this, alpha, this.getPath());
     }
 
     if (this.clip()) {
