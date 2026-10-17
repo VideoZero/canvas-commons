@@ -568,8 +568,27 @@ export class Node implements Promisable<Node> {
   public localToWorld(): DOMMatrix {
     const parent = this.parent();
     return parent
-      ? parent.localToWorld().multiply(this.localToParent())
+      ? parent.childrenToWorld().multiply(this.localToParent())
       : this.localToParent();
+  }
+
+  /**
+   * Get the matrix that places the children of this node in its local space.
+   *
+   * @remarks
+   * Children are positioned in the local space of their parent unless this
+   * returns a matrix, in which case their transforms are relative to it.
+   * Rendering, hit testing, bounding boxes and the world space of the children
+   * all follow it.
+   */
+  protected childrenToLocal(): DOMMatrix | null {
+    return null;
+  }
+
+  @computed()
+  private childrenToWorld(): DOMMatrix {
+    const matrix = this.childrenToLocal();
+    return matrix ? this.localToWorld().multiply(matrix) : this.localToWorld();
   }
 
   /**
@@ -601,7 +620,7 @@ export class Node implements Promisable<Node> {
    */
   @computed()
   public worldToParent(): DOMMatrix {
-    return this.parent()?.worldToLocal() ?? new DOMMatrix();
+    return this.parent()?.childrenToWorld().inverse() ?? new DOMMatrix();
   }
 
   /**
@@ -613,7 +632,7 @@ export class Node implements Promisable<Node> {
    */
   @computed()
   public parentToWorld(): DOMMatrix {
-    return this.parent()?.localToWorld() ?? new DOMMatrix();
+    return this.parent()?.childrenToWorld() ?? new DOMMatrix();
   }
 
   /**
@@ -1514,9 +1533,12 @@ export class Node implements Promisable<Node> {
     }
 
     const points: Vector2[] = cache.corners;
+    const childrenMatrix = this.childrenToLocal();
     for (const child of children) {
       const childCache = child.fullCacheBBox();
-      const childMatrix = child.localToParent();
+      const childMatrix = childrenMatrix
+        ? childrenMatrix.multiply(child.localToParent())
+        : child.localToParent();
       points.push(
         ...childCache.corners.map(r => r.transformAsPoint(childMatrix)),
       );
@@ -1791,8 +1813,23 @@ export class Node implements Promisable<Node> {
   }
 
   protected drawChildren(context: CanvasRenderingContext2D) {
+    const matrix = this.childrenToLocal();
+    if (matrix) {
+      context.save();
+      context.transform(
+        matrix.a,
+        matrix.b,
+        matrix.c,
+        matrix.d,
+        matrix.e,
+        matrix.f,
+      );
+    }
     for (const child of this.sortedChildren()) {
       child.render(context);
+    }
+    if (matrix) {
+      context.restore();
     }
   }
 
@@ -1847,7 +1884,12 @@ export class Node implements Promisable<Node> {
    */
   public hit(position: Vector2): Node | null {
     let hit: Node | null = null;
-    const local = position.transformAsPoint(this.localToParent().inverse());
+    const matrix = this.childrenToLocal();
+    const local = position.transformAsPoint(
+      matrix
+        ? this.localToParent().multiply(matrix).inverse()
+        : this.localToParent().inverse(),
+    );
     const children = this.children();
     for (let i = children.length - 1; i >= 0; i--) {
       hit = children[i].hit(local);
