@@ -10,7 +10,9 @@ import {
   all,
   delay,
   easeInOutCubic,
+  easeOutCubic,
   lazy,
+  sequence,
   threadable,
   useLogger,
 } from '@canvas-commons/core';
@@ -152,6 +154,9 @@ interface LatexFragmentPair extends AlignedPair<LatexFragment, LatexFragment> {
 
 const LABEL_SIZE = 16;
 
+// How much of the growth of a glyph the next one starts within, in a build.
+const GLYPH_OVERLAP = 0.3;
+
 // Everything that leaves a formula does so at the start of a tween and
 // everything that arrives does so at the end, leaving the middle to the glyphs
 // that are moving.
@@ -245,6 +250,54 @@ export class Latex extends SVGNode {
   })
   @signal()
   declare public readonly tex: Signal<string[] | string, string[], this>;
+
+  /**
+   * Bring the glyphs in one after another, each growing from nothing.
+   *
+   * @remarks
+   * Unlike {@link SVG.build}, which traces shapes, this suits glyphs, whose
+   * outlines read poorly when traced. {@link SVG.unbuild} still traces them
+   * off.
+   *
+   * @example
+   * ```tsx
+   * const tex = createRef<Latex>();
+   * view.add(<Latex ref={tex} tex="E = mc^2" fill="white" />);
+   * yield* tex().build(1.5);
+   * ```
+   *
+   * @param duration - The duration of the whole animation in seconds.
+   * @param timingFunction - The easing of each glyph growing.
+   */
+  @threadable()
+  public override *build(
+    duration = 4,
+    timingFunction: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
+    const glyphs = this.orderedCurveDescendants().map(glyph => ({
+      glyph,
+      scale: glyph.scale(),
+      opacity: glyph.opacity(),
+    }));
+    if (glyphs.length === 0) return;
+
+    for (const {glyph} of glyphs) {
+      glyph.scale(0);
+      glyph.opacity(0);
+    }
+    const perGlyph =
+      duration / (glyphs.length - GLYPH_OVERLAP * (glyphs.length - 1));
+
+    yield* sequence(
+      perGlyph * (1 - GLYPH_OVERLAP),
+      ...glyphs.map(({glyph, scale, opacity}) =>
+        all(
+          glyph.opacity(opacity, perGlyph * 0.5),
+          glyph.scale(scale, perGlyph, timingFunction),
+        ),
+      ),
+    );
+  }
 
   public constructor(props: LatexProps) {
     super({
