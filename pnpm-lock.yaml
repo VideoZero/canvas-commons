@@ -768,6 +768,31 @@ importers:
         specifier: ^20.19.43
         version: 20.19.43
 
+  packages/vz-showcase:
+    dependencies:
+      '@canvas-commons/2d':
+        specifier: workspace:^
+        version: link:../2d
+      '@canvas-commons/core':
+        specifier: workspace:^
+        version: link:../core
+    devDependencies:
+      '@canvas-commons/editor':
+        specifier: workspace:^
+        version: link:../editor
+      '@canvas-commons/vite-plugin':
+        specifier: workspace:^
+        version: link:../vite-plugin
+      '@types/node':
+        specifier: ^20.19.43
+        version: 20.19.43
+      playwright:
+        specifier: ^1.63.0
+        version: 1.63.0
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.0(@types/node@20.19.43)(jiti@2.6.1)(sass@1.104.1)(terser@5.51.2)(yaml@2.9.1)
+
   packages/webcodecs:
     dependencies:
       '@canvas-commons/core':
