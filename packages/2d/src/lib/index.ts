@@ -1,3 +1,4 @@
+export * from './animations';
 export * from './code';
 export * from './components';
 export * from './curves';
