@@ -27,9 +27,9 @@ describe('geoData', () => {
   test('joins names onto the configured base URL', () => {
     configureGeoData({baseUrl: '/geo'});
     expect(geoData('germany-states')).toBe('/geo/germany-states.json');
-    configureGeoData({baseUrl: 'https://videozero.ai/geo/'});
+    configureGeoData({baseUrl: 'https://example.com/geo/'});
     expect(geoData('germany-states')).toBe(
-      'https://videozero.ai/geo/germany-states.json',
+      'https://example.com/geo/germany-states.json',
     );
   });
 

@@ -6,7 +6,7 @@ export type WorldAtlasResolution = '110m' | '50m' | '10m';
 export interface GeoDataConfig {
   /**
    * Base URL for named datasets resolved by {@link geoData}, e.g.
-   * `'/geo'` or `'https://videozero.ai/geo'`. No trailing slash needed.
+   * `'/geo'` or `'https://example.com/geo'`. No trailing slash needed.
    */
   baseUrl?: string | null;
 
