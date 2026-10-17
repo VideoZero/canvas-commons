@@ -19,10 +19,12 @@ it out of the production bundle.
 pnpm --filter @canvas-commons/ffmpeg run dev      # tsdown --watch
 pnpm --filter @canvas-commons/ffmpeg run build    # tsdown
 pnpm --filter @canvas-commons/ffmpeg run lint:pkg
+pnpm --filter @canvas-commons/ffmpeg run test     # vitest
 ```
 
-No test script. Exercised end-to-end through `pnpm template:dev` and any
-downstream project that wires the plugin.
+The unit tests cover the client's frame protocol. The export itself is exercised
+end-to-end through `pnpm template:dev` and any downstream project that wires the
+plugin.
 
 ## Where things live
 
