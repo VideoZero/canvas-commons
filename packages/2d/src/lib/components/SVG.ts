@@ -10,14 +10,21 @@ import {
   TimingFunction,
   Vector2,
   all,
+  clamp,
   clampRemap,
   delay,
   easeInOutSine,
+  easeOutCubic,
+  easeOutSine,
   isReactive,
   lazy,
+  linear,
+  sequence,
   threadable,
   tween,
   useLogger,
+  useRandom,
+  waitFor,
 } from '@canvas-commons/core';
 import {computed, signal} from '../decorators';
 import {PathMorpher, defaultMorpher} from '../morphers';
@@ -25,7 +32,9 @@ import {DesiredLength, Gradient, PossibleCanvasStyle} from '../partials';
 import {applyTransformDiff, getTransformDiff} from '../utils/diff';
 import {getDomContainer} from '../utils/domContainer';
 import {resolveSVGPaintServer} from '../utils/svgPaintServer';
+import {fadeColor} from '../utils/fadeColor';
 import {Circle, CircleProps} from './Circle';
+import {Curve} from './Curve';
 import {Img, ImgProps} from './Img';
 import {Layout} from './Layout';
 import {Line, LineProps} from './Line';
@@ -75,6 +84,65 @@ export interface SVGDocument {
 export interface SVGDocumentData {
   size: Vector2;
   nodes: SVGShapeData[];
+}
+
+/**
+ * The order {@link SVG.build} and {@link SVG.unbuild} sequence shapes in.
+ */
+export type SVGBuildOrder = 'forward' | 'reverse' | 'random';
+
+export interface SVGBuildOptions {
+  /**
+   * How much of the drawing of a shape the next one starts within, from `0`
+   * (one after another) to `1` (all at once).
+   *
+   * @remarks
+   * The total duration stays the same, so less overlap draws each shape
+   * faster.
+   *
+   * @defaultValue 0.5
+   */
+  overlap?: number;
+  /**
+   * The order to sequence shapes in.
+   *
+   * @remarks
+   * `'random'` is seeded by the scene, so a shuffled build plays the same way
+   * every time.
+   *
+   * @defaultValue 'forward'
+   */
+  order?: SVGBuildOrder;
+  /**
+   * Whether a shape with a fill but no stroke borrows an outline to draw.
+   *
+   * @remarks
+   * With an outline, a line traces the shape, its fill fades in behind it, and
+   * the line goes. Without one, the fill fades in over the whole time of the
+   * shape. Shapes with a stroke of their own always trace it.
+   *
+   * @defaultValue true
+   */
+  outline?: boolean;
+  /**
+   * The width of a borrowed outline, in the units of the document.
+   *
+   * @remarks
+   * A document whose units are far from its display size needs a wider one,
+   * such as a typeset formula with a thousand units to the em.
+   *
+   * @defaultValue 1
+   */
+  outlineWidth?: number;
+}
+
+/** The paint of a curve as the document set it, before a build changed it. */
+interface AuthoredPaint {
+  fill: SignalValue<PossibleCanvasStyle> | undefined;
+  stroke: SignalValue<PossibleCanvasStyle> | undefined;
+  lineWidth: SignalValue<number> | undefined;
+  strokeFirst: SignalValue<boolean> | undefined;
+  end: SignalValue<number> | undefined;
 }
 
 export interface SVGProps extends ShapeProps {
@@ -133,6 +201,8 @@ export class SVG extends Shape {
 
   protected readonly morpher: PathMorpher;
 
+  private readonly authoredPaints = new WeakMap<Curve, AuthoredPaint>();
+
   private lastTweenTargetSrc: string | null = null;
   private lastTweenTargetDocument: SVGDocument | null = null;
 
@@ -144,6 +214,243 @@ export class SVG extends Shape {
     this.wrapper.children(this.documentNodes);
     this.wrapper.scale(this.wrapperScale);
     this.add(this.wrapper);
+  }
+
+  /**
+   * All curves in the document, in document order.
+   */
+  @computed()
+  public orderedCurveDescendants(): Curve[] {
+    return this.wrapper.findAll((node): node is Curve => node instanceof Curve);
+  }
+
+  /**
+   * Draw the document on, one shape after another.
+   *
+   * @remarks
+   * Each shape traces its stroke and then fades its fill in. A shape with a
+   * fill but no stroke traces a borrowed outline; see
+   * {@link SVGBuildOptions.outline}.
+   *
+   * @example
+   * ```tsx
+   * const svg = createRef<SVG>();
+   * view.add(<SVG ref={svg} svg={logo} />);
+   * yield* svg().build(2, undefined, {order: 'random', overlap: 0.8});
+   * ```
+   *
+   * @param duration - The duration of the whole animation in seconds.
+   * @param timingFunction - The easing of each trace. Without one, a trace
+   *                         around a filled shape runs at a constant speed
+   *                         and any other eases out.
+   * @param options - See {@link SVGBuildOptions}.
+   */
+  @threadable()
+  public *build(
+    duration = 4,
+    timingFunction?: TimingFunction,
+    options: SVGBuildOptions = {},
+  ): ThreadGenerator {
+    yield* this.sequenceBuild(true, duration, timingFunction, options);
+  }
+
+  /**
+   * Draw the document off: {@link build} played backwards.
+   *
+   * @remarks
+   * Each shape fades its fill out and retracts its stroke, which leaves the
+   * document invisible but intact. A later {@link build} draws it on with the
+   * paint it was authored with.
+   *
+   * `order` names the build to undo, so the options of a build undo it.
+   *
+   * @example
+   * ```tsx
+   * yield* svg().build(2, undefined, {order: 'reverse'});
+   * yield* svg().unbuild(2, undefined, {order: 'reverse'});
+   * ```
+   *
+   * @param duration - The duration of the whole animation in seconds.
+   * @param timingFunction - The easing of each trace.
+   * @param options - See {@link SVGBuildOptions}.
+   */
+  @threadable()
+  public *unbuild(
+    duration = 4,
+    timingFunction?: TimingFunction,
+    options: SVGBuildOptions = {},
+  ): ThreadGenerator {
+    yield* this.sequenceBuild(false, duration, timingFunction, options);
+  }
+
+  /**
+   * The paint a curve was authored with.
+   *
+   * @remarks
+   * Builds change the paint of the curves they draw, so the first one to see
+   * a curve records it for the ones that follow.
+   */
+  private authoredPaint(curve: Curve): AuthoredPaint {
+    let paint = this.authoredPaints.get(curve);
+    if (!paint) {
+      paint = {
+        fill: curve.fill.context.raw(),
+        stroke: curve.stroke.context.raw(),
+        lineWidth: curve.lineWidth.context.raw(),
+        strokeFirst: curve.strokeFirst.context.raw(),
+        end: curve.end.context.raw(),
+      };
+      this.authoredPaints.set(curve, paint);
+    }
+    return paint;
+  }
+
+  private static restore<T>(
+    signal: {context: {setter(value: SignalValue<T>): unknown}},
+    value: SignalValue<T> | undefined,
+  ) {
+    if (value !== undefined) signal.context.setter(value);
+  }
+
+  @threadable()
+  protected *sequenceBuild(
+    draw: boolean,
+    duration: number,
+    timingFunction: TimingFunction | undefined,
+    {
+      overlap = 0.5,
+      order = 'forward',
+      outline = true,
+      outlineWidth = 1,
+    }: SVGBuildOptions,
+  ): ThreadGenerator {
+    const curves = this.orderedCurveDescendants();
+    if (curves.length === 0) return;
+
+    const traceEasing = timingFunction ?? linear;
+    const curveEasing = timingFunction ?? easeOutCubic;
+
+    const shapes = curves.map(curve => {
+      const authored = this.authoredPaint(curve);
+      if (draw) SVG.restore(curve.fill, authored.fill);
+      SVG.restore(curve.stroke, authored.stroke);
+      SVG.restore(curve.lineWidth, authored.lineWidth);
+      SVG.restore(curve.strokeFirst, authored.strokeFirst);
+      const fill = curve.fill();
+      const fade = fadeColor(fill);
+      const stroked = curve.stroke() !== null && curve.lineWidth() > 0;
+      return {
+        curve,
+        authored,
+        fade,
+        hasFill: fill !== null,
+        borrowed: !stroked && outline && fade !== null,
+        fillOnly: !stroked && !(outline && fade !== null),
+      };
+    });
+
+    if (draw) {
+      for (const {curve} of shapes) {
+        curve.end(0);
+        curve.fill(null);
+      }
+    }
+
+    const clamped = clamp(0, 1, overlap);
+    const perShape = duration / (shapes.length - clamped * (shapes.length - 1));
+    const stagger = perShape * (1 - clamped);
+    const sequenced = SVG.inOrder(shapes, order);
+    if (!draw) sequenced.reverse();
+
+    yield* sequence(
+      stagger,
+      ...sequenced.map(
+        ({curve, authored, fade, hasFill, borrowed, fillOnly}) => {
+          const traced = hasFill && !fillOnly;
+          const strokeDuration = traced ? perShape * 0.7 : perShape;
+          const fillDuration = traced ? perShape * 0.3 : perShape;
+          const easing = hasFill ? traceEasing : curveEasing;
+
+          function* strokePhase(): ThreadGenerator {
+            if (borrowed) curve.lineWidth(outlineWidth);
+            if (draw) {
+              yield curve.end(1, strokeDuration, easing);
+              yield* waitFor(strokeDuration);
+            } else {
+              yield* curve.end(0, strokeDuration, easing);
+            }
+          }
+
+          function* fillPhase(): ThreadGenerator {
+            if (!fade) {
+              if (draw) SVG.restore(curve.fill, authored.fill);
+              else curve.fill(null);
+              yield* waitFor(fillDuration);
+              return;
+            }
+            const alpha = fade.alpha();
+            yield* tween(fillDuration, value => {
+              const progress = draw
+                ? easeOutSine(value)
+                : 1 - easeOutSine(value);
+              curve.fill(fade.alpha(alpha * progress));
+              if (borrowed) {
+                curve.lineWidth(Math.max(0, outlineWidth * (1 - progress)));
+              }
+            });
+            if (draw) SVG.restore(curve.fill, authored.fill);
+            else curve.fill(null);
+          }
+
+          function* animate(): ThreadGenerator {
+            if (!hasFill) {
+              yield* strokePhase();
+            } else if (fillOnly) {
+              if (draw) curve.end(1);
+              yield* fillPhase();
+              if (!draw) curve.end(0);
+            } else {
+              if (borrowed) {
+                curve.strokeFirst(true);
+                curve.stroke(fade);
+              }
+              if (draw) {
+                yield* strokePhase();
+                yield* fillPhase();
+              } else {
+                yield* fillPhase();
+                yield* strokePhase();
+              }
+            }
+
+            if (draw) {
+              SVG.restore(curve.end, authored.end);
+              SVG.restore(curve.lineWidth, authored.lineWidth);
+              SVG.restore(curve.stroke, authored.stroke);
+              SVG.restore(curve.strokeFirst, authored.strokeFirst);
+            } else if (borrowed) {
+              SVG.restore(curve.lineWidth, authored.lineWidth);
+              SVG.restore(curve.stroke, authored.stroke);
+              SVG.restore(curve.strokeFirst, authored.strokeFirst);
+            }
+          }
+          return animate();
+        },
+      ),
+    );
+  }
+
+  /** A copy of `items` in the order `order` asks for. */
+  private static inOrder<T>(items: T[], order: SVGBuildOrder): T[] {
+    if (order === 'reverse') return [...items].reverse();
+    if (order !== 'random') return [...items];
+    const random = useRandom();
+    const shuffled = [...items];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = random.nextInt(0, i + 1);
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
   }
 
   /**

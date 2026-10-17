@@ -1,5 +1,6 @@
 import {afterAll, beforeAll, describe, expect, it} from 'vitest';
 import {Line} from '../Line';
+import {Rect} from '../Rect';
 import {mockScene2D} from './mockScene2D';
 
 class RecordingPath {
@@ -23,9 +24,19 @@ class RecordingPath {
 }
 
 class TestLine extends Line {
+  public pathData() {
+    return this.getPathData();
+  }
+
   public commands(): string[] {
     const {path} = this.curveDrawingInfo();
     return path instanceof RecordingPath ? path.commands : [];
+  }
+}
+
+class TestRect extends Rect {
+  public pathData() {
+    return this.getPathData();
   }
 }
 
@@ -60,5 +71,19 @@ describe('curve drawing', () => {
     expect(line(0, 0).commands()).toEqual([]);
     expect(line(0.5, 0.5).commands()).toEqual([]);
     expect(line(1, 1).commands()).toEqual([]);
+  });
+
+  it('describes only the visible part as path data', () => {
+    expect(line(0, 0.5).pathData()).toBe('M 0 0 L 50 0');
+    expect(line(0.25, 0.75).pathData()).toBe('M 25 0 L 75 0');
+  });
+
+  it('describes only the visible part of a rect as path data', () => {
+    const rect = new TestRect({size: 100});
+    const full = rect.pathData();
+    rect.end(0.25);
+
+    expect(rect.pathData()).not.toBe(full);
+    expect(rect.pathData()).toBe('M -50 -50 L 50 -50');
   });
 });

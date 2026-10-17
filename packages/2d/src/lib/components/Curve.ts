@@ -3,8 +3,14 @@ import {
   SerializedVector2,
   SignalValue,
   SimpleSignal,
+  ThreadGenerator,
+  TimingFunction,
   Vector2,
   clamp,
+  easeOutCubic,
+  easeOutSine,
+  threadable,
+  tween,
 } from '@canvas-commons/core';
 import {CurveDrawingInfo} from '../curves/CurveDrawingInfo';
 import {CurvePoint} from '../curves/CurvePoint';
@@ -13,7 +19,11 @@ import {getPointAtDistance} from '../curves/getPointAtDistance';
 import {computed, initial, nodeName, signal} from '../decorators';
 import {DesiredLength} from '../partials';
 import {lineTo, moveTo, resolveCanvasStyle} from '../utils';
+import {fadeColor} from '../utils/fadeColor';
 import {Shape, ShapeProps} from './Shape';
+
+// How far into a build the fill starts fading in.
+const BUILD_FILL_START = 0.7;
 
 export interface CurveProps extends ShapeProps {
   /**
@@ -295,6 +305,68 @@ export abstract class Curve extends Shape {
     // do nothing
   }
 
+  /**
+   * How much of the visible part of the curve {@link build} has drawn.
+   *
+   * @remarks
+   * It scales {@link end}, so a build leaves the `end` of the curve alone.
+   */
+  @initial(1)
+  @signal()
+  declare protected readonly buildProgress: SimpleSignal<number, this>;
+
+  /**
+   * The end of the visible part of the curve, as drawn.
+   */
+  @computed()
+  protected drawnEnd(): number {
+    return this.end() * this.buildProgress();
+  }
+
+  /**
+   * Draw the curve on: trace it from its start, then fade its fill in.
+   *
+   * @remarks
+   * The fill fades in over the last part of the trace. A gradient fades
+   * through its middle stop and a pattern simply stays, since neither can
+   * fade.
+   *
+   * @example
+   * ```tsx
+   * const circle = createRef<Circle>();
+   * view.add(<Circle ref={circle} size={200} stroke="white" fill="red" />);
+   * yield* circle().build(1);
+   * ```
+   *
+   * @param duration - The duration of the animation in seconds.
+   * @param timingFunction - The easing of the trace.
+   */
+  @threadable()
+  public *build(
+    duration = 0.6,
+    timingFunction: TimingFunction = easeOutCubic,
+  ): ThreadGenerator {
+    const fill = this.fill.context.raw();
+    const fade = fadeColor(this.fill());
+    const alpha = fade?.alpha() ?? 0;
+    if (fade) this.fill(null);
+    this.buildProgress(0);
+
+    yield* tween(duration, value => {
+      const progress = timingFunction(value);
+      this.buildProgress(progress);
+      if (fade && progress > BUILD_FILL_START) {
+        const fill = easeOutSine(
+          (progress - BUILD_FILL_START) / (1 - BUILD_FILL_START),
+        );
+        this.fill(fade.alpha(alpha * fill));
+      }
+    });
+
+    this.buildProgress(1);
+    if (fade && fill !== undefined) this.fill(fill);
+  }
+
   @computed()
   protected curveDrawingInfo(): CurveDrawingInfo {
     const path = new Path2D();
@@ -302,7 +374,7 @@ export abstract class Curve extends Shape {
     const profile = this.profile();
 
     let start = this.percentageToDistance(this.start());
-    let end = this.percentageToDistance(this.end());
+    let end = this.percentageToDistance(this.drawnEnd());
     if (start > end) {
       [start, end] = [end, start];
     }
@@ -425,6 +497,9 @@ export abstract class Curve extends Shape {
 
   @computed()
   protected override getPathData(): string {
+    if (this.isClipped()) {
+      return this.visiblePathData();
+    }
     return profileToSVGPathData(this.profile());
   }
 
@@ -468,6 +543,54 @@ export abstract class Curve extends Shape {
       : matrix;
   }
 
+  /**
+   * Whether {@link start} or {@link end} hide part of the curve.
+   */
+  protected isClipped(): boolean {
+    return this.start() !== 0 || this.drawnEnd() !== 1;
+  }
+
+  /**
+   * The path data of the part of the curve between {@link start} and
+   * {@link end}.
+   */
+  @computed()
+  protected visiblePathData(): string {
+    let start = this.percentageToDistance(this.start());
+    let end = this.percentageToDistance(this.drawnEnd());
+    if (start > end) {
+      [start, end] = [end, start];
+    }
+
+    const commands: string[] = [];
+    let length = 0;
+    let last: Vector2 | null = null;
+    for (const segment of this.profile().segments) {
+      const previousLength = length;
+      length += segment.arcLength;
+      if (length <= start || segment.arcLength === 0) continue;
+      if (previousLength >= end) break;
+
+      const relativeStart = clamp(
+        0,
+        1,
+        (start - previousLength) / segment.arcLength,
+      );
+      const relativeEnd = clamp(
+        0,
+        1,
+        (end - previousLength) / segment.arcLength,
+      );
+      if (relativeEnd > relativeStart) {
+        const from = segment.getPoint(relativeStart).position;
+        const move = last === null || !from.equals(last);
+        commands.push(segment.toSVGCommands(relativeStart, relativeEnd, move));
+        last = segment.getPoint(relativeEnd).position;
+      }
+    }
+    return commands.join(' ');
+  }
+
   protected override getCacheBBox(): BBox {
     const box = this.childrenBBox();
     const arrowSize =
@@ -498,7 +621,8 @@ export abstract class Curve extends Shape {
       !this.startArrow.isInitial() ||
       !this.end.isInitial() ||
       !this.endOffset.isInitial() ||
-      !this.endArrow.isInitial()
+      !this.endArrow.isInitial() ||
+      this.buildProgress() < 1
     );
   }
 
