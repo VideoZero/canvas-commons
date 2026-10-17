@@ -21,9 +21,10 @@ import {
 } from '@canvas-commons/core';
 import {computed, signal} from '../decorators';
 import {PathMorpher, defaultMorpher} from '../morphers';
-import {DesiredLength, PossibleCanvasStyle} from '../partials';
+import {DesiredLength, Gradient, PossibleCanvasStyle} from '../partials';
 import {applyTransformDiff, getTransformDiff} from '../utils/diff';
 import {getDomContainer} from '../utils/domContainer';
+import {resolveSVGPaintServer} from '../utils/svgPaintServer';
 import {Circle, CircleProps} from './Circle';
 import {Img, ImgProps} from './Img';
 import {Layout} from './Layout';
@@ -749,6 +750,40 @@ export class SVG extends Shape {
     return computed === SVG.currentColorSentinel ? 'currentColor' : computed;
   }
 
+  private static getPaint(
+    element: SVGGraphicsElement,
+    name: 'fill' | 'stroke',
+  ): SignalValue<PossibleCanvasStyle> | undefined {
+    const value = this.getPresentationProperty(element, name);
+    if (value === null) return undefined;
+    if (!value.startsWith('url(')) return value;
+
+    let root: Element = element;
+    while (root.parentElement instanceof SVGElement) {
+      root = root.parentElement;
+    }
+    return resolveSVGPaintServer(value, root);
+  }
+
+  /**
+   * Move gradients in user space into a node whose origin is `origin`.
+   */
+  private static paintAt(style: ShapeProps, origin: Vector2): ShapeProps {
+    const move = (paint: ShapeProps['fill']) =>
+      paint instanceof Gradient && !paint.cssRelative()
+        ? new Gradient({
+            type: paint.type(),
+            from: paint.from().sub(origin),
+            to: paint.to().sub(origin),
+            angle: paint.angle(),
+            fromRadius: paint.fromRadius(),
+            toRadius: paint.toRadius(),
+            stops: paint.stops(),
+          })
+        : paint;
+    return {...style, fill: move(style.fill), stroke: move(style.stroke)};
+  }
+
   /**
    * Convert the SVG element's style to a Canvas Commons Shape properties.
    * @param element - An SVG element whose style should be converted.
@@ -763,11 +798,8 @@ export class SVG extends Shape {
     );
 
     return {
-      fill:
-        this.getPresentationProperty(element, 'fill') ?? inheritedStyle.fill,
-      stroke:
-        this.getPresentationProperty(element, 'stroke') ??
-        inheritedStyle.stroke,
+      fill: this.getPaint(element, 'fill') ?? inheritedStyle.fill,
+      stroke: this.getPaint(element, 'stroke') ?? inheritedStyle.stroke,
       lineWidth: Number.isFinite(lineWidth)
         ? lineWidth
         : inheritedStyle.lineWidth,
@@ -922,7 +954,13 @@ export class SVG extends Shape {
           height,
           radius: [rx, ry],
           ...SVG.getMatrixTransformation(transformation),
-          ...style,
+          ...SVG.paintAt(
+            style,
+            center.add([
+              SVG.parseNumberAttribute(child, 'x'),
+              SVG.parseNumberAttribute(child, 'y'),
+            ]),
+          ),
         } as RectProps,
       };
     } else if (['circle', 'ellipse'].includes(child.tagName)) {
@@ -943,7 +981,7 @@ export class SVG extends Shape {
         type: Circle,
         props: {
           size,
-          ...style,
+          ...SVG.paintAt(style, new Vector2(cx, cy)),
           ...SVG.getMatrixTransformation(transformation),
         } as CircleProps,
       };
