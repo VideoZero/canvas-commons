@@ -232,6 +232,20 @@ function repairTex(tex: string, error: string): string | null {
  * ```
  */
 export class Latex extends SVGNode {
+  /**
+   * Render the tex of every new Latex node as soon as it is created.
+   *
+   * @remarks
+   * Invalid tex is otherwise only reported once the node is first drawn. With
+   * this enabled, the error surfaces where the node is created instead.
+   *
+   * @example
+   * ```ts
+   * Latex.eagerValidation = true;
+   * ```
+   */
+  public static eagerValidation = false;
+
   @lazy(() => {
     return parseFloat(
       window.getComputedStyle(SVGNode.containerElement).fontSize,
@@ -288,6 +302,9 @@ export class Latex extends SVGNode {
       svg: '',
     });
     this.svg(this.latexSVG);
+    if (Latex.eagerValidation) {
+      this.latexSVG();
+    }
 
     const overlay = new Node({});
     overlay.children(this.fragmentOverlay);

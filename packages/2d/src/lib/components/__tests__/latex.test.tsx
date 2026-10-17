@@ -2,9 +2,10 @@ import {
   SerializedVector2,
   Vector2,
   linear,
+  useLogger,
   waitFor,
 } from '@canvas-commons/core';
-import {describe, expect, it} from 'vitest';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 import {Latex, Node, Rect, SVGDocument, SVGShapeData} from '..';
 import {generatorTest} from './generatorTest';
 import {mockScene2D} from './mockScene2D';
@@ -55,6 +56,11 @@ class TestLatex extends Latex {
 describe('Latex', () => {
   mockScene2D();
 
+  afterEach(() => {
+    Latex.eagerValidation = false;
+    vi.restoreAllMocks();
+  });
+
   describe('fragments', () => {
     it('keeps nested braces inside a fragment', () => {
       const tex = new Latex({tex: '{{e^{i\\pi}}} + {{1}}'});
@@ -88,6 +94,25 @@ describe('Latex', () => {
         expect(tex.renderFragment(fragment)).not.toContain('data-mjx-error');
       },
     );
+  });
+
+  describe('eagerValidation', () => {
+    it('reports invalid tex once the node is drawn', () => {
+      const error = vi.spyOn(useLogger(), 'error');
+
+      new Latex({tex: '\\frac{'});
+
+      expect(error).not.toHaveBeenCalled();
+    });
+
+    it('reports invalid tex when the node is created', () => {
+      Latex.eagerValidation = true;
+      const error = vi.spyOn(useLogger(), 'error');
+
+      new Latex({tex: '\\frac{'});
+
+      expect(error).toHaveBeenCalledOnce();
+    });
   });
 
   describe('fragment queries', () => {
