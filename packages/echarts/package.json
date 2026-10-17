@@ -10,6 +10,10 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./vite": {
+      "types": "./lib/vite.d.ts",
+      "default": "./lib/vite.js"
+    },
     "./package.json": "./package.json"
   },
   "engines": {
@@ -36,7 +40,13 @@
     "lib"
   ],
   "peerDependencies": {
-    "echarts": "^6.0.0"
+    "echarts": "^6.0.0",
+    "vite": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@canvas-commons/2d": "workspace:^",
@@ -47,6 +57,7 @@
     "echarts": "^6.1.0",
     "geometry-polyfill": "^1.0.7",
     "jsdom": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:"
   }
 }

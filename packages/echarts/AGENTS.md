@@ -18,6 +18,7 @@ pnpm --filter @canvas-commons/echarts run lint:pkg
 ```
 src/EChart.ts   The node: chart lifecycle, scene clock, coordinate mapping.
 src/themes/     Resolved colors of the built-in light and dark themes.
+src/vite.ts     Optional Vite plugin that resolves echarts/zrender to sources.
 ```
 
 ## Traps
@@ -34,6 +35,12 @@ bumping the `echarts`/`zrender` major version.
 **`devicePixelRatio` and `chartScale` recreate the chart.** zrender fixes the
 pixel ratio at init, so the instance is disposed and the current option is
 re-applied without animation.
+
+**Source checkouts need `useDefineForClassFields: false`.** The echarts and
+zrender sources declare fields that their prototypes define. `vite.ts` compiles
+them with oxc's `setPublicClassFields` and
+`removeClassFieldsWithoutInitializer`, both for the dependency optimizer and for
+its own `transform` hook during builds.
 
 ## Used in the wild
 
