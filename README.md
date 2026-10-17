@@ -28,6 +28,65 @@ synchronize them with voice-overs.
 Aside from providing the preview, the editor allows you to edit certain aspects
 of the animation which could otherwise be tedious.
 
+## About this fork
+
+This is VideoZero's fork of Motion Canvas. It branched from upstream `main` in
+February 2025 and cherry-picks selected fixes from
+[Canvas Commons](https://github.com/canvas-commons/canvas-commons), the
+community continuation of the project. It is maintained for our own use; issues
+and pull requests are welcome, but support is best-effort and nothing from this
+fork is published to npm.
+
+### New packages
+
+| Name      | Description                                                                                                                                                                |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `three`   | Three.js scenes as Motion Canvas nodes: meshes, lights and an animatable camera driven by signals, 2D content on mesh surfaces, clay and glass materials, Three.js addons. |
+| `d3-geo`  | Animated maps rendered with d3-geo: camera flights, region highlights, choropleths, routes and an orthographic globe. Deterministic under frame stepping.                  |
+| `rig`     | 2D rigging from annotated SVG art, role-based retargeting, a FABRIK IK solver and character animation.                                                                     |
+| `echarts` | Apache ECharts charts as Motion Canvas nodes.                                                                                                                              |
+
+### Additions to `core` and `2d`
+
+- **Text:** character splitting and text animations, balanced wrapping,
+  centering on cap height, correct placement of wrapped right-to-left text,
+  letter spacing that stays centered, web font loading before measuring (with a
+  pluggable Google Fonts resolver) and warnings for overlapping lines.
+- **Layout:** FLIP animations (`recordFlipState`, `tweenFlip`, `insertAnimated`,
+  `removeAnimated`), a `Transform3D` node with depth, shading and shadows, and a
+  `ScenePlayback` node that plays a scene inside a scene.
+- **SVG and LaTeX:** default morphers, build/unbuild options and an
+  `outlineWidth` build option, computed styles, eager LaTeX validation and
+  `getShapesById`.
+- **Drawing:** CSS gradients, an `Attribution` node and
+  `alignChildren`/`uprightRotation` on `Line`.
+- **Media:** a shared `ResourceCache`, and images and videos that fail to load
+  are skipped instead of halting playback.
+- **Core:** expressive easings (wiggle, physics bounce and more), mipmapped
+  shaders and bilinear sampling in shader effects, sound fades and `addAt`,
+  waiting on font loading, and an `onScenesRecalculated` event.
+- **Diagnostics:** warnings for nodes that are visible before their entrance
+  animation.
+
+### From Canvas Commons
+
+These changes were written for Canvas Commons and cherry-picked here:
+
+- The `shiki` package, a Shiki-based code highlighter for the `Code` node.
+- Hand-drawn shapes via rough.js.
+- Custom SVG morphers, tweening nested SVGs and tweening LaTeX with `map`.
+- Transforms in component and origin signals, and tweening absolute origin
+  transforms.
+- The text segmenter used for splitting text, plus smaller 2D fixes.
+
+### Breaking changes
+
+- `Icon` extends `SVG` (from Canvas Commons).
+- `Img` `src` uses a custom tween (from Canvas Commons).
+- chroma.js is updated to v3 (from Canvas Commons).
+- Defaults: `strokeFirst` is `true`, text smoothing is on and the default font
+  is Inter with fallbacks.
+
 ## Using Motion Canvas
 
 Check out our [getting started][docs] guide to learn how to use Motion Canvas.
@@ -41,12 +100,17 @@ The project is maintained as one monorepo containing the following packages:
 | `2d`          | The default renderer for 2D motion graphics                    |
 | `core`        | All logic related to running and rendering animations.         |
 | `create`      | A package for bootstrapping new projects.                      |
+| `d3-geo`      | Animated maps rendered with d3-geo.                            |
 | `docs`        | [Our documentation website.][docs]                             |
 | `e2e`         | End-to-end tests.                                              |
+| `echarts`     | Apache ECharts integration.                                    |
 | `examples`    | Animation examples used in documentation.                      |
 | `internal`    | Internal helpers used for building the packages.               |
 | `player`      | A custom element for displaying animations in a browser.       |
+| `rig`         | 2D rigging, IK and character animation.                        |
+| `shiki`       | A Shiki code highlighter.                                      |
 | `template`    | A template project included for developer's convenience.       |
+| `three`       | Three.js 3D scenes as Motion Canvas nodes.                     |
 | `ui`          | The user interface used for editing.                           |
 | `vite-plugin` | A plugin for Vite used for developing and bundling animations. |
 
