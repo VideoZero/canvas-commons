@@ -9,6 +9,9 @@ export type ThreeModule = typeof THREE;
 let LOADED: ThreeModule | null = null;
 let PENDING: Promise<ThreeModule> | null = null;
 let LOAD: () => Promise<ThreeModule> = () => import('three');
+let LOAD_ADDON:
+  ((name: ThreeAddonName, revision: string) => Promise<unknown>) | null = null;
+const ADDONS = new Map<ThreeAddonName, Promise<unknown>>();
 
 /**
  * Flips to `true` once the runtime is available. Every access to the runtime
@@ -43,6 +46,20 @@ export interface ThreeConfig {
    * instead of importing a second copy.
    */
   module?: ThreeModule;
+  /**
+   * How {@link loadThreeAddon} fetches an addon module, given its name and
+   * the loaded runtime's `REVISION` (e.g. `'186'`).
+   *
+   * @remarks
+   * A module whose default export is a factory `(THREE) => exports` is called
+   * with the loaded runtime, so a host can serve addons that bind to the
+   * runtime this loader holds rather than importing a second copy of
+   * `three`, and a cached addon never meets a runtime of another revision.
+   * Any other module namespace (e.g. `import('three/addons/…')` on a host
+   * that bundles `three` itself) is returned as is. Without it,
+   * `loadThreeAddon` rejects.
+   */
+  loadAddon?: (name: ThreeAddonName, revision: string) => Promise<unknown>;
 }
 
 /**
@@ -52,6 +69,9 @@ export interface ThreeConfig {
 export function configureThree(config: ThreeConfig) {
   if (config.load) {
     LOAD = config.load;
+  }
+  if (config.loadAddon) {
+    LOAD_ADDON = config.loadAddon;
   }
   if (config.module && !LOADED) {
     setLoaded(config.module);
@@ -139,4 +159,101 @@ export function getThree(): ThreeModule {
     );
   }
   return loaded;
+}
+
+/**
+ * The Three.js addons (three/examples/jsm) {@link loadThreeAddon} can fetch.
+ * Related classes share one addon: `Line2` also carries `LineGeometry`,
+ * `LineMaterial`, `LineSegments2` and `LineSegmentsGeometry`; `TextGeometry`
+ * carries `FontLoader` and `Font`; `ParametricGeometry` carries the
+ * `klein` / `plane` / `mobius` / `mobius3d` surface functions.
+ */
+export const THREE_ADDONS = [
+  'RoundedBoxGeometry',
+  'BufferGeometryUtils',
+  'TextGeometry',
+  'ConvexGeometry',
+  'ParametricGeometry',
+  'Line2',
+  'RoomEnvironment',
+  'GLTFLoader',
+  'SVGLoader',
+  'SimplexNoise',
+  'ImprovedNoise',
+  'MeshSurfaceSampler',
+] as const;
+
+export type ThreeAddonName = (typeof THREE_ADDONS)[number];
+
+/** What each addon resolves to. */
+/* eslint-disable @typescript-eslint/naming-convention -- Three.js addon names */
+export interface ThreeAddons {
+  RoundedBoxGeometry: typeof import('three/examples/jsm/geometries/RoundedBoxGeometry.js');
+  BufferGeometryUtils: typeof import('three/examples/jsm/utils/BufferGeometryUtils.js');
+  TextGeometry: typeof import('three/examples/jsm/geometries/TextGeometry.js') &
+    typeof import('three/examples/jsm/loaders/FontLoader.js');
+  ConvexGeometry: typeof import('three/examples/jsm/geometries/ConvexGeometry.js');
+  ParametricGeometry: typeof import('three/examples/jsm/geometries/ParametricGeometry.js') &
+    typeof import('three/examples/jsm/geometries/ParametricFunctions.js');
+  Line2: typeof import('three/examples/jsm/lines/Line2.js') &
+    typeof import('three/examples/jsm/lines/LineGeometry.js') &
+    typeof import('three/examples/jsm/lines/LineMaterial.js') &
+    typeof import('three/examples/jsm/lines/LineSegments2.js') &
+    typeof import('three/examples/jsm/lines/LineSegmentsGeometry.js');
+  RoomEnvironment: typeof import('three/examples/jsm/environments/RoomEnvironment.js');
+  GLTFLoader: typeof import('three/examples/jsm/loaders/GLTFLoader.js');
+  SVGLoader: typeof import('three/examples/jsm/loaders/SVGLoader.js');
+  SimplexNoise: typeof import('three/examples/jsm/math/SimplexNoise.js');
+  ImprovedNoise: typeof import('three/examples/jsm/math/ImprovedNoise.js');
+  MeshSurfaceSampler: typeof import('three/examples/jsm/math/MeshSurfaceSampler.js');
+}
+/* eslint-enable @typescript-eslint/naming-convention */
+
+/**
+ * Load a Three.js addon (three/examples/jsm) on demand, bound to the same
+ * runtime as {@link loadThree} — so its classes extend the runtime's
+ * (`instanceof THREE.BufferGeometry` holds) and only scenes that ask for an
+ * addon download it. Also loads the runtime itself.
+ *
+ * @remarks
+ * A scene whose runtime is loaded at run time rather than bundled cannot
+ * `import` from `three/addons/*`; it yields this instead:
+ * ```tsx
+ * const THREE = yield loadThree();
+ * const {RoundedBoxGeometry} = yield loadThreeAddon('RoundedBoxGeometry');
+ * ```
+ * Every addon is fetched once and cached. Rejects for a name that is not in
+ * {@link THREE_ADDONS} or when the host configured no
+ * {@link ThreeConfig.loadAddon}.
+ */
+export function loadThreeAddon<TName extends ThreeAddonName>(
+  name: TName,
+): Promise<ThreeAddons[TName]> {
+  let pending = ADDONS.get(name);
+  if (!pending) {
+    if (!(THREE_ADDONS as readonly string[]).includes(name)) {
+      return Promise.reject(
+        new Error(
+          `Unknown Three.js addon "${name}". Available: ${THREE_ADDONS.join(', ')}.`,
+        ),
+      );
+    }
+    const load = LOAD_ADDON;
+    if (!load) {
+      return Promise.reject(
+        new Error(
+          `Three.js addons are not available on this host (configureThree({loadAddon}) was never called).`,
+        ),
+      );
+    }
+    pending = loadThree().then(async three => {
+      const mod = await load(name, String(three.REVISION));
+      const factory = (mod as {default?: unknown})?.default;
+      return typeof factory === 'function' ? factory(three) : mod;
+    });
+    // A failed fetch must not stay cached: the next call retries.
+    pending.catch(() => ADDONS.delete(name));
+    ADDONS.set(name, pending);
+  }
+  return pending as Promise<ThreeAddons[TName]>;
 }

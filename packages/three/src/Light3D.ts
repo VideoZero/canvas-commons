@@ -66,6 +66,14 @@ export interface Light3DProps extends Object3DNodeProps {
    * {@inheritDoc Light3D.shadowArea}
    */
   shadowArea?: SignalValue<number>;
+  /**
+   * {@inheritDoc Light3D.shadowRadius}
+   */
+  shadowRadius?: SignalValue<number>;
+  /**
+   * {@inheritDoc Light3D.shadowFar}
+   */
+  shadowFar?: SignalValue<number | null>;
 }
 
 /**
@@ -164,6 +172,29 @@ export class Light3D extends Object3DNode {
   @signal()
   declare public readonly shadowArea: SimpleSignal<number, this>;
 
+  /**
+   * Shadow softness: blur radius in shadow-map texels. `1` (default) is
+   * Three's crisp default. Takes effect with the {@link Three} node's
+   * `shadowType` set to `vsm` (try `8`–`16` for a soft studio contact
+   * shadow) and, on Three.js r180 and later, with `pcf` as well — though
+   * `pcf` samples only five points, so a large radius there looks grainy.
+   */
+  @initial(1)
+  @signal()
+  declare public readonly shadowRadius: SimpleSignal<number, this>;
+
+  /**
+   * `directional` only: how far from the light, in pixels, shadow casters
+   * are still captured. `null` (default) reaches 20000 px. A range that
+   * just covers the stage (the light's distance to its target plus about
+   * half the {@link shadowArea}) spends the shadow map's depth precision
+   * where it matters, which keeps soft `vsm` shadows free of light bleeding.
+   * Anything beyond it casts no shadow.
+   */
+  @initial(null)
+  @signal()
+  declare public readonly shadowFar: SimpleSignal<number | null, this>;
+
   private light: THREE.Light | null = null;
   private lightKind: Light3DKind | null = null;
 
@@ -220,6 +251,7 @@ export class Light3D extends Object3DNode {
       light.shadow.mapSize.set(2048, 2048);
       light.shadow.bias = -0.0005;
       light.shadow.normalBias = 0.02;
+      applyShadowRadius(light.shadow, this.shadowRadius());
     }
 
     if (light instanceof three.DirectionalLight) {
@@ -230,7 +262,8 @@ export class Light3D extends Object3DNode {
       cam.top = half;
       cam.bottom = -half;
       cam.near = 0.1;
-      cam.far = 200;
+      const far = this.shadowFar();
+      cam.far = far === null ? 200 : Math.max(1, far / PIXELS_PER_UNIT);
       cam.updateProjectionMatrix();
     }
 
@@ -247,6 +280,7 @@ export class Light3D extends Object3DNode {
       light.castShadow = this.castShadow();
       light.shadow.mapSize.set(1024, 1024);
       light.shadow.bias = -0.0005;
+      applyShadowRadius(light.shadow, this.shadowRadius());
     }
   }
 
@@ -258,6 +292,16 @@ export class Light3D extends Object3DNode {
     }
     super.dispose();
   }
+}
+
+/**
+ * Set the blur radius, with enough VSM blur taps to cover it smoothly (the
+ * tap count is a shader define, so it only grows in a few steps).
+ */
+function applyShadowRadius(shadow: THREE.LightShadow, radius: number) {
+  const r = Math.max(0, radius);
+  shadow.radius = r;
+  shadow.blurSamples = r > 8 ? 16 : 8;
 }
 
 function targetOf(light: THREE.Light): THREE.Object3D | null {

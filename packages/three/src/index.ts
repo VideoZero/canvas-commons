@@ -1,15 +1,23 @@
+export type {ThreeEnvironmentKind} from './environment';
 export {Group3D} from './Group3D';
 export type {Group3DProps} from './Group3D';
 export {Light3D} from './Light3D';
 export type {Light3DKind, Light3DProps} from './Light3D';
 export {
+  THREE_ADDONS,
   configureThree,
   getThree,
   isThreeLoaded,
   isThreeLoading,
   loadThree,
+  loadThreeAddon,
 } from './loader';
-export type {ThreeConfig, ThreeModule} from './loader';
+export type {
+  ThreeAddonName,
+  ThreeAddons,
+  ThreeConfig,
+  ThreeModule,
+} from './loader';
 export {Mesh3D, normalizeMesh3DSize} from './Mesh3D';
 export type {
   Mesh3DGeometry,
@@ -30,6 +38,7 @@ export {
   getSharedRenderer,
   setRendererAntialias,
 } from './renderer';
+export type {ThreeShadowType, ThreeToneMapping} from './renderer';
 export {Three} from './ThreeNode';
 export type {
   ThreeProps,

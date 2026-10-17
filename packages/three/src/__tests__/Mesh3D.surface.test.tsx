@@ -153,6 +153,11 @@ describe('Mesh3D surface content', () => {
     expect(surfaceMaterial(mesh).opacity).toBeCloseTo(0.5);
     expect(canvasCalls(canvas)).toHaveLength(fills);
   });
+
+  test('content is not tone mapped', () => {
+    const mesh = new Mesh3D({children: [new Rect({width: 10, height: 10})]});
+    expect(surfaceMaterial(mesh).toneMapped).toBe(false);
+  });
 });
 
 function view(): View2D {

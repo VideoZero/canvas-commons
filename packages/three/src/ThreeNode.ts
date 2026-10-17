@@ -21,6 +21,7 @@ import type * as THREE from 'three';
 import {Light3D} from './Light3D';
 import {Object3DRoot, syncObjectChildren} from './Object3DNode';
 import {applyColor} from './color';
+import {ThreeEnvironmentKind, getEnvironmentTexture} from './environment';
 import {
   ThreeModule,
   getThree,
@@ -29,9 +30,12 @@ import {
   loadThree,
 } from './loader';
 import {
+  ThreeShadowType,
+  ThreeToneMapping,
   getRendererAntialias,
   getSharedRenderer,
   setRendererAntialias,
+  withRenderState,
 } from './renderer';
 import {errorMessage, reportCallbackError, warnReadBeforeLoad} from './report';
 import {PIXELS_PER_UNIT, PossibleVector3, toRadians} from './units';
@@ -94,6 +98,26 @@ export interface ThreeProps extends RectProps {
    * {@inheritDoc Three.shadows}
    */
   shadows?: SignalValue<boolean>;
+  /**
+   * {@inheritDoc Three.shadowType}
+   */
+  shadowType?: SignalValue<ThreeShadowType>;
+  /**
+   * {@inheritDoc Three.toneMapping}
+   */
+  toneMapping?: SignalValue<ThreeToneMapping>;
+  /**
+   * {@inheritDoc Three.toneMappingExposure}
+   */
+  toneMappingExposure?: SignalValue<number>;
+  /**
+   * {@inheritDoc Three.environment}
+   */
+  environment?: SignalValue<ThreeEnvironmentKind | THREE.Texture | null>;
+  /**
+   * {@inheritDoc Three.environmentIntensity}
+   */
+  environmentIntensity?: SignalValue<number>;
   /**
    * {@inheritDoc Three.defaultLights}
    */
@@ -318,6 +342,77 @@ export class Three extends Rect implements Object3DRoot {
   declare public readonly shadows: SimpleSignal<boolean, this>;
 
   /**
+   * How shadow maps are filtered: `pcf` (default), `pcfsoft` or `vsm` for
+   * smooth, blurred penumbrae. See {@link ThreeShadowType}.
+   *
+   * @remarks
+   * The softness of `vsm` (and of `pcf` on recent Three.js) follows each
+   * light's `shadowRadius`; a large radius under `pcf` looks grainy on
+   * recent Three.js (five samples). Every node applies its own type for its
+   * own render, so stages with different types can share a scene — but all
+   * nodes share one renderer, and Three.js rebuilds the shadow maps and
+   * re-prepares the materials of the scene it renders on every switch of
+   * type, i.e. twice per frame per pair of mixed stages. Keep one type per
+   * scene.
+   */
+  @initial('pcf')
+  @signal()
+  declare public readonly shadowType: SimpleSignal<ThreeShadowType, this>;
+
+  /**
+   * Tone mapping of the 3D image: `none` (default), `linear`, `neutral`,
+   * `aces` or `agx`. See {@link ThreeToneMapping}.
+   *
+   * @remarks
+   * `neutral` keeps base colours close to what you authored (it subtracts a
+   * small offset from dark values and only compresses the brightest part),
+   * so a palette stays recognisable while lit highlights roll off instead of
+   * clipping. `aces` and `agx` are filmic and visibly shift and desaturate
+   * colours. Surface content (2D children of a {@link Mesh3D}) is never tone
+   * mapped: with `contentMaterial="basic"` text and UI on a mesh show
+   * exactly their authored colours; lit content keeps its hues but a
+   * brightly lit face can clip where the body rolls off.
+   */
+  @initial('none')
+  @signal()
+  declare public readonly toneMapping: SimpleSignal<ThreeToneMapping, this>;
+
+  /**
+   * Exposure multiplier applied before {@link toneMapping}. Ignored when
+   * tone mapping is `none`.
+   */
+  @initial(1)
+  @signal()
+  declare public readonly toneMappingExposure: SimpleSignal<number, this>;
+
+  /**
+   * Image-based lighting for every lit material: `'studio'` for the
+   * built-in soft photo-studio room, a Three.js texture of your own
+   * (equirectangular or cube), or `null` (default) for none.
+   *
+   * @remarks
+   * The environment only lights and reflects; it is never drawn as a
+   * backdrop, so the image stays transparent over `fill`. The built-in
+   * room is generated once per WebGL context and shared by every node.
+   * With a raw {@link scene} it replaces the scene's own `environment`
+   * while this node renders.
+   */
+  @initial(null)
+  @signal()
+  declare public readonly environment: SimpleSignal<
+    ThreeEnvironmentKind | THREE.Texture | null,
+    this
+  >;
+
+  /**
+   * Strength of the {@link environment} lighting. `1` is the environment as
+   * is; lower it when the scene also has strong lights.
+   */
+  @initial(1)
+  @signal()
+  declare public readonly environmentIntensity: SimpleSignal<number, this>;
+
+  /**
    * When the scene has no {@link Light3D}, add a neutral three-point rig so
    * lit materials are visible. Turn off for fully unlit or custom setups.
    */
@@ -391,6 +486,7 @@ export class Three extends Rect implements Object3DRoot {
   private fogScene: THREE.Scene | null = null;
   private ownBackground: THREE.Color | null = null;
   private lastRenderError: string | null = null;
+  private lastEnvironmentError: string | null = null;
   /**
    * Texels per pixel of the last render (on-screen scale times
    * {@link quality}). Updated by {@link draw}; surface content inside
@@ -405,6 +501,7 @@ export class Three extends Rect implements Object3DRoot {
   private warnedCamera = false;
   private warnedEarlyRead = false;
   private lastShadows: boolean | null = null;
+  private lastShadowType: ThreeShadowType | null = null;
   private root: THREE.Group | null = null;
   private rig: THREE.Group | null = null;
   private perspective: THREE.PerspectiveCamera | null = null;
@@ -844,53 +941,85 @@ export class Three extends Rect implements Object3DRoot {
     if (canvas.width !== w || canvas.height !== h) {
       renderer.setSize(w, h, false);
     }
+    // Rendered (once per context) before this frame's viewport and clear:
+    // the PMREM pass switches render targets.
+    const environment = this.resolveEnvironment(three, renderer);
     const shadows = this.shadows();
-    if (this.lastShadows !== null && this.lastShadows !== shadows) {
+    const shadowType = this.shadowType();
+    if (
+      (this.lastShadows !== null && this.lastShadows !== shadows) ||
+      (this.lastShadowType !== null && this.lastShadowType !== shadowType)
+    ) {
       // Three bakes the shadow-map flag into each compiled program and only
       // recompiles on a material or lights change, so flipping it alone
-      // would leave every material on its old program.
+      // would leave every material on its old program. (Recent versions
+      // notice a type change on their own; older ones do not.)
       recompileMaterials(scene);
     }
     this.lastShadows = shadows;
-    renderer.shadowMap.enabled = shadows;
-    // `background` replaces a raw scene's own while this node renders;
-    // another Three node rendering the same raw scene keeps its 3D children
-    // in its own root group, hidden meanwhile. All of it is put back in
-    // `finally`.
+    this.lastShadowType = shadowType;
+    // `background` and `environment` replace a raw scene's own while this
+    // node renders; another Three node rendering the same raw scene keeps
+    // its 3D children in its own root group, hidden meanwhile. All of it is
+    // put back in `finally`.
     const sceneBackground = scene.background;
+    const sceneEnvironment = scene.environment;
+    const sceneEnvironmentIntensity = scene.environmentIntensity;
     const hidden: THREE.Object3D[] = [];
     try {
-      renderer.setViewport(0, 0, w, h);
-      const background = this.background();
-      if (background) {
-        this.ownBackground ??= new three.Color();
-        const alpha = applyColor(
-          three,
-          this.ownBackground,
-          new Color(background),
-        );
-        renderer.setClearColor(this.ownBackground, alpha);
-        scene.background = null;
-      } else {
-        renderer.setClearColor(0x000000, 0);
-      }
-      renderer.clear();
+      // The renderer is shared: this node's settings hold only for its own
+      // render and are restored even when anything below throws, so they
+      // cannot leak into the next node.
+      withRenderState(
+        three,
+        renderer,
+        {
+          shadows,
+          shadowType,
+          toneMapping: this.toneMapping(),
+          toneMappingExposure: this.toneMappingExposure(),
+        },
+        () => {
+          renderer.setViewport(0, 0, w, h);
+          const background = this.background();
+          if (background) {
+            this.ownBackground ??= new three.Color();
+            const alpha = applyColor(
+              three,
+              this.ownBackground,
+              new Color(background),
+            );
+            renderer.setClearColor(this.ownBackground, alpha);
+            scene.background = null;
+          } else {
+            renderer.setClearColor(0x000000, 0);
+          }
+          renderer.clear();
 
-      for (const child of scene.children) {
-        if (
-          child !== this.root &&
-          child.userData.canvasCommonsRoot &&
-          child.visible
-        ) {
-          child.visible = false;
-          hidden.push(child);
-        }
-      }
-      if (this.onRender) {
-        this.onRender(renderer, scene, camera);
-      } else {
-        renderer.render(scene, camera);
-      }
+          if (environment) {
+            scene.environment = environment;
+            scene.environmentIntensity = Math.max(
+              0,
+              this.environmentIntensity(),
+            );
+          }
+          for (const child of scene.children) {
+            if (
+              child !== this.root &&
+              child.userData.canvasCommonsRoot &&
+              child.visible
+            ) {
+              child.visible = false;
+              hidden.push(child);
+            }
+          }
+          if (this.onRender) {
+            this.onRender(renderer, scene, camera);
+          } else {
+            renderer.render(scene, camera);
+          }
+        },
+      );
       this.lastRenderError = null;
     } catch (e) {
       // Logged once per distinct error: draw() runs every frame.
@@ -905,6 +1034,8 @@ export class Three extends Rect implements Object3DRoot {
       }
     } finally {
       scene.background = sceneBackground;
+      scene.environment = sceneEnvironment;
+      scene.environmentIntensity = sceneEnvironmentIntensity;
       for (const child of hidden) {
         child.visible = true;
       }
@@ -927,6 +1058,33 @@ export class Three extends Rect implements Object3DRoot {
       size.height,
     );
     context.restore();
+  }
+
+  /**
+   * The texture for {@link environment}, generating the built-in room on
+   * first use. A failure is logged once and renders without environment.
+   */
+  private resolveEnvironment(
+    three: ThreeModule,
+    renderer: THREE.WebGLRenderer,
+  ): THREE.Texture | null {
+    const environment = this.environment();
+    if (!environment) {
+      return null;
+    }
+    if (typeof environment !== 'string') {
+      return environment;
+    }
+    try {
+      return getEnvironmentTexture(three, renderer, environment);
+    } catch (e) {
+      const message = `environment "${environment}" failed: ${errorMessage(e)}`;
+      if (message !== this.lastEnvironmentError) {
+        this.lastEnvironmentError = message;
+        useLogger().error({message, inspect: this.key});
+      }
+      return null;
+    }
   }
 
   public override dispose() {

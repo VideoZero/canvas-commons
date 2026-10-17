@@ -10,6 +10,7 @@ import {
   signal,
 } from '@canvas-commons/2d';
 import {
+  Color,
   ColorSignal,
   DependencyContext,
   PossibleColor,
@@ -24,7 +25,7 @@ import {
 } from '@canvas-commons/core';
 import type * as THREE from 'three';
 import {Object3DNode, Object3DNodeProps, isObject3DRoot} from './Object3DNode';
-import {applyColor} from './color';
+import {applyColor, colorLuma} from './color';
 import {ThreeModule, getThree} from './loader';
 import {getSharedRenderer} from './renderer';
 
@@ -87,9 +88,41 @@ export type Mesh3DOrigin =
  * - `toon`: stepped cel shading.
  * - `basic`: unlit flat colour — ignores lights entirely.
  * - `normal`: debug rainbow from surface normals.
+ * - `shadow`: invisible except for the shadows it receives — a shadow
+ *   catcher. On a floor plane (`receiveShadow`) the background shows through
+ *   and only the cast shadow remains. `opacity` sets the shadow strength;
+ *   the shadow is black unless you pass a `color`. With the stage's
+ *   `shadowType="vsm"` keep the catcher's `castShadow` on (the default):
+ *   VSM blurs the receiver's own depth into the penumbra, and a catcher
+ *   missing from the shadow map shows an eroded, hard-edged shadow. It is
+ *   drawn before other transparent meshes, so cards and labels standing on
+ *   it never punch holes into its shadow.
+ * - `clay`: matte modelling clay — very rough, non-metallic, a little sheen
+ *   and a soft rim that brightens toward the silhouette. Made for the
+ *   `environment="studio"` + `toneMapping="neutral"` stage look, fine under
+ *   plain lights. `metalness` / `roughness` keep the clay defaults (0 /
+ *   0.88) until you set them. Rim and sheen are toned down on dark colours
+ *   so a dark body does not get a grey halo.
+ * - `glass`: an edge-glow bubble — a nearly clear body whose silhouette
+ *   glows in `color`. Always transparent, does not write depth and draws
+ *   after the other transparent meshes, so it composites over everything
+ *   behind it. No refraction (cheap: one pass, no transmission). Reads best
+ *   on curved shapes (spheres, capsules, rounded boxes): the glow is a
+ *   fresnel term, so a flat face seen head-on gets none. Casts no shadow
+ *   unless you set `castShadow` (a clear body would cast a solid one); it
+ *   still receives shadows.
  */
 export type Mesh3DMaterial =
-  'standard' | 'physical' | 'phong' | 'lambert' | 'toon' | 'basic' | 'normal';
+  | 'standard'
+  | 'physical'
+  | 'phong'
+  | 'lambert'
+  | 'toon'
+  | 'basic'
+  | 'normal'
+  | 'shadow'
+  | 'clay'
+  | 'glass';
 
 export type Mesh3DSide = 'front' | 'back' | 'double';
 
@@ -172,11 +205,19 @@ export interface Mesh3DProps extends Object3DNodeProps {
   /**
    * {@inheritDoc Mesh3D.castShadow}
    */
-  castShadow?: SignalValue<boolean>;
+  castShadow?: SignalValue<boolean | null>;
   /**
    * {@inheritDoc Mesh3D.receiveShadow}
    */
   receiveShadow?: SignalValue<boolean>;
+  /**
+   * {@inheritDoc Mesh3D.reveal}
+   */
+  reveal?: SignalValue<number>;
+  /**
+   * {@inheritDoc Mesh3D.revealColor}
+   */
+  revealColor?: SignalValue<PossibleColor>;
 }
 
 interface TextureEntry {
@@ -413,11 +454,15 @@ export class Mesh3D extends Object3DNode {
 
   /**
    * Whether this mesh casts shadows (needs `shadows` on the {@link Three}
-   * node and a shadow-casting light).
+   * node and a shadow-casting light). `null` (the default) means on,
+   * except for `material="glass"`: its shadow would be as solid as an opaque
+   * body's, so glass casts none unless you set `true`. Off is honoured under
+   * `shadowType="vsm"` too, where three.js would otherwise draw every
+   * shadow receiver into the shadow map.
    */
-  @initial(true)
+  @initial(null)
   @signal()
-  declare public readonly castShadow: SimpleSignal<boolean, this>;
+  declare public readonly castShadow: SimpleSignal<boolean | null, this>;
 
   /**
    * Whether shadows fall onto this mesh.
@@ -426,11 +471,51 @@ export class Mesh3D extends Object3DNode {
   @signal()
   declare public readonly receiveShadow: SimpleSignal<boolean, this>;
 
+  /**
+   * How much of the mesh is materialised, `0`–`1`: a noise dissolve for
+   * entrances and exits. `1` (the default) is the untouched mesh, `0` hides
+   * it; in between, blobs of surface are cut away and the cut edge glows in
+   * {@link revealColor}.
+   *
+   * @remarks
+   * Prefer it over `opacity` for 3D entrances: the mesh stays opaque, so it
+   * keeps its depth sorting, lighting and shadows instead of turning into a
+   * see-through shell. The noise is fixed to the shape (it does not swim
+   * when the camera or the mesh moves) and is the same on every render. The
+   * cast shadow dissolves with it. Applies to the built-in materials except
+   * `shadow` (a custom `THREE.Material` ignores it); the surface content
+   * dissolves with the body. Meshes of the same size dissolve in the same
+   * pattern.
+   */
+  @initial(1)
+  @signal()
+  declare public readonly reveal: SimpleSignal<number, this>;
+
+  /**
+   * Colour of the glowing edge of a {@link reveal} dissolve. Until set it
+   * follows {@link color}, except on near-white or near-black meshes (luma
+   * above 0.85 or below 0.2), where an edge in the body colour would not
+   * show: those fall back to amber (`#f59e0b`). Set it to match a palette;
+   * on light pastels an explicit accent also reads better than the body
+   * colour. Drawn after tone mapping, so it shows its authored colour (with
+   * a hot, whiter core) on any stage look, no bloom needed.
+   */
+  @initial('#ffffff')
+  @colorSignal()
+  declare public readonly revealColor: ColorSignal<this>;
+
   private ownGeometry: THREE.BufferGeometry | null = null;
   private ownGeometryKey = '';
   private ownMaterial: THREE.Material | null = null;
   private ownMaterialKind: Mesh3DMaterial | null = null;
   private innerMesh: THREE.Mesh | null = null;
+  private renderOrder = 0;
+  private revealUniformValues: RevealUniforms | null = null;
+  private revealShadow: {
+    depth: THREE.MeshDepthMaterial;
+    distance: THREE.MeshDistanceMaterial;
+  } | null = null;
+  private shadowSilenced = false;
   private surfaceMaterial: THREE.Material | null = null;
   private surfaceMaterialKind: Mesh3DMaterial | null = null;
   private surfaceCanvasElement: HTMLCanvasElement | null = null;
@@ -485,14 +570,120 @@ export class Mesh3D extends Object3DNode {
     }
     mesh.geometry = this.resolvedGeometry();
     mesh.material = this.resolvedMaterials();
-    mesh.castShadow = this.castShadow();
+    const material = this.material();
+    // A clear glass body would cast a fully opaque shadow: off until set.
+    mesh.castShadow = this.castShadow() ?? material !== 'glass';
     mesh.receiveShadow = this.receiveShadow();
+    // Under VSM three.js also draws receivers into the shadow map (it blurs
+    // their depth into the penumbra), so a receiving mesh with castShadow
+    // off would still cast. Its shadow pass then gets materials that write
+    // nothing.
+    const silenced = !mesh.castShadow && mesh.receiveShadow;
+    if (silenced !== this.shadowSilenced) {
+      if (silenced) {
+        acquireNoShadowMaterials(getThree());
+      } else {
+        releaseNoShadowMaterials(getThree());
+      }
+      this.shadowSilenced = silenced;
+    }
+    // A shadow catcher is transparent and would be depth-sorted by its
+    // centre against transparent surface content; draw it first so content
+    // standing on it does not cut holes into its shadow. Glass goes last so
+    // its clear body composites over everything else.
+    const order = material === 'shadow' ? -1 : material === 'glass' ? 1 : 0;
+    if (order !== this.renderOrder) {
+      mesh.renderOrder = order;
+      this.renderOrder = order;
+    }
 
     // Size is applied as the inner mesh's scale, so primitives stay
     // unit-sized and tweening `size` does not rebuild their geometry (a
     // rounded box is the exception, see resolvedGeometry).
     const [sx, sy, sz] = this.geometryScale();
     mesh.scale.set(sx, sy, sz);
+    this.updateReveal(mesh);
+  }
+
+  /**
+   * The dissolve uniforms, shared by every material of this mesh (body,
+   * surface content and the shadow pass).
+   */
+  private revealUniforms(): RevealUniforms {
+    return (this.revealUniformValues ??= createRevealUniforms(getThree()));
+  }
+
+  /**
+   * Drive the {@link reveal} dissolve: the shader variant of the built-in
+   * materials, its uniforms and the shadow-pass materials.
+   *
+   * @remarks
+   * The dissolve is only compiled in while `reveal < 1`, so a revealed mesh
+   * renders with exactly the program it had before (no extra cost, no
+   * change in output).
+   */
+  private updateReveal(mesh: THREE.Mesh) {
+    const three = getThree();
+    const reveal = Math.min(1, Math.max(0, this.reveal()));
+    const material = this.material();
+    const revealing =
+      reveal < 1 && typeof material === 'string' && material !== 'shadow';
+    // reveal = 0 hides the mesh outright (3D children stay).
+    mesh.visible = !revealing || reveal > 0;
+    for (const own of [this.ownMaterial, this.surfaceMaterial]) {
+      if (own) {
+        setShaderFlags(own, {reveal: revealing});
+      }
+    }
+    // castShadow off wins over the dissolve's shadow pass.
+    const silent = this.shadowSilenced
+      ? acquireNoShadowMaterials(three, false)
+      : null;
+    if (!revealing || silent) {
+      mesh.customDepthMaterial = silent?.depth;
+      mesh.customDistanceMaterial = silent?.distance;
+      if (!revealing) {
+        return;
+      }
+    }
+
+    const uniforms = this.revealUniforms();
+    uniforms.uMcRevealT.value = revealThreshold(reveal);
+    applyColor(
+      three,
+      uniforms.uMcRevealColor.value,
+      this.revealColor.isInitial()
+        ? defaultRevealColor(this.color())
+        : this.revealColor(),
+    );
+    // Noise cells are isotropic in pixels and sized to the mesh: about
+    // REVEAL_CELLS blobs across its largest dimension.
+    const [w, h, d] = this.size3();
+    let extent = Math.max(w, h, d);
+    if (typeof this.geometry() !== 'string') {
+      const geometry = mesh.geometry;
+      if (!geometry.boundingSphere) {
+        geometry.computeBoundingSphere();
+      }
+      extent = (geometry.boundingSphere?.radius ?? 0) * 2;
+    }
+    uniforms.uMcRevealFreq.value
+      .copy(mesh.scale)
+      .multiplyScalar(REVEAL_CELLS / Math.max(extent, 1e-6));
+
+    // The shadow pass draws with its own materials: give it ones that cut
+    // the same holes, so the cast shadow dissolves with the mesh.
+    if (!this.revealShadow) {
+      const depth = new three.MeshDepthMaterial();
+      installShader(depth, {reveal: true}, uniforms);
+      const distance = new three.MeshDistanceMaterial();
+      installShader(distance, {reveal: true}, uniforms);
+      this.revealShadow = {depth, distance};
+    }
+    if (!silent) {
+      mesh.customDepthMaterial = this.revealShadow.depth;
+      mesh.customDistanceMaterial = this.revealShadow.distance;
+    }
   }
 
   /**
@@ -635,11 +826,35 @@ export class Mesh3D extends Object3DNode {
       this.disposeOwnMaterial();
       this.ownMaterial = createMaterial(three, material);
       this.ownMaterialKind = material;
+      if (material !== 'shadow') {
+        installShader(
+          this.ownMaterial,
+          {
+            look: material === 'clay' || material === 'glass' ? material : null,
+          },
+          this.revealUniforms(),
+        );
+      }
     }
 
     const mat = this.ownMaterial as THREE.MeshStandardMaterial;
     const color = this.color();
     const opacity = this.opacity3D() * color.alpha();
+    if (material === 'shadow') {
+      // The default white would make an invisible "shadow"; only an
+      // explicit colour tints it.
+      applyColor(
+        three,
+        mat.color,
+        this.color.isInitial() ? new Color('#000000') : color,
+      );
+      mat.opacity = opacity;
+      mat.side = sideConstant(three, this.side());
+      // A shadow catcher always blends: as an opaque material it would
+      // paint the whole plane black.
+      setTransparent(mat, true);
+      return mat;
+    }
     if ('color' in mat) {
       applyColor(three, mat.color, color);
     }
@@ -648,8 +863,29 @@ export class Mesh3D extends Object3DNode {
       mat.emissiveIntensity = this.emissiveIntensity() * glow;
     }
     if ('metalness' in mat) {
-      mat.metalness = this.metalness();
-      mat.roughness = this.roughness();
+      // The presets bring their own surface until these are set.
+      const preset = MATERIAL_PRESETS[material];
+      mat.metalness =
+        preset && this.metalness.isInitial()
+          ? preset.metalness
+          : this.metalness();
+      mat.roughness =
+        preset && this.roughness.isInitial()
+          ? preset.roughness
+          : this.roughness();
+    }
+    if (material === 'clay') {
+      // Sheen tinted from the body colour toward white: a soft, dusty
+      // highlight at grazing angles rather than a coloured one. Halfway on
+      // light colours, a quarter on dark ones, where a whiter sheen reads
+      // as a grey halo.
+      const t = clayWhiteMix(colorLuma(color));
+      const {r, g, b} = mat.color;
+      (mat as THREE.MeshPhysicalMaterial).sheenColor.setRGB(
+        r + (1 - r) * t,
+        g + (1 - g) * t,
+        b + (1 - b) * t,
+      );
     }
     if ('wireframe' in mat) {
       mat.wireframe = this.wireframe();
@@ -669,7 +905,9 @@ export class Mesh3D extends Object3DNode {
       }
     }
     mat.side = sideConstant(three, this.side());
-    setTransparent(mat, opacity < 1);
+    // Glass is see-through at any opacity (its body alpha comes from the
+    // shader).
+    setTransparent(mat, material === 'glass' || opacity < 1);
     mat.opacity = opacity;
     return mat;
   }
@@ -920,14 +1158,28 @@ export class Mesh3D extends Object3DNode {
     }
     const three = getThree();
     const body = this.material();
-    const kind =
+    // Content on a `shadow` body is lit normally; on `glass` it stays
+    // legible instead of fading into the clear body.
+    let kind =
       this.contentMaterial() ?? (typeof body === 'string' ? body : 'standard');
+    if (kind === 'shadow' || kind === 'glass') {
+      kind = 'standard';
+    }
     if (!this.surfaceMaterial || this.surfaceMaterialKind !== kind) {
       this.disposeSurfaceMaterial();
       this.surfaceMaterial = createMaterial(three, kind);
-      installShader(this.surfaceMaterial, {
-        surface: canPremultiplySurface(three),
-      });
+      // Text and UI on a surface keep their authored colours under a
+      // stage's `toneMapping` (a no-op without one). Lighting still shades
+      // them like the body.
+      this.surfaceMaterial.toneMapped = false;
+      installShader(
+        this.surfaceMaterial,
+        {
+          surface: canPremultiplySurface(three),
+          look: kind === 'clay' ? 'clay' : null,
+        },
+        this.revealUniforms(),
+      );
       this.surfaceMaterialKind = kind;
     }
     const mat = this.surfaceMaterial as THREE.MeshStandardMaterial;
@@ -937,8 +1189,18 @@ export class Mesh3D extends Object3DNode {
       mat.color.set(0xffffff);
     }
     if ('metalness' in mat) {
-      mat.metalness = this.metalness();
-      mat.roughness = this.roughness();
+      const preset = MATERIAL_PRESETS[kind];
+      mat.metalness =
+        preset && this.metalness.isInitial()
+          ? preset.metalness
+          : this.metalness();
+      mat.roughness =
+        preset && this.roughness.isInitial()
+          ? preset.roughness
+          : this.roughness();
+    }
+    if (kind === 'clay') {
+      (mat as THREE.MeshPhysicalMaterial).sheenColor.set(0xffffff);
     }
     if ('map' in mat && mat.map !== texture) {
       mat.map = texture;
@@ -986,6 +1248,17 @@ export class Mesh3D extends Object3DNode {
     this.disposeOwnMaterial();
     this.disposeSurfaceMaterial();
     this.disposeSurfaceTexture();
+    this.revealShadow?.depth.dispose();
+    this.revealShadow?.distance.dispose();
+    this.revealShadow = null;
+    if (this.shadowSilenced) {
+      releaseNoShadowMaterials(getThree());
+      this.shadowSilenced = false;
+    }
+    if (this.innerMesh) {
+      this.innerMesh.customDepthMaterial = undefined;
+      this.innerMesh.customDistanceMaterial = undefined;
+    }
     this.innerMesh?.removeFromParent();
     this.innerMesh = null;
     this.surfaceCanvasElement = null;
@@ -1221,7 +1494,121 @@ function createMaterial(
       return new three.MeshBasicMaterial();
     case 'normal':
       return new three.MeshNormalMaterial();
+    case 'shadow':
+      return new three.ShadowMaterial();
+    case 'clay':
+      return new three.MeshPhysicalMaterial({
+        sheen: 0.4,
+        sheenRoughness: 0.8,
+      });
+    case 'glass':
+      return new three.MeshStandardMaterial({
+        transparent: true,
+        // A clear shell must not hide what is behind or inside it.
+        depthWrite: false,
+      });
   }
+}
+
+/**
+ * Surface defaults of the material presets, used while `metalness` /
+ * `roughness` are left at their initial values.
+ */
+const MATERIAL_PRESETS: Partial<
+  Record<Mesh3DMaterial, {metalness: number; roughness: number}>
+> = {
+  clay: {metalness: 0, roughness: 0.88},
+  glass: {metalness: 0, roughness: 0.15},
+};
+
+/**
+ * How far the `clay` sheen is tinted from the body colour toward white:
+ * 0.25 for dark colours (luma below 0.2), easing to 0.5 for light ones
+ * (luma 0.5 and above).
+ *
+ * @internal
+ */
+export function clayWhiteMix(luma: number): number {
+  const x = Math.min(1, Math.max(0, (luma - 0.2) / 0.3));
+  return 0.25 + 0.25 * x * x * (3 - 2 * x);
+}
+
+/** Edge colour of a dissolve on near-white and near-black meshes. */
+const REVEAL_ACCENT = new Color('#f59e0b');
+
+/**
+ * The {@link Mesh3D.revealColor} used while it is not set: the body colour,
+ * or {@link REVEAL_ACCENT} where an edge in the body colour would vanish
+ * (near-white: no contrast with the white-hot core; near-black: no glow).
+ *
+ * @internal
+ */
+export function defaultRevealColor(color: Color): Color {
+  const luma = colorLuma(color);
+  return luma > 0.85 || luma < 0.2 ? REVEAL_ACCENT : color;
+}
+
+interface NoShadowMaterials {
+  depth: THREE.MeshDepthMaterial;
+  distance: THREE.MeshDistanceMaterial;
+  users: number;
+}
+
+const NO_SHADOW_MATERIALS = new WeakMap<ThreeModule, NoShadowMaterials>();
+
+/**
+ * Shadow-pass materials that write nothing: every fragment is discarded, so
+ * the mesh leaves no depth (PCF) and no moments (VSM) in the shadow map.
+ * Colour and depth writes are off as well. One pair is shared by all meshes
+ * of a Three.js module and disposed when the last user releases it.
+ *
+ * @param count - Whether to register a user (`false` only looks the pair up
+ *   for a mesh that already holds it).
+ *
+ * @internal
+ */
+export function acquireNoShadowMaterials(
+  three: ThreeModule,
+  count = true,
+): NoShadowMaterials {
+  let entry = NO_SHADOW_MATERIALS.get(three);
+  if (!entry) {
+    const silence = (material: THREE.Material) => {
+      material.colorWrite = false;
+      material.depthWrite = false;
+      material.onBeforeCompile = shader => {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          'void main() {',
+          'void main() {\n\tdiscard;',
+        );
+      };
+      material.customProgramCacheKey = () => 'canvas-commons-no-shadow';
+      return material;
+    };
+    entry = {
+      depth: silence(new three.MeshDepthMaterial()) as THREE.MeshDepthMaterial,
+      distance: silence(
+        new three.MeshDistanceMaterial(),
+      ) as THREE.MeshDistanceMaterial,
+      users: 0,
+    };
+    NO_SHADOW_MATERIALS.set(three, entry);
+  }
+  if (count) {
+    entry.users++;
+  }
+  return entry;
+}
+
+/** @internal */
+export function releaseNoShadowMaterials(three: ThreeModule) {
+  const entry = NO_SHADOW_MATERIALS.get(three);
+  if (!entry || --entry.users > 0) {
+    return;
+  }
+  entry.depth.dispose();
+  entry.distance.dispose();
+  NO_SHADOW_MATERIALS.delete(three);
 }
 
 const MAP_SAMPLE = 'vec4 sampledDiffuseColor = texture2D( map, vMapUv );';
@@ -1248,12 +1635,64 @@ function canPremultiplySurface(three: ThreeModule): boolean {
 export interface ShaderFlags {
   /** Read `map` as premultiplied sRGB texels (surface content). */
   surface: boolean;
+  /** A preset look applied on top of the lit shading. */
+  look: 'clay' | 'glass' | null;
+  /** Compile in the {@link Mesh3D.reveal} dissolve (only while it is below 1). */
+  reveal: boolean;
+}
+
+/**
+ * Uniforms of the reveal dissolve. One set per mesh, shared by its body,
+ * surface and shadow-pass materials, so updating a value needs no
+ * recompile.
+ *
+ * @internal
+ */
+export interface RevealUniforms {
+  /** Noise threshold: fragments with noise above it are cut away. */
+  uMcRevealT: {value: number};
+  /** Object-space position → noise space (mesh scale / blob size). */
+  uMcRevealFreq: {value: THREE.Vector3};
+  /** Linear colour of the glowing edge. */
+  uMcRevealColor: {value: THREE.Color};
+}
+
+/**
+ * Width of the glowing edge band, in noise units (the noise spans 0–1).
+ *
+ * @internal
+ */
+export const REVEAL_BAND = 0.12;
+
+/**
+ * Noise blobs across the largest dimension of a mesh.
+ */
+const REVEAL_CELLS = 3;
+
+/**
+ * Map `reveal` (0–1) to the noise threshold. At 1 the threshold clears the
+ * whole noise range plus the band, so no edge is left; at 0 nothing passes.
+ *
+ * @internal
+ */
+export function revealThreshold(reveal: number): number {
+  return reveal * (1 + REVEAL_BAND);
+}
+
+function createRevealUniforms(three: ThreeModule): RevealUniforms {
+  return {
+    uMcRevealT: {value: revealThreshold(1)},
+    uMcRevealFreq: {value: new three.Vector3(1, 1, 1)},
+    uMcRevealColor: {value: new three.Color(1, 1, 1)},
+  };
 }
 
 const SHADER_FLAGS = new WeakMap<THREE.Material, ShaderFlags>();
 
 const NO_SHADER_FLAGS: ShaderFlags = {
   surface: false,
+  look: null,
+  reveal: false,
 };
 
 /**
@@ -1262,13 +1701,17 @@ const NO_SHADER_FLAGS: ShaderFlags = {
  * @internal
  */
 export function shaderKey(flags: ShaderFlags): string {
-  const parts = [flags.surface && 'surface'].filter(Boolean);
+  const parts = [
+    flags.surface && 'surface',
+    flags.look,
+    flags.reveal && 'reveal',
+  ].filter(Boolean);
   return `canvas-commons:${parts.join('+')}`;
 }
 
 /**
  * The flags a material was patched with, or `undefined` for a material
- * this module does not manage (a custom one).
+ * this module does not manage (a custom one, a shadow catcher).
  *
  * @internal
  */
@@ -1280,17 +1723,143 @@ export function getShaderFlags(
 
 /**
  * Patch a built-in material with the given variants.
+ *
+ * @remarks
+ * The hook stays installed for the material's lifetime and always adds the
+ * reveal uniforms, even while the dissolve is not compiled in: Three keeps
+ * the uniform set of the most recently built program, and switching back to
+ * a cached variant must still find every uniform it reads.
  */
-function installShader(material: THREE.Material, flags: Partial<ShaderFlags>) {
+function installShader(
+  material: THREE.Material,
+  flags: Partial<ShaderFlags>,
+  uniforms: RevealUniforms,
+) {
   const three = getThree();
   SHADER_FLAGS.set(material, {...NO_SHADER_FLAGS, ...flags});
   const current = () => SHADER_FLAGS.get(material) ?? NO_SHADER_FLAGS;
   material.onBeforeCompile = shader => {
+    Object.assign(shader.uniforms, uniforms);
     patchShader(three, shader, current());
   };
   material.customProgramCacheKey = () => shaderKey(current());
   material.needsUpdate = true;
 }
+
+/**
+ * Change some variants of a patched material; recompiles (or switches to
+ * the cached program) only when the combination changed.
+ */
+function setShaderFlags(material: THREE.Material, flags: Partial<ShaderFlags>) {
+  const current = SHADER_FLAGS.get(material);
+  if (!current) {
+    return;
+  }
+  const next = {...current, ...flags};
+  if (shaderKey(next) !== shaderKey(current)) {
+    SHADER_FLAGS.set(material, next);
+    material.needsUpdate = true;
+  }
+}
+
+const MAIN = 'void main() {';
+const PROJECT_VERTEX = '#include <project_vertex>';
+const CLIPPING_FRAGMENT = '#include <clipping_planes_fragment>';
+const OPAQUE_FRAGMENT = '#include <opaque_fragment>';
+const TONEMAPPING_FRAGMENT = '#include <tonemapping_fragment>';
+
+/**
+ * View direction for the fresnel looks (lit materials only: they declare
+ * `vViewPosition` and the view-space `normal`).
+ */
+const VIEW_DIR = `vec3 mcViewDir = isOrthographic ? vec3( 0.0, 0.0, 1.0 ) : normalize( vViewPosition );`;
+
+const CLAY_CHUNK = `
+	// Clay: a soft rim that brightens toward the silhouette, tinted toward
+	// white, as if light scattered just under a matte surface. Scaled down on
+	// dark bodies (linear luma), where it would read as a grey halo.
+	{
+		${VIEW_DIR}
+		float mcRim = pow( clamp( 1.0 - dot( normal, mcViewDir ), 0.0, 1.0 ), 3.0 );
+		float mcLuma = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
+		mcRim *= mix( 0.35, 1.0, smoothstep( 0.05, 0.5, mcLuma ) );
+		outgoingLight += mix( diffuseColor.rgb, vec3( 1.0 ), 0.6 ) * mcRim * 0.2;
+	}
+`;
+
+const GLASS_CHUNK = `
+	// Glass: a nearly clear body whose silhouette glows in the base colour.
+	// mcEdge is a fresnel term, 0 facing the camera and 1 at grazing angles;
+	// specular highlights also stay visible on the clear body.
+	{
+		${VIEW_DIR}
+		float mcEdge = pow( clamp( 1.0 - abs( dot( normal, mcViewDir ) ), 0.0, 1.0 ), 2.5 );
+		float mcGlint = clamp( dot( totalSpecular, vec3( 0.3333 ) ), 0.0, 1.0 );
+		outgoingLight += diffuseColor.rgb * mcEdge * 1.5;
+		diffuseColor.a *= mix( 0.12, 1.0, max( mcEdge, mcGlint ) );
+	}
+`;
+
+const REVEAL_VERTEX_PARS = `
+uniform vec3 uMcRevealFreq;
+varying vec3 vMcRevealPos;
+`;
+
+// Object space (after morphs / skinning), so the pattern sticks to the
+// shape when the camera or the mesh moves.
+const REVEAL_VERTEX = `
+	vMcRevealPos = transformed * uMcRevealFreq;
+`;
+
+const REVEAL_FRAGMENT_PARS = `
+#define MC_REVEAL_BAND ${REVEAL_BAND.toFixed(3)}
+uniform float uMcRevealT;
+uniform vec3 uMcRevealColor;
+varying vec3 vMcRevealPos;
+// Value noise over a sine-free hash (iq), deterministic across GPUs.
+float mcHash( vec3 p ) {
+	p = fract( p * 0.3183099 + 0.1 );
+	p *= 17.0;
+	return fract( p.x * p.y * p.z * ( p.x + p.y + p.z ) );
+}
+float mcNoise( vec3 x ) {
+	vec3 i = floor( x );
+	vec3 f = fract( x );
+	f = f * f * ( 3.0 - 2.0 * f );
+	return mix(
+		mix( mix( mcHash( i ), mcHash( i + vec3( 1.0, 0.0, 0.0 ) ), f.x ),
+			mix( mcHash( i + vec3( 0.0, 1.0, 0.0 ) ), mcHash( i + vec3( 1.0, 1.0, 0.0 ) ), f.x ), f.y ),
+		mix( mix( mcHash( i + vec3( 0.0, 0.0, 1.0 ) ), mcHash( i + vec3( 1.0, 0.0, 1.0 ) ), f.x ),
+			mix( mcHash( i + vec3( 0.0, 1.0, 1.0 ) ), mcHash( i + vec3( 1.0, 1.0, 1.0 ) ), f.x ), f.y ),
+		f.z );
+}
+// Two octaves, flattened through an approximate CDF of their sum
+// (measured) so the revealed share of the surface tracks reveal linearly.
+float mcRevealNoise( vec3 p ) {
+	float n = 0.65 * mcNoise( p ) + 0.35 * mcNoise( p * 2.13 + vec3( 11.7, 3.1, 7.9 ) );
+	return smoothstep( 0.08, 0.85, n );
+}
+`;
+
+const REVEAL_DISCARD = `
+	// Reveal dissolve: cut away where the noise is above the threshold; the
+	// last MC_REVEAL_BAND of surface before the cut is the glowing edge:
+	// solid for its inner half, fading out over the outer half.
+	float mcRevealD = uMcRevealT - mcRevealNoise( vMcRevealPos );
+	if ( mcRevealD < 0.0 ) discard;
+	float mcRevealEdge = 1.0 - smoothstep( 0.5 * MC_REVEAL_BAND, MC_REVEAL_BAND, mcRevealD );
+	float mcRevealCore = 1.0 - smoothstep( 0.0, 0.35 * MC_REVEAL_BAND, mcRevealD );
+`;
+
+const REVEAL_GLOW = `
+	// Painted after tone mapping so the edge keeps its authored colour on any
+	// stage look; the core runs hot toward white so it reads as a glow
+	// without bloom. Opaque, so it also shows on a glass body.
+	{
+		vec3 mcGlow = mix( uMcRevealColor, vec3( 1.0 ), 0.6 * mcRevealCore );
+		gl_FragColor = mix( gl_FragColor, vec4( mcGlow, 1.0 ), mcRevealEdge );
+	}
+`;
 
 /**
  * The `map_fragment` chunk reading premultiplied, sRGB-encoded texels: the
@@ -1319,7 +1888,9 @@ function surfaceMapChunk(three: ThreeModule): string {
 }
 
 /**
- * Apply the variants to a shader about to compile.
+ * Apply the variants to a shader about to compile. A chunk whose anchor is
+ * missing (a material without it, or a future Three.js) is skipped rather
+ * than producing a broken program.
  *
  * @internal
  */
@@ -1328,12 +1899,46 @@ export function patchShader(
   shader: {vertexShader: string; fragmentShader: string},
   flags: ShaderFlags,
 ) {
+  let vertex = shader.vertexShader;
+  let fragment = shader.fragmentShader;
   if (flags.surface) {
-    shader.fragmentShader = shader.fragmentShader.replace(
+    fragment = fragment.replace(
       '#include <map_fragment>',
       surfaceMapChunk(three),
     );
   }
+  if (
+    flags.look &&
+    fragment.includes(OPAQUE_FRAGMENT) &&
+    fragment.includes('vViewPosition')
+  ) {
+    fragment = fragment.replace(
+      OPAQUE_FRAGMENT,
+      (flags.look === 'clay' ? CLAY_CHUNK : GLASS_CHUNK) + OPAQUE_FRAGMENT,
+    );
+  }
+  if (
+    flags.reveal &&
+    vertex.includes(PROJECT_VERTEX) &&
+    fragment.includes(CLIPPING_FRAGMENT)
+  ) {
+    vertex = vertex
+      .replace(MAIN, REVEAL_VERTEX_PARS + MAIN)
+      .replace(PROJECT_VERTEX, REVEAL_VERTEX + PROJECT_VERTEX);
+    fragment = fragment
+      .replace(MAIN, REVEAL_FRAGMENT_PARS + MAIN)
+      .replace(CLIPPING_FRAGMENT, CLIPPING_FRAGMENT + REVEAL_DISCARD);
+    // Depth / distance (shadow pass) and normal materials have no tone
+    // mapping step: they only cut.
+    if (fragment.includes(TONEMAPPING_FRAGMENT)) {
+      fragment = fragment.replace(
+        TONEMAPPING_FRAGMENT,
+        TONEMAPPING_FRAGMENT + REVEAL_GLOW,
+      );
+    }
+  }
+  shader.vertexShader = vertex;
+  shader.fragmentShader = fragment;
 }
 
 /**
