@@ -4,10 +4,12 @@ import {
   TimingFunction,
   all,
   linear,
+  unwrap,
   waitFor,
 } from '@canvas-commons/core';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {PathMorpher} from '../../morphers';
+import {Gradient} from '../../partials';
 import {Path} from '../Path';
 import {SVG, SVGShapeData} from '../SVG';
 import {Shape, ShapeProps} from '../Shape';
@@ -203,6 +205,68 @@ describe('SVG', () => {
       );
 
       expect(hex(glyph.fill())).toBe('#0000ff');
+    });
+  });
+
+  describe('gradients', () => {
+    const STOPS =
+      '<stop offset="0" stop-color="rgb(255,0,0)"/><stop offset="100%" stop-color="rgb(0,0,255)" stop-opacity="0.5"/>';
+
+    function gradient(paint: ShapeProps['fill']) {
+      if (!(paint instanceof Gradient)) throw new Error('not a gradient');
+      return paint;
+    }
+
+    it('paints with a linear gradient in bounding box units', () => {
+      const {props} = only(
+        `<svg viewBox="0 0 10 10"><defs><linearGradient id="fade" x2="0" y2="1">${STOPS}</linearGradient></defs><path fill="url(#fade)" d="M0 0L1 1"/></svg>`,
+      );
+      const fill = gradient(props.fill);
+
+      expect(fill.type()).toBe('linear');
+      expect(fill.cssRelative()).toBe(true);
+      expect(fill.to().sub(fill.from()).normalized).toMatchObject({x: 0, y: 1});
+      expect(
+        fill.stops().map(stop => new Color(unwrap(stop.color)).css()),
+      ).toEqual(['rgb(255 0 0)', 'rgb(0 0 255 / 0.5)']);
+    });
+
+    it('reads stops and units through a referenced gradient', () => {
+      const {props} = only(
+        `<svg viewBox="0 0 40 40"><defs><linearGradient id="base">${STOPS}</linearGradient><linearGradient id="span" href="#base" gradientUnits="userSpaceOnUse" x1="10" y1="0" x2="30" y2="0"/></defs><rect x="5" y="5" width="10" height="20" fill="url(#span)"/></svg>`,
+      );
+      const fill = gradient(props.fill);
+
+      expect(fill.cssRelative()).toBe(false);
+      expect(fill.from()).toMatchObject({x: 0, y: -15});
+      expect(fill.to()).toMatchObject({x: 20, y: -15});
+      expect(fill.stops()).toHaveLength(2);
+    });
+
+    it('paints with a radial gradient', () => {
+      const {props} = only(
+        `<svg viewBox="0 0 10 10"><defs><radialGradient id="glow">${STOPS}</radialGradient></defs><circle r="4" style="stroke:url('#glow')"/></svg>`,
+      );
+      const stroke = gradient(props.stroke);
+
+      expect(stroke.type()).toBe('radial');
+      expect(stroke.toRadius()).toBeCloseTo(Math.SQRT1_2);
+    });
+
+    it('falls back when the reference is missing', () => {
+      const svg =
+        '<svg viewBox="0 0 10 10"><path fill="url(#missing) rgb(0,255,0)" stroke="url(#missing)" d="M0 0L1 1"/></svg>';
+
+      expect(only(svg).props.fill).toBe('rgb(0,255,0)');
+      expect(rendered(svg).stroke()).toBeNull();
+    });
+
+    it('renders a shape painted with a gradient', () => {
+      const path = rendered(
+        `<svg viewBox="0 0 10 10"><defs><linearGradient id="paint">${STOPS}</linearGradient></defs><path fill="url(#paint)" d="M0 0L1 1"/></svg>`,
+      );
+
+      expect(path.fill()).toBeInstanceOf(Gradient);
     });
   });
 
