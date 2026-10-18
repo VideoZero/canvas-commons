@@ -32,7 +32,7 @@ export class ArcSegment extends Segment {
     super();
 
     this.xAxisRotation = this.xAxisRotationDegree * DEG2RAD;
-    this.radius = new Vector2(Math.abs(radius.x), Math.abs(radius.y));
+    radius = new Vector2(Math.abs(radius.x), Math.abs(radius.y));
 
     const pAccent = startPoint
       .sub(endPoint)
@@ -48,6 +48,7 @@ export class ArcSegment extends Segment {
       radius.x = Lsqrt * radius.x;
       radius.y = Lsqrt * radius.y;
     }
+    this.radius = radius;
 
     const cAccent = new Vector2(
       radius.ctg * pAccent.y,
