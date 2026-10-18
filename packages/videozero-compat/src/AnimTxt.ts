@@ -90,11 +90,6 @@ function lineWidthsOf(split: TextSplit, padding: number): number[] {
 @nodeName('AnimTxt')
 export class AnimTxt extends Txt {
   /**
-   * Default value for {@link smooth} on newly created nodes.
-   */
-  public static defaultSmooth = true;
-
-  /**
    * The `lineJoin` an `AnimTxt` uses when none is set on it or on a parent
    * text. `null` keeps the Canvas Commons default (`'miter'`).
    *
@@ -102,13 +97,6 @@ export class AnimTxt extends Txt {
    * {@link applyVideoZeroDefaults} sets it to `'round'`, as in VideoZero.
    */
   public static defaultLineJoin: CanvasLineJoin | null = null;
-
-  /**
-   * Kept for source compatibility with VideoZero, where it applied a tiny
-   * rotation to avoid pixel snapping. Canvas Commons positions text without
-   * rounding, so this flag has no effect.
-   */
-  public smooth = AnimTxt.defaultSmooth;
 
   private splitState: TextSplit | null = null;
   private splitPadding = 0;
@@ -221,15 +209,32 @@ export class AnimTxt extends Txt {
     return this.splitState?.lines[lineIndex] ?? [];
   }
 
-  /** Sets {@link smooth}. Kept for source compatibility. */
+  /**
+   * Turn on sub-pixel smoothing, as VideoZero's `enableSmooth()`.
+   *
+   * @remarks
+   * Sets the `smooth` signal of `Txt`. Split pieces made afterwards keep it.
+   *
+   * @example
+   * ```ts
+   * title().enableSmooth();
+   * ```
+   */
   public enableSmooth(): this {
-    this.smooth = true;
+    this.smooth(true);
     return this;
   }
 
-  /** Clears {@link smooth}. Kept for source compatibility. */
+  /**
+   * Turn off sub-pixel smoothing, as VideoZero's `disableSmooth()`.
+   *
+   * @example
+   * ```ts
+   * title().disableSmooth();
+   * ```
+   */
   public disableSmooth(): this {
-    this.smooth = false;
+    this.smooth(false);
     return this;
   }
 
@@ -971,3 +976,12 @@ export class AnimTxt extends Txt {
     });
   }
 }
+
+// VideoZero's `Txt.defaultSmooth` lives on `AnimTxt`: assigning it here must
+// change the one setting `Txt` reads, not shadow it.
+Object.defineProperty(AnimTxt, 'defaultSmooth', {
+  get: () => Txt.defaultSmooth,
+  set: (value: boolean) => {
+    Txt.defaultSmooth = value;
+  },
+});

@@ -36,6 +36,7 @@ export const VideoZeroAttributionParam = 'vz_attribution';
  * Sets:
  * - `Txt.defaultTextCenter` to `'cap'`,
  * - `Txt.defaultCenterLetterSpacing` to `true`,
+ * - `Txt.defaultSmooth` to `true` (sub-pixel smooth text, as in VideoZero),
  * - `Txt.warnTightLineHeight` and `Node.warnVisibleBeforeEntrance` to `true`,
  * - the default `strokeFirst` of every shape to `true`,
  * - `AnimTxt.defaultLineJoin` to `'round'` (plain `Txt` keeps `'miter'`),
@@ -63,6 +64,7 @@ export function applyVideoZeroDefaults(): () => void {
   const previous = {
     textCenter: Txt.defaultTextCenter,
     centerLetterSpacing: Txt.defaultCenterLetterSpacing,
+    smooth: Txt.defaultSmooth,
     tightLineHeight: Txt.warnTightLineHeight,
     visibleBeforeEntrance: Node.warnVisibleBeforeEntrance,
     strokeFirst: strokeFirst?.default,
@@ -73,6 +75,7 @@ export function applyVideoZeroDefaults(): () => void {
 
   Txt.defaultTextCenter = 'cap' satisfies TextCenter;
   Txt.defaultCenterLetterSpacing = true;
+  Txt.defaultSmooth = true;
   Txt.warnTightLineHeight = true;
   Node.warnVisibleBeforeEntrance = true;
   if (strokeFirst) strokeFirst.default = true;
@@ -85,6 +88,7 @@ export function applyVideoZeroDefaults(): () => void {
   return () => {
     Txt.defaultTextCenter = previous.textCenter;
     Txt.defaultCenterLetterSpacing = previous.centerLetterSpacing;
+    Txt.defaultSmooth = previous.smooth;
     Txt.warnTightLineHeight = previous.tightLineHeight;
     Node.warnVisibleBeforeEntrance = previous.visibleBeforeEntrance;
     if (strokeFirst) strokeFirst.default = previous.strokeFirst;

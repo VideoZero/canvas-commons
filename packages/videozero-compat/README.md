@@ -11,7 +11,8 @@ Nothing is patched: importing the package changes no behaviour.
   `revealUp`, `wordByWord`, `scramble`, `fadeOutUp`, `swapOut`, ...) with their
   VideoZero names, positional parameters and defaults, and `splitChars()` /
   `unsplit()` / `chars` / `words` / `lineChars()` for manual per-character
-  animation.
+  animation. `enableSmooth()` / `disableSmooth()` and `AnimTxt.defaultSmooth`
+  drive the `smooth` setting of `Txt` (sub-pixel smooth text).
 - `AnimLayout extends Layout`: `addAnimated`, `insertAnimated`,
   `removeAnimated`, `reorderAnimated`, `recordFlipState`, `tweenFlip`,
   `lockSize` and `releaseSize`.

@@ -43,6 +43,7 @@ Submit the base first; the stacked branch's PR then only shows its own commits.
 | `cc/text-animations`          | feature | `Txt.split('line')`, `splitPieces()`, `splitText()` and text entrance/exit helpers                                                                |
 | `cc/text-center`              | feature | `Txt.textCenter` (`line`/`cap`/`ink`)                                                                                                             |
 | `cc/text-wrap-balance`        | feature | `textWrap="balance"`                                                                                                                              |
+| `cc/text-smoothing`           | feature | `Txt.smooth`/`Txt.defaultSmooth`: sub-pixel smooth text (Chromium snaps glyphs vertically to whole pixels)                                        |
 | `cc/txt-line-overlap-warning` | feature | Opt-in warning when a Txt's lines overlap                                                                                                         |
 | `cc/text-fix-regressions`     | tests+  | Regression tests for spaced/RTL text; opt-in `Txt.centerLetterSpacing`                                                                            |
 | `cc/font-resolver`            | feature | `setFontResolver`, `googleFontsResolver`; `Code` waits for its web font                                                                           |

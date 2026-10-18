@@ -17,6 +17,7 @@ import {
   playbackManager,
 } from './mockScene2D';
 import {mockTextContext} from './mockTextContext';
+import {recordingTextContext} from './recordingTextContext';
 
 type Helper = (txt: AnimTxt) => ThreadGenerator;
 
@@ -595,12 +596,41 @@ describe('AnimTxt', () => {
     );
 
     it(
-      'keeps the smooth flag for source compatibility',
+      'drives Txt.smooth with enableSmooth() and disableSmooth()',
       generatorTest(function* (view) {
         const txt = create(view);
-        expect(txt.smooth).toBe(AnimTxt.defaultSmooth);
-        expect(txt.disableSmooth().smooth).toBe(false);
-        expect(txt.enableSmooth().smooth).toBe(true);
+        expect(txt.smooth()).toBe(false);
+        expect(txt.enableSmooth().smooth()).toBe(true);
+        const {calls, context} = recordingTextContext();
+        txt.render(context);
+        expect(calls.length).toBeGreaterThan(0);
+        expect(calls.every(call => call.angle === 0.001)).toBe(true);
+        txt.splitChars();
+        expect(txt.chars.length).toBeGreaterThan(0);
+        expect(txt.chars.every(piece => piece.smooth())).toBe(true);
+        txt.unsplit();
+        expect(txt.disableSmooth().smooth()).toBe(false);
+        txt.splitChars();
+        expect(txt.chars.some(piece => piece.smooth())).toBe(false);
+        txt.unsplit();
+      }),
+    );
+
+    it(
+      'shares AnimTxt.defaultSmooth with Txt.defaultSmooth',
+      generatorTest(function* (view) {
+        const previous = Txt.defaultSmooth;
+        try {
+          AnimTxt.defaultSmooth = true;
+          expect(Txt.defaultSmooth).toBe(true);
+          expect(create(view).smooth()).toBe(true);
+          expect(new Txt({text: 'a'}).smooth()).toBe(true);
+          Txt.defaultSmooth = false;
+          expect(AnimTxt.defaultSmooth).toBe(false);
+          expect(create(view).smooth()).toBe(false);
+        } finally {
+          Txt.defaultSmooth = previous;
+        }
       }),
     );
   });

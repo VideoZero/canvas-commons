@@ -15,6 +15,8 @@ export type PaintCall = {
   /** Where the pen lands once the transform in place is applied. */
   penX: number;
   penY: number;
+  /** Rotation of the transform in place, in radians. */
+  angle: number;
 };
 
 const TRACKED = [
@@ -62,6 +64,7 @@ export function recordingTextContext(): {
       direction: fixture.direction ?? 'inherit',
       penX: transform.x + x * cos - y * sin,
       penY: transform.y + x * sin + y * cos,
+      angle: transform.angle,
     });
   };
 

@@ -111,7 +111,7 @@ export default makeScene2D(function* (view) {
 | Attribution font: rounded stack (`ui-rounded, "SF Pro Rounded", …`)   | `sans-serif`                         | `applyVideoZeroDefaults()`                                                                                                                                               |
 | Default font `Inter, system-ui, sans-serif`                           | `Roboto`                             | `applyVideoZeroViewDefaults(view)` sets `fontFamily` on the view, which every node inherits. Nodes with `layout={false}` don't inherit: set it on them                   |
 | `Latex` fragment box padding `8` (`getFragmentBBox(id)` etc.)         | `0`                                  | **not covered** (a parameter default). Pass it: `latex.getFragmentBBox(id, 8)`, `getLocalFragmentBBox(id, 8)`, `getAbsoluteFragmentBBox(id, 8)`                          |
-| `Txt.defaultSmooth = true` (sub-pixel smoothing)                      | no smoothing switch                  | not needed: Canvas Commons doesn't round text positions. `AnimTxt.smooth`/`enableSmooth()`/`disableSmooth()` exist but do nothing                                        |
+| `Txt.defaultSmooth = true` (sub-pixel smoothing)                      | `Txt.defaultSmooth = false`          | `applyVideoZeroDefaults()` sets `Txt.defaultSmooth = true`, so every `Txt` (not only `AnimTxt`) paints with `smooth` on                                                  |
 | Numeric `lineHeight <= 4` is a multiplier (`1.2` → `120%`)            | numbers are pixels                   | **not covered**. Write `lineHeight="120%"` (or pixels). `Txt.warnTightLineHeight` reports the forgotten ones                                                             |
 | Literal `\n` (backslash, n) in text is a line break                   | drawn as `\n`                        | **not covered**. Use a real newline: `text={'a\nb'}` or a template literal                                                                                               |
 | `Txt.fonts` / `fontRegistry` alias map (`fontFamily="warmPlayful"`)   | gone                                 | **not covered**. Keep a map in your code and resolve it: `fontFamily={Fonts.warmPlayful}`. For loading undeclared web fonts use `setFontResolver(googleFontsResolver())` |
@@ -185,7 +185,11 @@ line height), `w` the width of the character's line.
 | `txt.isSplit` (protected)                                          | `txt.isSplit` (public getter); `txt.splitResult` gives the underlying `TextSplit`                                    |
 | `TxtChar.charLineWidth`                                            | `lineWidth` of the piece                                                                                             |
 | `TxtChar.charShadowColor` / `charShadowBlur`                       | `shadowColor` / `shadowBlur` of the piece                                                                            |
-| `smooth`, `Txt.defaultSmooth`, `enableSmooth()`, `disableSmooth()` | `AnimTxt.smooth`, `AnimTxt.defaultSmooth`, same methods; no effect                                                   |
+| `smooth`, `Txt.defaultSmooth`, `enableSmooth()`, `disableSmooth()` | same methods; `AnimTxt.defaultSmooth` is `Txt.defaultSmooth`; `smooth` is a signal (see below)                       |
+
+`smooth` is now the `smooth` signal of every `Txt` (inherited by nested text and
+copied to split pieces): read it with `txt.smooth()` and write
+`txt.smooth(false)` or `smooth={false}` instead of `txt.smooth = false`.
 
 ```diff
 - title().split();
