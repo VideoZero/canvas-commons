@@ -8,6 +8,7 @@ import {
 } from '@canvas-commons/core';
 import {Layout, LayoutProps} from '../Layout';
 import {Node} from '../Node';
+import {applyPosition, savePosition} from './savedPosition';
 
 type WrapperSide = 'left' | 'right' | 'top' | 'bottom';
 
@@ -72,6 +73,7 @@ export function* transitionTo(
     ? buildGrowWrapper(newParentLayout, targetIndex)
     : null;
 
+  const savedPosition = savePosition(source);
   const savedLayoutSelf = source.layoutSelf.context.raw();
   const savedOpacity = source.opacity.context.raw();
   const savedRotation = source.rotation.context.raw();
@@ -129,6 +131,7 @@ export function* transitionTo(
     } else {
       source.layoutSelf.context.setter(savedLayoutSelf);
     }
+    applyPosition(source, savedPosition);
   }
 }
 
