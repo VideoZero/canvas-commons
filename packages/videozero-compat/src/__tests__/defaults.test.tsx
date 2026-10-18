@@ -3,10 +3,10 @@ import {afterEach, describe, expect, it} from 'vitest';
 import {AnimTxt} from '../AnimTxt';
 import {
   VideoZeroAttributionFontFamily,
-  VideoZeroFontFamily,
   applyVideoZeroDefaults,
   applyVideoZeroViewDefaults,
 } from '../defaults';
+import {VideoZeroFontFamily} from '../fonts';
 import {generatorTest, mockScene2D} from './mockScene2D';
 
 describe('applyVideoZeroDefaults', () => {
@@ -24,7 +24,7 @@ describe('applyVideoZeroDefaults', () => {
     expect(Txt.defaultSmooth).toBe(false);
     expect(Txt.warnTightLineHeight).toBe(false);
     expect(Node.warnVisibleBeforeEntrance).toBe(false);
-    expect(AnimTxt.defaultLineJoin).toBeNull();
+    expect(new Txt({text: 'a'}).lineJoin()).toBe('miter');
     expect(new Rect({}).strokeFirst()).toBe(false);
     expect(attributionConfig.queryParam).toBe('attribution');
   });
@@ -39,7 +39,6 @@ describe('applyVideoZeroDefaults', () => {
     expect(new AnimTxt({text: 'a'}).smooth()).toBe(true);
     expect(Txt.warnTightLineHeight).toBe(true);
     expect(Node.warnVisibleBeforeEntrance).toBe(true);
-    expect(AnimTxt.defaultLineJoin).toBe('round');
     expect(new Rect({}).strokeFirst()).toBe(true);
     expect(new Txt({text: 'a'}).strokeFirst()).toBe(true);
     expect(new Rect({strokeFirst: false}).strokeFirst()).toBe(false);
@@ -58,7 +57,6 @@ describe('applyVideoZeroDefaults', () => {
     expect(new AnimTxt({text: 'a'}).smooth()).toBe(false);
     expect(Txt.warnTightLineHeight).toBe(false);
     expect(Node.warnVisibleBeforeEntrance).toBe(false);
-    expect(AnimTxt.defaultLineJoin).toBeNull();
     expect(new Rect({}).strokeFirst()).toBe(false);
     expect(attributionConfig.queryParam).toBe('attribution');
     expect(attributionConfig.render.fontFamily).toBe('sans-serif');
@@ -67,7 +65,7 @@ describe('applyVideoZeroDefaults', () => {
   it(
     'sets the VideoZero font on the view',
     generatorTest(function* (view) {
-      const txt = new AnimTxt({text: 'a'});
+      const txt = new Txt({text: 'a'});
       view.add(txt);
       expect(txt.fontFamily()).toBe('Roboto');
       applyVideoZeroViewDefaults(view);

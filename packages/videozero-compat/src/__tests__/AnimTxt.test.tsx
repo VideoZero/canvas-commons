@@ -738,15 +738,17 @@ describe('AnimTxt', () => {
 
   describe('lineJoin default', () => {
     afterEach(() => {
-      AnimTxt.defaultLineJoin = null;
+      AnimTxt.defaultLineJoin = 'round';
     });
 
     it(
       'uses the default line join of AnimTxt for itself and nested text',
       generatorTest(function* () {
+        AnimTxt.defaultLineJoin = null;
         const plain = new AnimTxt({text: 'a'});
         expect(plain.lineJoin()).toBe('miter');
         AnimTxt.defaultLineJoin = 'round';
+        expect(new AnimTxt({text: 'a'}).lineJoin()).toBe('round');
         const nested = new Txt({text: 'b'});
         const txt = new AnimTxt({children: [nested]});
         expect(txt.lineJoin()).toBe('round');

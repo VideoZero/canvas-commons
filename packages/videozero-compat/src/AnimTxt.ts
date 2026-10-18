@@ -1,4 +1,8 @@
 import {
+  ComponentChildren,
+  Layout,
+  Length,
+  Node,
   TextSplit,
   Txt,
   TxtProps,
@@ -17,6 +21,7 @@ import {
   Direction,
   InterpolationFunction,
   SignalValue,
+  SimpleSignal,
   ThreadGenerator,
   TimingFunction,
   all,
@@ -25,16 +30,113 @@ import {
   easeOutCubic,
   easeOutSine,
   isReactive,
+  map,
   sequence,
   threadable,
   tween,
   useRandom,
 } from '@canvas-commons/core';
+import {
+  VideoZeroFontFamily,
+  resolveVideoZeroFontFamily,
+  videoZeroFonts,
+} from './fonts';
 
 const ScramblePool =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*';
 
 type SplitBody = (split: TextSplit, height: number) => ThreadGenerator;
+
+type TextLeaf = Node & {text: SimpleSignal<string, Node>};
+
+function mapValue<T>(value: SignalValue<T>, fn: (value: T) => T) {
+  return isReactive(value) ? () => fn(value()) : fn(value);
+}
+
+/** The literal two characters `\n` read as a line break, as in VideoZero. */
+function unescapeNewlines(text: string): string {
+  return AnimTxt.escapedNewlines && typeof text === 'string'
+    ? text.replace(/\\n/g, '\n')
+    : text;
+}
+
+/** A small numeric line height read as a multiplier, as in VideoZero. */
+function multiplierLineHeight(value: Length): Length {
+  const limit = AnimTxt.lineHeightMultiplierLimit;
+  if (typeof value !== 'number' || limit === null || value > limit) {
+    return value;
+  }
+  return `${Math.round(value * 1e6) / 1e4}%`;
+}
+
+/** The line height as a percentage of the given font size. */
+function lineHeightPercent(value: Length, fontSize: number): number {
+  if (typeof value === 'string') return parseFloat(value);
+  return fontSize > 0 ? (value / fontSize) * 100 : 0;
+}
+
+function isTextLeaf(node: Node): node is TextLeaf {
+  return !(node instanceof Layout) && 'text' in node;
+}
+
+/** The layout a node inherits its font from, as `Layout` resolves it. */
+function layoutParentOf(node: Node): Layout | null {
+  const view = node.view();
+  for (let parent = node.parent(); parent; parent = parent.parent()) {
+    if (parent.view() !== view) return null;
+    if (parent instanceof Layout) return parent;
+  }
+  return null;
+}
+
+/**
+ * The `fontFamily` a node gets from the nearest ancestor that sets one, or
+ * `null` when no ancestor along the inheritance chain sets one.
+ */
+function inheritedFontFamily(node: Layout): string | null {
+  for (let current = node; current.layout() !== false;) {
+    const parent = layoutParentOf(current);
+    if (!parent) return null;
+    // Reading the value first lets a later change of it reach this node.
+    const family = parent.fontFamily();
+    if (parent instanceof AnimTxt || !parent.fontFamily.isInitial()) {
+      return family;
+    }
+    current = parent;
+  }
+  return null;
+}
+
+/** The default `fontFamily` the `defaultStyle` decorator gives `Layout`. */
+const LayoutFontDefault = Layout.prototype as unknown as {
+  getDefaultFontFamily(this: Layout): string;
+};
+
+const Adopted = new WeakSet<Node>();
+
+/**
+ * Give a plain text nested in an `AnimTxt` the VideoZero reading of its
+ * text, `fontFamily` and `lineHeight` as they are when it is added.
+ */
+function adoptNested(node: Node) {
+  if (node instanceof AnimTxt || Adopted.has(node)) return;
+  Adopted.add(node);
+  if (isTextLeaf(node)) {
+    const raw = node.text.context.raw();
+    if (raw !== undefined) node.text(mapValue(raw, unescapeNewlines));
+    return;
+  }
+  if (!(node instanceof Txt)) return;
+  const family = node.fontFamily.context.raw();
+  if (!node.fontFamily.isInitial() && family !== undefined) {
+    node.fontFamily(mapValue(family, resolveVideoZeroFontFamily));
+  }
+  const lineHeight = node.lineHeight.context.raw();
+  if (!node.lineHeight.isInitial() && lineHeight !== undefined) {
+    node.lineHeight(mapValue(lineHeight, multiplierLineHeight));
+  }
+  node.children().forEach(adoptNested);
+}
 
 function maxHeight(split: TextSplit): number {
   return split.units.reduce((max, unit) => Math.max(max, unit.height), 0);
@@ -77,8 +179,20 @@ function lineWidthsOf(split: TextSplit, padding: number): number[] {
  * split removed and the source at opacity `0`. A canceled helper removes its
  * split.
  *
+ * The pieces follow the text's style (`followStyle`), so tweening its
+ * `fill`, `fontWeight` and the like during a helper or while it stays split
+ * reaches them, unless a value was set on a piece itself.
+ *
  * Create the text with `opacity={0}` before an entrance, otherwise it's
  * visible from the start; `Node.warnVisibleBeforeEntrance` reports this.
+ *
+ * `AnimTxt` keeps the defensive defaults VideoZero had for generated scenes,
+ * for itself and the plain text nested in it: a literal `\n` is a line break
+ * ({@link AnimTxt.escapedNewlines}), a numeric `lineHeight` up to `4` is a
+ * multiplier ({@link AnimTxt.lineHeightMultiplierLimit}), `lineJoin` is round
+ * ({@link AnimTxt.defaultLineJoin}), text without a font uses the Inter stack
+ * ({@link AnimTxt.defaultFontFamily}), and `fontFamily` resolves the names of
+ * {@link AnimTxt.fonts}.
  *
  * For manual per-character animation use {@link splitChars} and
  * {@link unsplit}.
@@ -95,13 +209,78 @@ function lineWidthsOf(split: TextSplit, padding: number): number[] {
 @nodeName('AnimTxt')
 export class AnimTxt extends Txt {
   /**
-   * The `lineJoin` an `AnimTxt` uses when none is set on it or on a parent
-   * text. `null` keeps the Canvas Commons default (`'miter'`).
+   * The `lineJoin` an `AnimTxt` and the text nested in it use when none is
+   * set on it or on a parent text: `'round'`, as in VideoZero. `null` keeps
+   * the Canvas Commons default (`'miter'`).
+   *
+   * @example
+   * ```ts
+   * AnimTxt.defaultLineJoin = null;
+   * ```
+   */
+  public static defaultLineJoin: CanvasLineJoin | null = 'round';
+
+  /**
+   * The `fontFamily` of an `AnimTxt` that neither sets one nor gets one from
+   * an ancestor: VideoZero's Inter stack. `null` keeps the Canvas Commons
+   * default (`'Roboto'`).
    *
    * @remarks
-   * {@link applyVideoZeroDefaults} sets it to `'round'`, as in VideoZero.
+   * Unlike a font set on the view, it also reaches text inside containers
+   * with `layout={false}`, which don't inherit fonts from their parents.
+   *
+   * @example
+   * ```ts
+   * AnimTxt.defaultFontFamily = '"Source Sans 3", sans-serif';
+   * ```
    */
-  public static defaultLineJoin: CanvasLineJoin | null = null;
+  public static defaultFontFamily: string | null = VideoZeroFontFamily;
+
+  /**
+   * Whether the literal two characters backslash and `n` in the text of an
+   * `AnimTxt` (and of text nested in it) are a line break, as in VideoZero.
+   * Code generators and unparsed JSON often write them instead of a real
+   * newline. On by default.
+   *
+   * @example
+   * ```tsx
+   * <AnimTxt text={'First line\\nSecond line'} />; // two lines
+   * ```
+   */
+  public static escapedNewlines = true;
+
+  /**
+   * A numeric `lineHeight` up to this value is a multiplier of the font size,
+   * as in VideoZero: `lineHeight={1.2}` is `'120%'`. Larger numbers are
+   * pixels. `null` reads every number as pixels, like Canvas Commons.
+   * Defaults to `4`.
+   *
+   * @example
+   * ```tsx
+   * <AnimTxt lineHeight={1.4} text="Loose lines" />; // '140%'
+   * ```
+   */
+  public static lineHeightMultiplierLimit: number | null = 4;
+
+  /**
+   * Semantic font names, VideoZero's `Txt.fonts`: a `fontFamily` set to one
+   * of the keys draws with its stack.
+   *
+   * @remarks
+   * Extend it at app start. The `fontFamily` of an `AnimTxt`, and of plain
+   * text nested in it, resolves through {@link resolveVideoZeroFontFamily}:
+   * a registered name gives its stack, stacks, generic families and
+   * capitalized names are kept, and other names warn once.
+   *
+   * @example
+   * ```tsx
+   * AnimTxt.fonts.warmPlayful = '"Fraunces", serif';
+   * Object.assign(AnimTxt.fonts, {mono: '"JetBrains Mono", monospace'});
+   *
+   * <AnimTxt fontFamily="warmPlayful" text="Hello" />;
+   * ```
+   */
+  public static readonly fonts: Record<string, string> = videoZeroFonts;
 
   public constructor(props: TxtProps) {
     super(props);
@@ -182,7 +361,7 @@ export class AnimTxt extends Txt {
    * @param clipPadding - How far the masks reach past the line boxes.
    */
   public splitChars(clip = false, clipPadding = 4): this {
-    splitText(this, {by: 'grapheme', clip, clipPadding});
+    splitText(this, {by: 'grapheme', clip, clipPadding, followStyle: true});
     return this;
   }
 
@@ -251,6 +430,7 @@ export class AnimTxt extends Txt {
   }
 
   protected override setText(value: SignalValue<string>) {
+    value = mapValue(value, unescapeNewlines);
     if (
       this.parent() &&
       (isReactive(value) ? value() : value) !== this.text()
@@ -271,7 +451,62 @@ export class AnimTxt extends Txt {
     interpolationFunction: InterpolationFunction<string>,
   ): ThreadGenerator {
     if (this.splitState) this.unsplit();
-    yield* super.tweenText(value, time, timingFunction, interpolationFunction);
+    yield* super.tweenText(
+      mapValue(value, unescapeNewlines),
+      time,
+      timingFunction,
+      interpolationFunction,
+    );
+  }
+
+  protected override parseChildren(children: ComponentChildren): Node[] {
+    const array = Array.isArray(children) ? children : [children];
+    const nodes = super.parseChildren(
+      array.map(child =>
+        typeof child === 'string' ? unescapeNewlines(child) : child,
+      ),
+    );
+    nodes.forEach(adoptNested);
+    return nodes;
+  }
+
+  protected getFontFamily(): string {
+    return resolveVideoZeroFontFamily(this.fontFamily.context.getter());
+  }
+
+  protected getDefaultFontFamily(): string {
+    if (AnimTxt.defaultFontFamily === null) {
+      return LayoutFontDefault.getDefaultFontFamily.call(this);
+    }
+    return inheritedFontFamily(this) ?? AnimTxt.defaultFontFamily;
+  }
+
+  protected getLineHeight(): Length {
+    return multiplierLineHeight(this.lineHeight.context.getter());
+  }
+
+  /**
+   * Tweens the line height as a percentage of the font size, so multipliers,
+   * percentages and pixels mix.
+   */
+  @threadable()
+  protected *tweenLineHeight(
+    value: SignalValue<Length>,
+    time: number,
+    timingFunction: TimingFunction,
+  ): ThreadGenerator {
+    const from = this.lineHeight();
+    const to = multiplierLineHeight(isReactive(value) ? value() : value);
+    yield* tween(time, t => {
+      const size = this.effectiveFontSize();
+      const percent = map(
+        lineHeightPercent(from, size),
+        lineHeightPercent(to, size),
+        timingFunction(t),
+      );
+      this.lineHeight.context.setter(`${percent}%`);
+    });
+    this.lineHeight.context.setter(value);
   }
 
   protected override getDefaultLineJoin(initial: unknown): unknown {
@@ -321,7 +556,7 @@ export class AnimTxt extends Txt {
     if (!split) {
       this.unsplit();
       visible = this.opacity() > 0 ? this.opacity() : 1;
-      split = splitText(this, {by: 'grapheme', clip});
+      split = splitText(this, {by: 'grapheme', clip, followStyle: true});
     }
     if (split.pieces.length === 0) {
       split.restore(entrance ? 0 : visible);
@@ -412,7 +647,9 @@ export class AnimTxt extends Txt {
   @threadable()
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- VideoZero signature
   public *typewriter(_duration = 1.5, stagger = 0.04): ThreadGenerator {
-    yield* this.delegate('typewriter', () => textTypewriter(this, {stagger}));
+    yield* this.delegate('typewriter', () =>
+      textTypewriter(this, {stagger, followStyle: true}),
+    );
   }
 
   /**
@@ -426,6 +663,7 @@ export class AnimTxt extends Txt {
   ): ThreadGenerator {
     yield* this.delegate('fadeUp', () =>
       textFadeIn(this, {
+        followStyle: true,
         direction: Direction.Top,
         distance: this.glyphHeight() * 0.3,
         duration,
@@ -446,6 +684,7 @@ export class AnimTxt extends Txt {
   ): ThreadGenerator {
     yield* this.delegate('fadeDown', () =>
       textFadeIn(this, {
+        followStyle: true,
         direction: Direction.Bottom,
         distance: this.glyphHeight() * 0.3,
         duration,
@@ -513,7 +752,13 @@ export class AnimTxt extends Txt {
     tf: TimingFunction = easeOutBack,
   ): ThreadGenerator {
     yield* this.delegate('scaleIn', () =>
-      textScaleIn(this, {scale: 0, duration, stagger, timingFunction: tf}),
+      textScaleIn(this, {
+        followStyle: true,
+        scale: 0,
+        duration,
+        stagger,
+        timingFunction: tf,
+      }),
     );
   }
 
@@ -537,6 +782,7 @@ export class AnimTxt extends Txt {
   ): ThreadGenerator {
     yield* this.delegate(name, () =>
       textRevealIn(this, {
+        followStyle: true,
         by: 'grapheme',
         direction,
         duration,
@@ -718,6 +964,7 @@ export class AnimTxt extends Txt {
   ): ThreadGenerator {
     yield* this.delegate('rotateIn', () =>
       textScaleIn(this, {
+        followStyle: true,
         scale: 0.5,
         rotation: 90,
         duration,
@@ -771,7 +1018,8 @@ export class AnimTxt extends Txt {
   public *outline(_duration = 0.5, stagger = 0.04): ThreadGenerator {
     yield* this.animateSplit('outline', 0.5, function* (split) {
       const {pieces} = split;
-      const fills = pieces.map(piece => piece.fill());
+      // The raw values keep the pieces bound to the source's fill.
+      const fills = pieces.map(piece => piece.fill.context.raw() ?? null);
       pieces.forEach((piece, i) => {
         piece.fill(null);
         piece.stroke(fills[i]);
@@ -875,7 +1123,11 @@ export class AnimTxt extends Txt {
     tf: TimingFunction = easeInCubic,
   ): ThreadGenerator {
     yield* this.delegate(null, () =>
-      textFadeOut(this, {duration, timingFunction: tf}),
+      textFadeOut(this, {
+        followStyle: true,
+        duration,
+        timingFunction: tf,
+      }),
     );
   }
 
@@ -888,6 +1140,7 @@ export class AnimTxt extends Txt {
   ): ThreadGenerator {
     yield* this.delegate(null, () =>
       textFadeOut(this, {
+        followStyle: true,
         direction: Direction.Top,
         distance: this.glyphHeight() * 0.15,
         duration,
@@ -906,6 +1159,7 @@ export class AnimTxt extends Txt {
   ): ThreadGenerator {
     yield* this.delegate(null, () =>
       textFadeOut(this, {
+        followStyle: true,
         direction: Direction.Bottom,
         distance: this.glyphHeight() * 0.15,
         duration,
@@ -922,7 +1176,12 @@ export class AnimTxt extends Txt {
     tf: TimingFunction = easeInCubic,
   ): ThreadGenerator {
     yield* this.delegate(null, () =>
-      textScaleOut(this, {scale: 0.8, duration, timingFunction: tf}),
+      textScaleOut(this, {
+        followStyle: true,
+        scale: 0.8,
+        duration,
+        timingFunction: tf,
+      }),
     );
   }
 

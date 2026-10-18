@@ -8,12 +8,7 @@ import {
   configureAttribution,
   getPropertyMeta,
 } from '@canvas-commons/2d';
-import {AnimTxt} from './AnimTxt';
-
-/**
- * The font stack VideoZero used when no `fontFamily` is set.
- */
-export const VideoZeroFontFamily = 'Inter, system-ui, sans-serif';
+import {VideoZeroFontFamily} from './fonts';
 
 /**
  * The font stack VideoZero drew media attributions in.
@@ -39,14 +34,17 @@ export const VideoZeroAttributionParam = 'vz_attribution';
  * - `Txt.defaultSmooth` to `true` (sub-pixel smooth text, as in VideoZero),
  * - `Txt.warnTightLineHeight` and `Node.warnVisibleBeforeEntrance` to `true`,
  * - the default `strokeFirst` of every shape to `true`,
- * - `AnimTxt.defaultLineJoin` to `'round'` (plain `Txt` keeps `'miter'`),
  * - the attribution query parameter to `vz_attribution` and its font to
  *   VideoZero's rounded font stack.
  *
+ * `AnimTxt` brings the VideoZero defaults that only concern it (round
+ * `lineJoin`, the Inter font, literal `\n` line breaks, multiplier line
+ * heights, `AnimTxt.fonts`) by itself.
+ *
  * Call it once, before the scenes create their nodes, for example at the top
- * of `project.ts`. The default font and the `Latex` fragment box padding can't
- * be changed this way; see {@link applyVideoZeroViewDefaults} and the
- * migration guide.
+ * of `project.ts`. The default font of other nodes and the `Latex` fragment
+ * box padding can't be changed this way; see
+ * {@link applyVideoZeroViewDefaults} and the migration guide.
  *
  * @example
  * ```ts
@@ -68,7 +66,6 @@ export function applyVideoZeroDefaults(): () => void {
     tightLineHeight: Txt.warnTightLineHeight,
     visibleBeforeEntrance: Node.warnVisibleBeforeEntrance,
     strokeFirst: strokeFirst?.default,
-    lineJoin: AnimTxt.defaultLineJoin,
     queryParam: attributionConfig.queryParam,
     attributionFont: attributionConfig.render.fontFamily,
   };
@@ -79,7 +76,6 @@ export function applyVideoZeroDefaults(): () => void {
   Txt.warnTightLineHeight = true;
   Node.warnVisibleBeforeEntrance = true;
   if (strokeFirst) strokeFirst.default = true;
-  AnimTxt.defaultLineJoin = 'round';
   configureAttribution({
     queryParam: VideoZeroAttributionParam,
     render: {fontFamily: VideoZeroAttributionFontFamily},
@@ -92,7 +88,6 @@ export function applyVideoZeroDefaults(): () => void {
     Txt.warnTightLineHeight = previous.tightLineHeight;
     Node.warnVisibleBeforeEntrance = previous.visibleBeforeEntrance;
     if (strokeFirst) strokeFirst.default = previous.strokeFirst;
-    AnimTxt.defaultLineJoin = previous.lineJoin;
     configureAttribution({
       queryParam: previous.queryParam,
       render: {fontFamily: previous.attributionFont},
@@ -105,11 +100,15 @@ export function applyVideoZeroDefaults(): () => void {
  * Inter font stack, inherited by every node that doesn't set its own
  * `fontFamily`.
  *
+ * @remarks
+ * `AnimTxt` uses the Inter stack without it, even inside `layout={false}`
+ * containers; this is for plain `Txt`, `Code` and the like.
+ *
  * @example
  * ```tsx
  * export default makeScene2D(function* (view) {
  *   applyVideoZeroViewDefaults(view);
- *   view.add(<AnimTxt text="Set in Inter" />);
+ *   view.add(<Txt text="Set in Inter" />);
  * });
  * ```
  *
