@@ -1,0 +1,23 @@
+{
+  "name": "@canvas-commons/vz-showcase",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Before/after demo scenes for the cc/* feature branches",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "render": "node render.mjs",
+    "render:all": "bash render.sh"
+  },
+  "dependencies": {
+    "@canvas-commons/2d": "workspace:^",
+    "@canvas-commons/core": "workspace:^"
+  },
+  "devDependencies": {
+    "@canvas-commons/editor": "workspace:^",
+    "@canvas-commons/vite-plugin": "workspace:^",
+    "@types/node": "catalog:",
+    "playwright": "^1.63.0",
+    "vite": "catalog:"
+  }
+}
