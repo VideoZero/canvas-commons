@@ -84,6 +84,33 @@ function* probeAt(
   );
 }
 
+/**
+ * Check that an entrance left the text split with every character in place,
+ * then unsplit it by hand.
+ */
+function expectKeptSplit(view: Node, txt: AnimTxt, opacity = 1) {
+  const split = txt.splitResult;
+  expect(split).not.toBeNull();
+  if (!split) return;
+  expect(txt.isSplit).toBe(true);
+  expect(txt.opacity()).toBe(0);
+  expect(txt.chars).toBe(split.pieces);
+  expect(view.children()).toEqual([txt, split.container]);
+  expect(split.container.opacity()).toBe(opacity);
+  txt.chars.forEach((piece, i) => {
+    expect(piece.opacity()).toBe(1);
+    expect(piece.scale().x).toBeCloseTo(1, 5);
+    expect(piece.rotation()).toBeCloseTo(0, 5);
+    expect(piece.x()).toBeCloseTo(split.homes[i].x, 5);
+    expect(piece.y()).toBeCloseTo(split.homes[i].y, 5);
+  });
+  txt.unsplit();
+  expect(txt.isSplit).toBe(false);
+  expect(txt.chars).toEqual([]);
+  expect(txt.opacity()).toBe(opacity);
+  expect(view.children()).toEqual([txt]);
+}
+
 /** The resting place of every grapheme of the text. */
 function homes(txt: AnimTxt) {
   const pieces = txt.split();
@@ -128,16 +155,15 @@ describe('AnimTxt', () => {
 
   for (const [name, helper] of Object.entries(Entrances)) {
     it(
-      `${name}() animates pieces and ends with the source shown`,
+      `${name}() animates pieces and leaves the text split`,
       generatorTest(function* (view) {
         const txt = create(view, {opacity: 0});
         yield* probeAt(helper(txt), 0.01, () => {
           expect(txt.opacity()).toBe(0);
           expect(piecesOf(view).length).toBeGreaterThan(0);
         });
-        expect(txt.opacity()).toBe(1);
-        expect(view.children()).toEqual([txt]);
-        expect(txt.isSplit).toBe(false);
+        expect(txt.chars.map(piece => piece.text())).toEqual(['a', 'b', 'c']);
+        expectKeptSplit(view, txt);
       }),
     );
   }
@@ -270,10 +296,17 @@ describe('AnimTxt', () => {
       yield* probeAt(txt.lineByLine(0.5, 0.15), 0.1, () => {
         const masks = view.children()[1].children();
         expect(masks).toHaveLength(2);
+        // Characters start a character height below their resting place.
         const [first, second] = masks.map(mask => mask.children()[0].y());
-        expect(first).toBeLessThan(28);
-        expect(second).toBeCloseTo(28, 5);
+        expect(first).toBeLessThan(20);
+        expect(second).toBeCloseTo(20, 5);
       });
+      expect(txt.lineChars(1).map(piece => piece.text())).toEqual([
+        'b',
+        'b',
+        'b',
+      ]);
+      expectKeptSplit(view, txt);
     }),
   );
 
@@ -331,7 +364,7 @@ describe('AnimTxt', () => {
         );
       });
       expect(moved).toBe(true);
-      expect(txt.opacity()).toBe(1);
+      expectKeptSplit(view, txt);
     }),
   );
 
@@ -430,7 +463,7 @@ describe('AnimTxt', () => {
       yield* probeAt(txt.fadeUp(), 0.1, () => {
         expect(view.children()[1].opacity()).toBe(0.5);
       });
-      expect(txt.opacity()).toBe(0.5);
+      expectKeptSplit(view, txt, 0.5);
     }),
   );
 
@@ -518,8 +551,7 @@ describe('AnimTxt', () => {
             expect(piece.y()).toBeCloseTo(rest[i].y, 1);
           });
         });
-        expect(view.children()).toEqual([txt]);
-        expect(txt.opacity()).toBe(1);
+        expectKeptSplit(view, txt);
       }),
     );
 
@@ -528,10 +560,79 @@ describe('AnimTxt', () => {
       generatorTest(function* (view) {
         const txt = create(view, {opacity: 0});
         txt.splitChars(true);
+        const manual = txt.splitResult;
         yield* txt.fadeUp();
+        expect(manual?.isActive()).toBe(false);
+        expect(txt.splitResult?.clip).toBe(false);
+        expectKeptSplit(view, txt);
+      }),
+    );
+  });
+
+  describe('after an entrance', () => {
+    it(
+      'keeps the characters usable until the exit',
+      generatorTest(function* (view) {
+        const txt = create(view, {opacity: 0});
+        yield* txt.fadeUp();
+        const chars = txt.chars;
+        expect(chars).toHaveLength(3);
+        yield* chars[1].scale(1.5, 0.1).to(1, 0.1);
+        yield* probeAt(txt.fadeOut(0.5), 0.2, () => {
+          expect(piecesOf(view)).toEqual(chars);
+        });
         expect(txt.isSplit).toBe(false);
+        expect(txt.opacity()).toBe(0);
         expect(view.children()).toEqual([txt]);
+      }),
+    );
+
+    it(
+      'animates a clipped split in a custom exit',
+      generatorTest(function* (view) {
+        const txt = create(view, {opacity: 0});
+        yield* txt.revealUp();
+        const split = txt.splitResult;
+        expect(split?.clip).toBe(true);
+        yield* probeAt(txt.swapOut(0.5), 0.2, () => {
+          expect(txt.splitResult).toBe(split);
+        });
+        expect(view.children()).toEqual([txt]);
+        expect(txt.opacity()).toBe(0);
+      }),
+    );
+
+    it(
+      'draws the same characters in the frames after an entrance',
+      generatorTest(function* (view) {
+        const txt = create(view, {opacity: 0, text: 'office'});
+        yield* txt.fadeUp();
+        const at = () =>
+          txt.chars.map(piece => [
+            piece.text(),
+            piece.x(),
+            piece.y(),
+            piece.opacity(),
+          ]);
+        const end = at();
+        for (let frame = 0; frame < 5; frame++) {
+          yield;
+          expect(txt.isSplit).toBe(true);
+          expect(txt.opacity()).toBe(0);
+          expect(at()).toEqual(end);
+        }
+      }),
+    );
+
+    it(
+      'shows the text again when it changes',
+      generatorTest(function* (view) {
+        const txt = create(view, {opacity: 0});
+        yield* txt.typewriter();
+        txt.text('xy');
+        expect(txt.isSplit).toBe(false);
         expect(txt.opacity()).toBe(1);
+        expect(view.children()).toEqual([txt]);
       }),
     );
   });

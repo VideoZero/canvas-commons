@@ -151,7 +151,7 @@ line height), `w` the width of the character's line.
 | `bounceIn(d = 0.5, s = 0.03, tf = easeOutBack)`  | drop `h` into place with overshoot, opacity 1 in 0.15 s             | `splitText`, custom loop                        |
 | `revealUp/Down/Left/Right(d = 0.6, tf)`          | all characters slide in from behind their line's mask at once       | `textRevealIn` (`by: 'grapheme'`, `stagger: 0`) |
 | `wordByWord(d = 0.4, s = 0.1, tf)`               | words fade in (full d) one after another, rising `0.2 h`            | `splitText`, custom loop                        |
-| `lineByLine(d = 0.5, s = 0.15, tf)`              | lines slide up from behind their mask one after another             | `textRevealIn` (`by: 'line'`)                   |
+| `lineByLine(d = 0.5, s = 0.15, tf)`              | lines slide up `h` from behind their mask one after another         | `splitText` (clipped), custom loop              |
 | `trackingIn(d = 0.7, spread = 0.4, tf)`          | close in on the mean `x` of all characters while fading in          | `splitText`, custom loop                        |
 | `waveIn(d = 2, tf)`                              | fade in on a settling sine wave                                     | `splitText`, custom loop                        |
 | `rotateIn(d = 0.5, s = 0.04, tf = easeOutCubic)` | spin from 90° and grow from 0.5                                     | `textScaleIn`                                   |
@@ -175,8 +175,8 @@ line height), `w` the width of the character's line.
 | VideoZero                                                          | `AnimTxt`                                                                                                            |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `txt.split(clip = false, clipPadding = 4)`                         | `txt.splitChars(clip = false, clipPadding = 4)` — `split()` is the Canvas Commons method returning standalone pieces |
-| `txt.unsplit()`                                                    | `txt.unsplit()`                                                                                                      |
-| `txt.chars: TxtChar[]`                                             | `txt.chars: Txt[]` (read-only getter)                                                                                |
+| `txt.unsplit()`                                                    | `txt.unsplit()` (also ends the split an entrance left)                                                               |
+| `txt.chars: TxtChar[]`                                             | `txt.chars: Txt[]` (read-only getter; filled after an entrance, as in VideoZero)                                     |
 | `txt.words: TxtChar[][]`                                           | `txt.words: Txt[][]` (whitespace splits words; so does a line break)                                                 |
 | `txt.lineChars(i)`                                                 | `txt.lineChars(i)`                                                                                                   |
 | `txt.lineWidths`                                                   | `txt.lineWidths` (without the clip padding)                                                                          |
@@ -200,24 +200,35 @@ copied to split pieces): read it with `txt.smooth()` and write
 
 ### Behaviour differences
 
-- **Helpers clean up after themselves.** In VideoZero, an entrance left the text
-  split (drawn by `TxtChar`s) until the next exit or text change. An `AnimTxt`
-  helper splits, animates and removes the split when it ends, so the node is a
-  normal `Txt` again: `chars` is empty after a helper, and per-node properties
-  (`filters`, `shadow*`, `cache`) apply again after the helper. Call
-  `splitChars()` for manual control after an entrance.
+- **Entrances leave the text split, as in VideoZero.** The pieces stay drawn in
+  place of the text until the next exit, text change, `unsplit()` or
+  `splitChars()`, so the last frame of the entrance stays on screen: swapping
+  the pieces back to the source would make ligatures (`fi`, `fl`, `ff`) and
+  kerning pairs jump by a pixel or two in one frame. `chars`, `words`,
+  `lineChars()` and the other split getters work after an entrance; call
+  `unsplit()` to draw the text itself again (at the opacity its pieces had), for
+  example before applying `filters`, `shadow*` or `cache` to it, which don't
+  reach the pieces. A new entrance replaces the split.
 - **The split is drawn by sibling nodes.** While split, the source has `opacity`
   `0` and the pieces are standalone `Txt` nodes mounted right after the source
   (or after its outermost `Txt` ancestor), in a container that follows the
   source's transform. Code that walks `view.children()` during a helper sees
   that container. `filters`, `shadow*` and `cache` of the source are not
   transferred to the pieces.
-- **Exits** end with the node at `opacity` `0` and no split, as in VideoZero.
-  Entrances end with the node at the opacity it had, or `1` when it started at
-  `0` (VideoZero always set `1`).
-- **A helper on a split node** first removes the manual split (VideoZero
-  re-split for entrances and kept a manual split for exits).
-- **Changing or tweening the text** removes a manual split (VideoZero fix
+- **While split, the node itself is at `opacity` `0`**: the pieces' container
+  carries the visible opacity (the opacity the node had, or `1` when it started
+  at `0`; VideoZero always set `1`). Tweening `opacity` of a split node or
+  removing it from the scene doesn't fade the pieces: use an exit or `unsplit()`
+  first. Pieces of a node removed from the scene are not drawn.
+- **Exits** animate the current split (the entrance's, or one made with
+  `splitChars()`), and end with the node at `opacity` `0` and no split, as in
+  VideoZero. `fadeOut`, `fadeOutUp`, `fadeOutDown` and `scaleOut` split anew
+  when the current split is clipped (`revealUp…`, `lineByLine`), which looks the
+  same. A canceled helper removes its split (an entrance shows the node, an exit
+  hides it).
+- **An entrance on a split node** replaces the split, as VideoZero re-split for
+  every entrance.
+- **Changing or tweening the text** removes the split (VideoZero fix
   `25000cc3`), and counts as newly shown content for the visible-before-entrance
   warning.
 - **`neon()` and `shadowIn()`** keep their final glow/shadow by setting
@@ -254,6 +265,10 @@ yield * textFadeIn(txt, {direction: Direction.Top}); // ≈ fadeUp()
 yield * textRevealIn(txt, {by: 'line', stagger: 0.15}); // ≈ lineByLine()
 yield * textFadeOut(txt, {direction: Direction.Top}); // ≈ fadeOutUp() (0.3 h instead of 0.15 h)
 ```
+
+These entrances also leave `txt` split; `getTextSplit(txt)` returns the split
+(`pieces`, `homes`, `lines`, …) and `getTextSplit(txt)?.restore()` draws the
+text itself again.
 
 ## 4. Layout animations: `AnimLayout`
 

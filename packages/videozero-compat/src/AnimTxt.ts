@@ -2,6 +2,7 @@ import {
   TextSplit,
   Txt,
   TxtProps,
+  getTextSplit,
   nodeName,
   splitText,
   textFadeIn,
@@ -68,9 +69,13 @@ function lineWidthsOf(split: TextSplit, padding: number): number[] {
  * @remarks
  * Every helper keeps the name, positional parameters, and defaults it had in
  * VideoZero, and is built on {@link splitText}: the text is split into one
- * standalone piece per grapheme, the pieces are animated in the source's
- * place, and the split is removed when the helper ends (or is canceled).
- * Entrances end with the source shown, exits with the source at opacity `0`.
+ * standalone piece per grapheme and the pieces are animated in the source's
+ * place. As in VideoZero, entrances leave the text split, so it keeps looking
+ * exactly like the last frame of the entrance (ligatures and kerning don't
+ * jump) and {@link chars} can be animated further; {@link unsplit} draws the
+ * source again. Exits animate the pieces of an earlier split and end with the
+ * split removed and the source at opacity `0`. A canceled helper removes its
+ * split.
  *
  * Create the text with `opacity={0}` before an entrance, otherwise it's
  * visible from the start; `Node.warnVisibleBeforeEntrance` reports this.
@@ -98,15 +103,13 @@ export class AnimTxt extends Txt {
    */
   public static defaultLineJoin: CanvasLineJoin | null = null;
 
-  private splitState: TextSplit | null = null;
-  private splitPadding = 0;
-
   public constructor(props: TxtProps) {
     super(props);
   }
 
   /**
-   * Whether the text is currently split with {@link splitChars}.
+   * Whether the text is currently split, by an entrance or by
+   * {@link splitChars}.
    */
   public get isSplit(): boolean {
     return this.splitState !== null;
@@ -119,8 +122,17 @@ export class AnimTxt extends Txt {
     return this.splitState;
   }
 
+  private get splitState(): TextSplit | null {
+    return getTextSplit(this);
+  }
+
+  private get splitPadding(): number {
+    return this.splitState?.clip ? this.splitState.clipPadding : 0;
+  }
+
   /**
-   * The character pieces created by {@link splitChars}, in reading order.
+   * The character pieces of the current split, in reading order: the ones
+   * of the last entrance, or the ones created by {@link splitChars}.
    */
   public get chars(): Txt[] {
     return this.splitState?.pieces ?? [];
@@ -157,7 +169,7 @@ export class AnimTxt extends Txt {
    * Replaces VideoZero's `split(clip, clipPadding)`; `split()` itself is the
    * Canvas Commons method returning standalone pieces. The source is hidden
    * while split. Changing the text or calling {@link unsplit} removes the
-   * pieces.
+   * pieces. A split left by an entrance is replaced.
    *
    * @example
    * ```ts
@@ -170,19 +182,19 @@ export class AnimTxt extends Txt {
    * @param clipPadding - How far the masks reach past the line boxes.
    */
   public splitChars(clip = false, clipPadding = 4): this {
-    this.unsplit();
-    this.splitState = splitText(this, {by: 'grapheme', clip, clipPadding});
-    this.splitPadding = clip ? clipPadding : 0;
+    splitText(this, {by: 'grapheme', clip, clipPadding});
     return this;
   }
 
   /**
-   * Remove the pieces created by {@link splitChars} and show the text again.
+   * Remove the pieces of the current split, left by an entrance or created by
+   * {@link splitChars}, and show the text again.
+   *
+   * @remarks
+   * The text is shown at the opacity its pieces were drawn with.
    */
   public unsplit(): this {
-    const split = this.splitState;
-    this.splitState = null;
-    split?.restore();
+    this.splitState?.restore();
     return this;
   }
 
@@ -278,39 +290,51 @@ export class AnimTxt extends Txt {
     return `${super.warningLabel()} "${snippet}"`;
   }
 
-  /** Starts a helper built on a Canvas Commons text animation. */
+  /**
+   * Starts a helper built on a Canvas Commons text animation, which replaces
+   * the current split for an entrance and reuses it for an exit when it was
+   * cut the same way.
+   */
   private *delegate(
     entrance: string | null,
     animation: () => ThreadGenerator,
   ): ThreadGenerator {
     if (entrance) this.warnVisibleBeforeEntrance(`${entrance}() entrance`);
-    this.unsplit();
     yield* animation();
   }
 
   /**
-   * Split the text for one helper and remove the split afterwards, even when
-   * the helper is canceled.
+   * Run a helper on a split of the text. An entrance splits the text anew
+   * and leaves the split in place when it ends; an exit animates the current
+   * split, if any, and removes it when it ends. A canceled helper removes the
+   * split.
    */
   private *animateSplit(
     entrance: string | null,
     duration: number,
     body: SplitBody,
+    clip = false,
   ): ThreadGenerator {
     if (entrance) this.warnVisibleBeforeEntrance(`${entrance}() entrance`);
-    this.unsplit();
-    const visible = this.opacity() > 0 ? this.opacity() : 1;
-    const split = splitText(this);
+    let split = entrance ? null : this.splitState;
+    let visible = 1;
+    if (!split) {
+      this.unsplit();
+      visible = this.opacity() > 0 ? this.opacity() : 1;
+      split = splitText(this, {by: 'grapheme', clip});
+    }
     if (split.pieces.length === 0) {
       split.restore(entrance ? 0 : visible);
       yield* this.opacity(entrance ? visible : 0, duration);
       return;
     }
+    let keep = false;
     try {
       if (entrance) split.container.opacity(visible);
       yield* body(split, maxHeight(split));
+      keep = entrance !== null;
     } finally {
-      split.restore(entrance ? visible : 0);
+      if (!keep) split.restore(entrance ? visible : 0);
     }
   }
 
@@ -600,14 +624,24 @@ export class AnimTxt extends Txt {
     stagger = 0.15,
     tf: TimingFunction = easeOutCubic,
   ): ThreadGenerator {
-    yield* this.delegate('lineByLine', () =>
-      textRevealIn(this, {
-        by: 'line',
-        direction: Direction.Top,
-        duration,
-        stagger,
-        timingFunction: tf,
-      }),
+    yield* this.animateSplit(
+      'lineByLine',
+      duration,
+      function* (split, h) {
+        const {pieces, homes, lines} = split;
+        pieces.forEach((piece, i) => piece.position.y(homes[i].y + h));
+        yield* sequence(
+          stagger,
+          ...lines.map(line =>
+            all(
+              ...line.map(piece =>
+                piece.position.y(homes[pieces.indexOf(piece)].y, duration, tf),
+              ),
+            ),
+          ),
+        );
+      },
+      true,
     );
   }
 
