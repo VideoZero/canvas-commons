@@ -11,7 +11,8 @@
 #   4. renders src/projects/all.ts on videozero-cc into all-videozero-cc.mp4,
 #   5. writes contact-sheet.png with one frame per branch.
 # With --compare, steps 2-5 are replaced by rendering every project on
-# videozero-cc and joining main|videozero-cc pairs into compare-all.mp4.
+# videozero-cc and writing fixes.mp4 (main|videozero-cc side by side),
+# improvements.mp4 and packages.mp4.
 # SHOWCASE_SCALE=2 renders in full HD.
 # Each ref is rendered in a temporary detached worktree (WT_ROOT/render-*)
 # that gets this package copied in, `pnpm install`, the needed packages
@@ -129,6 +130,10 @@ todo() {
   done
 }
 
+if [ "$COMPARE" -eq 1 ]; then
+  NAMES=(layout-flip-fixes zero-length-curves camera media shaders
+    resource-cache latex svg-rendering)
+fi
 if [ "$SKIP_BEFORE" -eq 0 ]; then
   mapfile -t pending < <(todo before "${NAMES[@]}")
   if [ ${#pending[@]} -gt 0 ]; then
@@ -140,25 +145,44 @@ if [ "$SKIP_BEFORE" -eq 0 ]; then
 fi
 
 if [ "$COMPARE" -eq 1 ]; then
-  # Every scene on canvas-commons main next to the same scene on $ALL_REF,
-  # joined into one video.
+  # Three videos of $ALL_REF: the fixes next to canvas-commons main, the
+  # smaller improvements and the new packages on their own.
+  FIXES=(layout-flip-fixes zero-length-curves camera media shaders
+    resource-cache latex svg-rendering)
+  IMPROVEMENTS=(css-gradient build-animation text-animations text-center
+    text-wrap-balance txt-line-overlap-warning font-resolver layout-reorder
+    line-align-children view-chain transform3d attribution scene-playback
+    scenes-recalculated entrance-warning audio easings)
+  PACKAGES=(three d3-geo echarts shiki rig)
   mkdir -p "$OUT/vzcc" "$OUT/compare"
-  mapfile -t pending < <(todo vzcc "${NAMES[@]}")
+  mapfile -t pending < <(todo vzcc "${FIXES[@]}" "${IMPROVEMENTS[@]}" "${PACKAGES[@]}")
   if [ ${#pending[@]} -gt 0 ]; then
     dir="$WT_ROOT/render-compare"
     prepare "$ALL_REF" "$dir"
     render "$dir" "$OUT/vzcc" "${pending[@]}"
     cleanup "$dir"
   fi
-  list="$OUT/compare/list.txt"
-  : >"$list"
-  for name in "${NAMES[@]}"; do
+  # join <target> <clip...>
+  join() {
+    local target="$1" list="$OUT/compare/list.txt"
+    shift
+    : >"$list"
+    for clip in "$@"; do echo "file '$clip'" >>"$list"; done
+    "$FFMPEG" -loglevel error -y -f concat -safe 0 -i "$list" -c copy "$target"
+    echo "wrote $target"
+  }
+  clips=()
+  for name in "${FIXES[@]}"; do
     stitch "$name" vzcc "$ALL_REF" "$OUT/compare/$name.mp4"
-    echo "file '$OUT/compare/$name.mp4'" >>"$list"
+    clips+=("$OUT/compare/$name.mp4")
   done
-  "$FFMPEG" -loglevel error -y -f concat -safe 0 -i "$list" -c copy \
-    "$OUT/compare-all.mp4"
-  echo "done: $OUT/compare-all.mp4"
+  join "$OUT/fixes.mp4" "${clips[@]}"
+  clips=()
+  for name in "${IMPROVEMENTS[@]}"; do clips+=("$OUT/vzcc/$name.mp4"); done
+  join "$OUT/improvements.mp4" "${clips[@]}"
+  clips=()
+  for name in "${PACKAGES[@]}"; do clips+=("$OUT/vzcc/$name.mp4"); done
+  join "$OUT/packages.mp4" "${clips[@]}"
   exit 0
 fi
 
