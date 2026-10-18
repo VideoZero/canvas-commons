@@ -33,6 +33,7 @@ Submit the base first; the stacked branch's PR then only shows its own commits.
 | ----------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cc/layout-flip-fixes`        | fix     | Flex children keep their size during animated add/insert/remove and `editLayout`; `thawLayout` animates; cancelled layout tweens release the lock                       |
 | `cc/zero-length-curves`       | fix     | An empty curve draws no cap dot                                                                                                                                         |
+| `cc/arc-segment-radius`       | fix     | SVG/`Path` arcs whose radius is too small are drawn and sampled on the scaled ellipse (`start`/`end`, arrows, `build`, point lookups)                                   |
 | `cc/camera`                   | fix     | `followCurve*` in scene space; shared camera scenes drawn by the right camera                                                                                           |
 | `cc/media`                    | fix     | Null-origin asset URLs, no hash on data/blob URLs, failed media not pooled, a missing image or video no longer fails the scene                                          |
 | `cc/ffmpeg`                   | fix     | Frames reach FFmpeg in order; the export ends after the last frame                                                                                                      |
@@ -65,7 +66,7 @@ Submit the base first; the stacked branch's PR then only shows its own commits.
 | `cc/ignore-ds-store`          | tooling | Ignore `.DS_Store`                                                                                                                                                      |
 | `cc/three`                    | package | `@canvas-commons/three`                                                                                                                                                 |
 | `cc/d3-geo`                   | package | `@canvas-commons/d3-geo`                                                                                                                                                |
-| `cc/echarts`                  | package | `@canvas-commons/echarts` (two changesets; merge them before the PR)                                                                                                    |
+| `cc/echarts`                  | package | `@canvas-commons/echarts`; waits for the web fonts of its option and theme (three changesets; merge them before the PR)                                                 |
 | `cc/shiki`                    | package | `@canvas-commons/shiki`                                                                                                                                                 |
 | `cc/rig`                      | package | `@canvas-commons/rig`                                                                                                                                                   |
 
@@ -86,7 +87,5 @@ the e2e suite in Chromium against baselines rendered on canvas-commons `main`
   has no baseline callback). VideoZero scenes relying on it render differently.
 - Letter-spaced, shrink-wrapped text sits `letterSpacing / 2` off centre in
   canvas-commons by design (CSS); `Txt.centerLetterSpacing` is opt-in.
-- `ArcSegment` scales its local radius but not `this.radius` for out-of-range
-  radii (pre-existing upstream bug, not fixed).
 - `ScenePlayback` renders inner frames asynchronously, so an export can show the
   previous inner frame (as in VideoZero).

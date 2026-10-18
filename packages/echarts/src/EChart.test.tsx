@@ -5,6 +5,7 @@ import type {
   ThreadGeneratorFactory,
 } from '@canvas-commons/core';
 import {
+  DependencyContext,
   PlaybackManager,
   PlaybackStatus,
   ReadOnlyTimeEvents,
@@ -19,7 +20,17 @@ import {
   useTime,
 } from '@canvas-commons/core';
 import 'geometry-polyfill';
-import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type {EChartProps} from './EChart';
 import {EChart} from './EChart';
 import {darkColors, lightColors} from './themes';
 
@@ -326,4 +337,130 @@ describe('EChart', () => {
       yield;
     }),
   );
+
+  describe('fonts', () => {
+    const loaded = new Set<string>();
+    const faces = [
+      'Theme Face',
+      'Title Face',
+      'Late',
+      'Update Face',
+      'Awaited Face',
+    ].map(family => ({family, style: 'normal', weight: '1 1000'}));
+    const fonts = {
+      size: faces.length,
+      [Symbol.iterator]: () => faces[Symbol.iterator](),
+      check: vi.fn((font: string) => loaded.has(font)),
+      load: vi.fn(async (font: string) => {
+        loaded.add(font);
+        return [];
+      }),
+      addEventListener: vi.fn(),
+    };
+
+    beforeEach(() => {
+      Object.defineProperty(document, 'fonts', {
+        value: fonts,
+        configurable: true,
+      });
+    });
+    afterEach(async () => {
+      await DependencyContext.consumePromises();
+      Reflect.deleteProperty(document, 'fonts');
+      vi.clearAllMocks();
+    });
+
+    function requested() {
+      return fonts.load.mock.calls.map(([font]) => font);
+    }
+
+    function addChart(props: EChartProps): EChart {
+      const charts: EChart[] = [];
+      generatorTest(function* (view) {
+        const chart = new EChart(props);
+        view.add(chart);
+        charts.push(chart);
+        yield;
+      })();
+      const [chart] = charts;
+      return chart;
+    }
+
+    function draw(chart: EChart) {
+      chart.render(fakeContext(document.createElement('canvas')));
+    }
+
+    it('requests the fonts of the option and the theme', async () => {
+      const chart = addChart({
+        size: [400, 300],
+        theme: {textStyle: {fontFamily: 'Theme Face'}},
+        initialOption: {
+          ...barChart([20]),
+          title: {
+            text: 'Title',
+            textStyle: {fontFamily: 'Title Face', fontWeight: 700},
+          },
+          xAxis: {
+            type: 'category',
+            data: ['a'],
+            axisLabel: {fontStyle: 'italic', fontSize: 20},
+          },
+        },
+      });
+
+      draw(chart);
+      expect(DependencyContext.hasPromises()).toBe(true);
+      await DependencyContext.consumePromises();
+
+      expect(requested()).toEqual(
+        expect.arrayContaining([
+          'normal normal 12px Theme Face',
+          'normal 700 12px Title Face',
+          'italic normal 20px Theme Face',
+        ]),
+      );
+    });
+
+    it('lays out the chart once its fonts have loaded', async () => {
+      const chart = addChart({
+        size: [400, 300],
+        initialOption: {...barChart([20]), textStyle: {fontFamily: 'Late'}},
+      });
+      const instance = vi.spyOn(chart, 'getChartInstance');
+
+      draw(chart);
+      expect(instance).not.toHaveBeenCalled();
+      await DependencyContext.consumePromises();
+      expect(requested()).toEqual(['normal normal 12px Late']);
+
+      draw(chart);
+      expect(instance).toHaveBeenCalled();
+    });
+
+    it('requests the fonts of later options', async () => {
+      const chart = addChart({size: [400, 300], initialOption: barChart([20])});
+      chart.setOption({
+        yAxis: {axisLabel: {fontFamily: 'Update Face', fontWeight: 'bold'}},
+      });
+
+      draw(chart);
+      await DependencyContext.consumePromises();
+
+      expect(requested()).toEqual(['normal bold 12px Update Face']);
+    });
+
+    it('requests its fonts when the node is awaited', async () => {
+      const chart = addChart({
+        size: [400, 300],
+        initialOption: {
+          ...barChart([20]),
+          legend: {textStyle: {fontFamily: 'Awaited Face'}},
+        },
+      });
+
+      await chart.toPromise();
+
+      expect(requested()).toEqual(['normal normal 12px Awaited Face']);
+    });
+  });
 });
