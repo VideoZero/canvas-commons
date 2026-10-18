@@ -30,6 +30,7 @@ import {
   it,
   vi,
 } from 'vitest';
+import type {EChartProps} from './EChart';
 import {EChart} from './EChart';
 import {darkColors, lightColors} from './themes';
 
@@ -339,7 +340,16 @@ describe('EChart', () => {
 
   describe('fonts', () => {
     const loaded = new Set<string>();
+    const faces = [
+      'Theme Face',
+      'Title Face',
+      'Late',
+      'Update Face',
+      'Awaited Face',
+    ].map(family => ({family, style: 'normal', weight: '1 1000'}));
     const fonts = {
+      size: faces.length,
+      [Symbol.iterator]: () => faces[Symbol.iterator](),
       check: vi.fn((font: string) => loaded.has(font)),
       load: vi.fn(async (font: string) => {
         loaded.add(font);
@@ -364,99 +374,91 @@ describe('EChart', () => {
       return fonts.load.mock.calls.map(([font]) => font);
     }
 
-    it(
-      'requests the fonts of the option and the theme',
-      generatorTest(function* (view) {
-        const chart = new EChart({
-          size: [400, 300],
-          theme: {textStyle: {fontFamily: 'Theme Face'}},
-          initialOption: {
-            ...barChart([20]),
-            title: {
-              text: 'Title',
-              textStyle: {fontFamily: 'Title Face', fontWeight: 700},
-            },
-            xAxis: {
-              type: 'category',
-              data: ['a'],
-              axisLabel: {fontStyle: 'italic', fontSize: 20},
-            },
-          },
-        });
-        view.add(chart);
-
-        chart.render(fakeContext(document.createElement('canvas')));
-
-        expect(requested()).toEqual(
-          expect.arrayContaining([
-            'normal normal 12px Theme Face',
-            'normal 700 12px Title Face',
-            'italic normal 20px Theme Face',
-          ]),
-        );
-        expect(DependencyContext.hasPromises()).toBe(true);
-        yield;
-      }),
-    );
-
-    it(
-      'lays out the chart once its fonts have loaded',
-      generatorTest(function* (view) {
-        const chart = new EChart({
-          size: [400, 300],
-          initialOption: {...barChart([20]), textStyle: {fontFamily: 'Late'}},
-        });
-        view.add(chart);
-        const instance = vi.spyOn(chart, 'getChartInstance');
-        const context = fakeContext(document.createElement('canvas'));
-
-        chart.render(context);
-        expect(requested()).toEqual(['normal normal 12px Late']);
-        expect(instance).not.toHaveBeenCalled();
-
-        loaded.add('normal normal 12px Late');
-        chart.render(context);
-        expect(instance).toHaveBeenCalled();
-        yield;
-      }),
-    );
-
-    it(
-      'requests the fonts of later options',
-      generatorTest(function* (view) {
-        const chart = new EChart({
-          size: [400, 300],
-          initialOption: barChart([20]),
-        });
-        view.add(chart);
-        chart.setOption({
-          yAxis: {axisLabel: {fontFamily: 'Update Face', fontWeight: 'bold'}},
-        });
-
-        chart.render(fakeContext(document.createElement('canvas')));
-
-        expect(requested()).toEqual(['normal bold 12px Update Face']);
-        yield;
-      }),
-    );
-
-    it('requests its fonts when the node is awaited', async () => {
+    function addChart(props: EChartProps): EChart {
       const charts: EChart[] = [];
       generatorTest(function* (view) {
-        const chart = new EChart({
-          size: [400, 300],
-          initialOption: {
-            ...barChart([20]),
-            legend: {textStyle: {fontFamily: 'Awaited Face'}},
-          },
-        });
+        const chart = new EChart(props);
         view.add(chart);
         charts.push(chart);
         yield;
       })();
-      expect(requested()).toEqual([]);
+      const [chart] = charts;
+      return chart;
+    }
 
-      await Promise.all(charts.map(chart => chart.toPromise()));
+    function draw(chart: EChart) {
+      chart.render(fakeContext(document.createElement('canvas')));
+    }
+
+    it('requests the fonts of the option and the theme', async () => {
+      const chart = addChart({
+        size: [400, 300],
+        theme: {textStyle: {fontFamily: 'Theme Face'}},
+        initialOption: {
+          ...barChart([20]),
+          title: {
+            text: 'Title',
+            textStyle: {fontFamily: 'Title Face', fontWeight: 700},
+          },
+          xAxis: {
+            type: 'category',
+            data: ['a'],
+            axisLabel: {fontStyle: 'italic', fontSize: 20},
+          },
+        },
+      });
+
+      draw(chart);
+      expect(DependencyContext.hasPromises()).toBe(true);
+      await DependencyContext.consumePromises();
+
+      expect(requested()).toEqual(
+        expect.arrayContaining([
+          'normal normal 12px Theme Face',
+          'normal 700 12px Title Face',
+          'italic normal 20px Theme Face',
+        ]),
+      );
+    });
+
+    it('lays out the chart once its fonts have loaded', async () => {
+      const chart = addChart({
+        size: [400, 300],
+        initialOption: {...barChart([20]), textStyle: {fontFamily: 'Late'}},
+      });
+      const instance = vi.spyOn(chart, 'getChartInstance');
+
+      draw(chart);
+      expect(instance).not.toHaveBeenCalled();
+      await DependencyContext.consumePromises();
+      expect(requested()).toEqual(['normal normal 12px Late']);
+
+      draw(chart);
+      expect(instance).toHaveBeenCalled();
+    });
+
+    it('requests the fonts of later options', async () => {
+      const chart = addChart({size: [400, 300], initialOption: barChart([20])});
+      chart.setOption({
+        yAxis: {axisLabel: {fontFamily: 'Update Face', fontWeight: 'bold'}},
+      });
+
+      draw(chart);
+      await DependencyContext.consumePromises();
+
+      expect(requested()).toEqual(['normal bold 12px Update Face']);
+    });
+
+    it('requests its fonts when the node is awaited', async () => {
+      const chart = addChart({
+        size: [400, 300],
+        initialOption: {
+          ...barChart([20]),
+          legend: {textStyle: {fontFamily: 'Awaited Face'}},
+        },
+      });
+
+      await chart.toPromise();
 
       expect(requested()).toEqual(['normal normal 12px Awaited Face']);
     });
