@@ -72,3 +72,6 @@ The package depends on the built `lib` of `@canvas-commons/core` and
 
 The `cc/*` branches behind `videozero-cc`, their stacking order and what is
 still open are listed in [BRANCHES.md](./BRANCHES.md).
+
+Bugs in the old VideoZero fork that the port fixed, with patches to apply there
+in the meantime, are listed in [VZ_FORK_BUGFIXES.md](./VZ_FORK_BUGFIXES.md).
