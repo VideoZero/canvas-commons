@@ -31,6 +31,11 @@ export interface TextAnimationOptions {
   stagger?: number;
   /** The timing function of each piece. */
   timingFunction?: TimingFunction;
+  /**
+   * Keep the pieces' typeface and paint bound to the text they came from, see
+   * {@link SplitTextOptions.followStyle}.
+   */
+  followStyle?: boolean;
 }
 
 /**
@@ -168,12 +173,12 @@ decorate(textTypewriter, threadable());
  */
 export function* textTypewriter(
   source: Txt,
-  {by = 'grapheme', stagger = 0.04}: TextAnimationOptions = {},
+  {by = 'grapheme', stagger = 0.04, followStyle}: TextAnimationOptions = {},
 ): ThreadGenerator {
   yield* animate(
     source,
     true,
-    {by},
+    {by, followStyle},
     stagger,
     0,
     piece => piece.opacity(0),
@@ -201,6 +206,7 @@ export function* textFadeIn(
   source: Txt,
   {
     by = 'grapheme',
+    followStyle,
     duration = 0.5,
     stagger = 0.03,
     timingFunction = easeOutCubic,
@@ -212,7 +218,7 @@ export function* textFadeIn(
   yield* animate(
     source,
     true,
-    {by},
+    {by, followStyle},
     stagger,
     duration,
     (piece, index, split) => {
@@ -247,6 +253,7 @@ export function* textScaleIn(
   source: Txt,
   {
     by = 'grapheme',
+    followStyle,
     duration = 0.5,
     stagger = 0.05,
     timingFunction = easeOutBack,
@@ -257,7 +264,7 @@ export function* textScaleIn(
   yield* animate(
     source,
     true,
-    {by},
+    {by, followStyle},
     stagger,
     duration,
     piece => {
@@ -304,6 +311,7 @@ export function* textRevealIn(
   source: Txt,
   {
     by = 'line',
+    followStyle,
     duration = 0.6,
     stagger = 0.1,
     timingFunction = easeOutCubic,
@@ -315,7 +323,7 @@ export function* textRevealIn(
   yield* animate(
     source,
     true,
-    {by, clip: true, clipPadding},
+    {by, clip: true, clipPadding, followStyle},
     stagger,
     duration,
     (piece, index, split) =>
@@ -350,6 +358,7 @@ export function* textTrackingIn(
   source: Txt,
   {
     by = 'grapheme',
+    followStyle,
     duration = 0.7,
     stagger = 0,
     timingFunction = easeOutCubic,
@@ -359,7 +368,7 @@ export function* textTrackingIn(
   yield* animate(
     source,
     true,
-    {by},
+    {by, followStyle},
     stagger,
     duration,
     (piece, index, split) => {
@@ -398,6 +407,7 @@ export function* textFadeOut(
   source: Txt,
   {
     by = 'grapheme',
+    followStyle,
     duration = 0.35,
     stagger = 0,
     timingFunction = easeInCubic,
@@ -409,7 +419,7 @@ export function* textFadeOut(
   yield* animate(
     source,
     false,
-    {by},
+    {by, followStyle},
     stagger,
     duration,
     () => {},
@@ -444,6 +454,7 @@ export function* textScaleOut(
   source: Txt,
   {
     by = 'grapheme',
+    followStyle,
     duration = 0.3,
     stagger = 0,
     timingFunction = easeInCubic,
@@ -454,7 +465,7 @@ export function* textScaleOut(
   yield* animate(
     source,
     false,
-    {by},
+    {by, followStyle},
     stagger,
     duration,
     () => {},
@@ -484,6 +495,7 @@ export function* textRevealOut(
   source: Txt,
   {
     by = 'line',
+    followStyle,
     duration = 0.35,
     stagger = 0,
     timingFunction = easeInCubic,
@@ -495,7 +507,7 @@ export function* textRevealOut(
   yield* animate(
     source,
     false,
-    {by, clip: true, clipPadding},
+    {by, clip: true, clipPadding, followStyle},
     stagger,
     duration,
     () => {},
@@ -524,6 +536,7 @@ export function* textTrackingOut(
   source: Txt,
   {
     by = 'grapheme',
+    followStyle,
     duration = 0.35,
     stagger = 0,
     timingFunction = easeInCubic,
@@ -533,7 +546,7 @@ export function* textTrackingOut(
   yield* animate(
     source,
     false,
-    {by},
+    {by, followStyle},
     stagger,
     duration,
     () => {},

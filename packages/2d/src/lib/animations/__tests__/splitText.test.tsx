@@ -1,4 +1,4 @@
-import {Vector2} from '@canvas-commons/core';
+import {Color, Vector2} from '@canvas-commons/core';
 import {describe, expect, it} from 'vitest';
 import {Layout} from '../../components/Layout';
 import {Node} from '../../components/Node';
@@ -178,6 +178,57 @@ describe('splitText', () => {
     });
     split.restore();
     expect(inner.opacity()).toBe(1);
+  });
+
+  it('copies the style of the source once by default', () => {
+    const txt = new Txt({text: 'ab', fontSize: 10, fill: 'white'});
+    add(txt);
+    const split = splitText(txt);
+    txt.fill('red');
+    txt.fontWeight(700);
+    split.pieces.forEach(piece => {
+      expect(piece.fill()).toEqual(new Color('white'));
+      expect(piece.fontWeight()).toBe(500);
+    });
+  });
+
+  it('keeps the pieces bound to the style of the source', () => {
+    const txt = new Txt({text: 'ab', fontSize: 10, fill: 'white'});
+    add(txt);
+    const split = splitText(txt, {followStyle: true});
+    expect(split.followStyle).toBe(true);
+    txt.fill('red');
+    txt.fontWeight(700);
+    txt.fontSize(20);
+    txt.fontFamily('Lora');
+    split.pieces.forEach(piece => {
+      expect(piece.fill()).toEqual(new Color('red'));
+      expect(piece.fontWeight()).toBe(700);
+      expect(piece.fontSize()).toBe(20);
+      expect(piece.fontFamily()).toBe('Lora');
+      expect(piece.opacity()).toBe(1);
+    });
+
+    split.pieces[0].fill('blue');
+    txt.fill('green');
+    expect(split.pieces[0].fill()).toEqual(new Color('blue'));
+    expect(split.pieces[1].fill()).toEqual(new Color('green'));
+  });
+
+  it('keeps the pieces of a nested text bound to that text', () => {
+    const inner = new Txt({text: 'bc', fill: 'red', opacity: 0.5});
+    const root = new Txt({fontSize: 10, fill: 'white', children: ['a', inner]});
+    add(root);
+    const split = splitText(root, {followStyle: true});
+    expect(split.pieces.map(piece => piece.text())).toEqual(['a', 'b', 'c']);
+    expect(split.pieces[1].opacity()).toBe(0.5);
+
+    inner.fill('blue');
+    inner.opacity(0.25);
+    root.fill('black');
+    expect(split.pieces[0].fill()).toEqual(new Color('black'));
+    expect(split.pieces[1].fill()).toEqual(new Color('blue'));
+    expect(split.pieces[2].opacity()).toBe(0.25);
   });
 
   it('restores the opacity the source had', () => {

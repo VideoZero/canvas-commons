@@ -22,6 +22,16 @@ export interface SplitTextOptions {
    * on every side, so glyph ink outside the box is not cut. Defaults to `4`.
    */
   clipPadding?: number;
+  /**
+   * Keep each piece's typeface and paint bound to the text it came from, so
+   * changing or tweening `fill`, `stroke`, `lineWidth`, `fontWeight`,
+   * `fontSize`, `fontFamily`, `fontStyle`, `letterSpacing` or `opacity` of
+   * the source (or of a nested `Txt`) while it is split reaches the pieces.
+   * Setting a value on a piece replaces its binding. The pieces stay where
+   * the split placed them. Defaults to `false`: the pieces copy the values
+   * once.
+   */
+  followStyle?: boolean;
 }
 
 const DefaultClipPadding = 4;
@@ -64,7 +74,8 @@ class SplitContainer extends Node {
  * Created by {@link splitText}, and by the text animations. While the split
  * exists, the source is hidden (its `opacity` is `0`) and the pieces are drawn
  * where the source drew its text, with the opacity of {@link container}.
- * Changes made to the source meanwhile don't reach the pieces. Call
+ * Changes made to the source meanwhile don't reach the pieces, unless they
+ * were split with {@link SplitTextOptions.followStyle}. Call
  * {@link TextSplit.restore} to remove the pieces and show the source again;
  * {@link getTextSplit} finds the split of a text that is still split.
  */
@@ -93,6 +104,8 @@ export class TextSplit {
   public readonly clip: boolean;
   /** How far the mask of a clipped line reaches past its line box. */
   public readonly clipPadding: number;
+  /** Whether the pieces follow the typeface and paint of the source. */
+  public readonly followStyle: boolean;
 
   private readonly sourceOpacity: SignalValue<number>;
   private readonly lineOf: number[];
@@ -104,13 +117,15 @@ export class TextSplit {
       by = 'grapheme',
       clip = false,
       clipPadding = DefaultClipPadding,
+      followStyle = false,
     }: SplitTextOptions = {},
   ) {
     Splits.get(source)?.restore();
     this.by = by;
     this.clip = clip;
     this.clipPadding = clipPadding;
-    const split = source.splitPieces(by);
+    this.followStyle = followStyle;
+    const split = source.splitPieces(by, {followStyle});
     this.pieces = split.map(piece => piece.node);
     this.units = split.map(piece => piece.unit);
 
