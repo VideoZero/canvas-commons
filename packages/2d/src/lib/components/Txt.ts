@@ -161,7 +161,11 @@ export interface TxtProps extends ShapeProps {
   pathAlign?: SignalValue<PathAlign>;
   pathSmoothness?: SignalValue<number>;
   pathSplit?: SignalValue<PathSplit>;
+  smooth?: SignalValue<boolean>;
 }
+
+/** The tilt, in radians, that {@link Txt.smooth} paints each run with. */
+const SMOOTH_ANGLE = 0.001;
 
 type FontComponents = {
   style: string;
@@ -184,6 +188,8 @@ type FragmentStyle = RunTypeface & {
   strokeFirst: boolean;
   /** Opacity of the owning node relative to the root `Txt`. */
   opacity: number;
+  /** Whether the owning node paints with {@link Txt.smooth}. */
+  smooth: boolean;
 };
 
 /**
@@ -325,6 +331,7 @@ type RunPaint = {
   lineWidth: number;
   strokeFirst: boolean;
   opacity: number;
+  smooth: boolean;
 };
 
 /** A paragraph autoSize prepared, and the fits read from it, newest first. */
@@ -698,6 +705,52 @@ export class Txt extends Shape {
   @initial('grapheme')
   @signal()
   declare public readonly pathSplit: SimpleSignal<PathSplit, this>;
+
+  /**
+   * The default value of {@link smooth} for a `Txt` that neither sets it nor
+   * has a parent `Txt`.
+   *
+   * @remarks
+   * Read when the node is created, so set it once before building the scene.
+   *
+   * @example
+   * ```ts
+   * Txt.defaultSmooth = true;
+   * ```
+   */
+  public static defaultSmooth = false;
+
+  /**
+   * Paint the text with sub-pixel precision.
+   *
+   * @remarks
+   * Chromium snaps glyphs vertically to the pixel grid while the canvas
+   * transform is axis-aligned: text moved by less than half a pixel does not
+   * move at all, then jumps by a whole pixel. Slowly moving or scaling text
+   * visibly steps. When `true`, each run is painted tilted by 0.001 radians
+   * around its own anchor, which keeps the glyphs off that grid and lets them
+   * follow sub-pixel offsets smoothly. Text on a {@link textPath} gets the same
+   * tilt around each glyph. Layout, bounds, and hit testing are unaffected.
+   *
+   * Defaults to {@link Txt.defaultSmooth}. A nested `Txt` inherits it from
+   * its parent, and {@link split} pieces copy it from the run they came from.
+   *
+   * @example
+   * ```tsx
+   * const label = createRef<Txt>();
+   * view.add(<Txt ref={label} smooth>Drifting slowly</Txt>);
+   * yield* label().y(3, 4);
+   * ```
+   */
+  @initial(false)
+  @signal()
+  declare public readonly smooth: SimpleSignal<boolean, this>;
+
+  private readonly createdSmooth = Txt.defaultSmooth;
+
+  protected getDefaultSmooth(): boolean {
+    return this.parentTxt()?.smooth() ?? this.createdSmooth;
+  }
 
   protected getText(): string {
     return this.innerText();
@@ -1349,6 +1402,7 @@ export class Txt extends Shape {
       lineWidth: node.lineWidth(),
       strokeFirst: node.strokeFirst(),
       opacity: this.relativeOpacity(node),
+      smooth: node.smooth(),
     };
   }
 
@@ -2495,6 +2549,7 @@ export class Txt extends Shape {
       lineWidth: node.lineWidth(),
       strokeFirst: node.strokeFirst(),
       opacity: this.relativeOpacity(node),
+      smooth: node.smooth(),
     }));
   }
 
@@ -2584,6 +2639,14 @@ export class Txt extends Shape {
         context.lineWidth = lineWidth;
       }
 
+      if (style.smooth) {
+        // Tilt around the run's own anchor, so it paints where it would
+        // unsmoothed and a gradient fill stays in place.
+        context.save();
+        context.translate(x, y);
+        context.rotate(SMOOTH_ANGLE);
+        context.translate(-x, -y);
+      }
       if (style.lineWidth <= 0) {
         context.fillText(call.anchor.text, x, y);
       } else if (style.strokeFirst) {
@@ -2592,6 +2655,9 @@ export class Txt extends Shape {
       } else {
         context.fillText(call.anchor.text, x, y);
         context.strokeText(call.anchor.text, x, y);
+      }
+      if (style.smooth) {
+        context.restore();
       }
     }
 
@@ -2713,6 +2779,7 @@ export class Txt extends Shape {
     this.applyText(context);
     context.textBaseline = 'alphabetic';
     const alpha = context.globalAlpha;
+    const tilt = this.smooth() ? SMOOTH_ANGLE : 0;
 
     for (const {unit, box, parts} of this.walkUnits(this.pathSplit(), true)) {
       // `unit.x` is aligned against the node's box; the run is aligned again
@@ -2773,7 +2840,7 @@ export class Txt extends Shape {
 
       context.save();
       context.translate(position.x, position.y);
-      context.rotate(angle);
+      context.rotate(angle + tilt);
       for (const {text, run, penOffset} of parts) {
         const style = this.styleOf(run);
         context.font = style.font;
@@ -3317,6 +3384,7 @@ export class Txt extends Shape {
       lineWidth: style.lineWidth,
       strokeFirst: style.strokeFirst,
       opacity: style.opacity,
+      smooth: style.smooth,
     };
   }
 
