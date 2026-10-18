@@ -1878,13 +1878,13 @@ export class Layout extends Node {
    * animated insert or removal. The child is sized to fill the wrapper,
    * so tweening the wrapper's size and position moves both together.
    */
-  private wrapInSlot(userNode: Layout, scale: number) {
+  private wrapInSlot(userNode: Layout, initialScale: number) {
     const index = this.children().indexOf(userNode);
     const wrapper = new Layout({
       layout: true,
       alignItems: 'center',
       justifyContent: 'center',
-      scale,
+      scale: initialScale,
     });
     const width = userNode.width.context.raw();
     const height = userNode.height.context.raw();
