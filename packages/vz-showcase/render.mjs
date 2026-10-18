@@ -10,7 +10,9 @@
 //   warnings and errors). When the render fails, the frames rendered so far
 //   are kept and a red "scene failed" card with the error is appended.
 //
-// Environment: CHROMIUM_PATH (default /opt/pw-browsers/chromium),
+// Environment: SHOWCASE_SCALE (resolution scale of the 960x540 scenes,
+//   default 1; 2 renders full HD), CHROMIUM_PATH (default
+//   /opt/pw-browsers/chromium),
 //   FFMPEG (default: ffmpeg on PATH), KEEP_FRAMES=1 to keep the PNG frames.
 import {execFileSync} from 'node:child_process';
 import * as fs from 'node:fs';
@@ -20,6 +22,9 @@ import {chromium} from 'playwright';
 import {createServer} from 'vite';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const scale = Number(process.env.SHOWCASE_SCALE ?? 1);
+const width = 960 * scale;
+const height = 540 * scale;
 const args = process.argv.slice(2);
 let out = path.join(here, 'output', '_videos');
 const projects = [];
@@ -101,7 +106,7 @@ function errorCard(name, frames, message, target) {
   fs.writeFileSync(text, wrapped);
   const input = pngs.length
     ? ['-loop', '1', '-i', path.join(frames, pngs.at(-1))]
-    : ['-f', 'lavfi', '-i', 'color=c=0x0f1419:s=960x540'];
+    : ['-f', 'lavfi', '-i', `color=c=0x0f1419:s=${width}x${height}`];
   execFileSync(ffmpeg, [
     '-loglevel',
     'error',
@@ -112,7 +117,7 @@ function errorCard(name, frames, message, target) {
     '-r',
     '30',
     '-vf',
-    `scale=960:540,drawbox=c=black@0.75:t=fill,drawtext=fontfile=${font}:textfile=${text}:fontcolor=0xf85149:fontsize=24:line_spacing=8:x=(w-tw)/2:y=(h-th)/2`,
+    `scale=${width}:${height},drawbox=c=black@0.75:t=fill,drawtext=fontfile=${font}:textfile=${text}:fontcolor=0xf85149:fontsize=${24 * scale}:line_spacing=${8 * scale}:x=(w-tw)/2:y=(h-th)/2`,
     '-pix_fmt',
     'yuv420p',
     '-c:v',
@@ -153,7 +158,7 @@ async function renderOnce(name) {
           ...settings,
           name,
           fps: 30,
-          resolutionScale: 1,
+          resolutionScale: scale,
           exporter: {
             name: '@canvas-commons/core/image-sequence',
             options: {
@@ -217,7 +222,7 @@ try {
         '-i',
         path.join(frames, '*.png'),
         '-vf',
-        'scale=960:540',
+        `scale=${width}:${height}`,
         '-pix_fmt',
         'yuv420p',
         '-c:v',
