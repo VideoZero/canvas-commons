@@ -137,44 +137,49 @@ async function renderOnce(name) {
     return {status: 1, logs: [{level: 'error', message: `browser: ${e}`}]};
   }
   const result = await page
-    .evaluate(async name => {
-      const logs = [];
-      const off = window.commons.project.logger.onLogged.subscribe(p => {
-        if (['warn', 'error'].includes(p.level ?? 'info')) {
-          logs.push({level: p.level, message: String(p.message)});
-        }
-      });
-      await document.fonts.ready;
-      const settings = window.commons.meta.getFullRenderingSettings();
-      let status;
-      const finished = new Promise(resolve => {
-        const unsubscribe = window.commons.renderer.onFinished.subscribe(r => {
-          unsubscribe();
-          resolve(r);
+    .evaluate(
+      async ({name, scale}) => {
+        const logs = [];
+        const off = window.commons.project.logger.onLogged.subscribe(p => {
+          if (['warn', 'error'].includes(p.level ?? 'info')) {
+            logs.push({level: p.level, message: String(p.message)});
+          }
         });
-      });
-      try {
-        await window.commons.renderer.render({
-          ...settings,
-          name,
-          fps: 30,
-          resolutionScale: scale,
-          exporter: {
-            name: '@canvas-commons/core/image-sequence',
-            options: {
-              fileType: 'image/png',
-              quality: 100,
-              groupByScene: false,
+        await document.fonts.ready;
+        const settings = window.commons.meta.getFullRenderingSettings();
+        let status;
+        const finished = new Promise(resolve => {
+          const unsubscribe = window.commons.renderer.onFinished.subscribe(
+            r => {
+              unsubscribe();
+              resolve(r);
             },
-          },
+          );
         });
-        status = await finished;
-      } catch (e) {
-        logs.push({level: 'error', message: String(e)});
-      }
-      off();
-      return {status: status ?? null, logs};
-    }, name)
+        try {
+          await window.commons.renderer.render({
+            ...settings,
+            name,
+            fps: 30,
+            resolutionScale: scale,
+            exporter: {
+              name: '@canvas-commons/core/image-sequence',
+              options: {
+                fileType: 'image/png',
+                quality: 100,
+                groupByScene: false,
+              },
+            },
+          });
+          status = await finished;
+        } catch (e) {
+          logs.push({level: 'error', message: String(e)});
+        }
+        off();
+        return {status: status ?? null, logs};
+      },
+      {name, scale},
+    )
     .catch(e => ({
       status: 1,
       logs: [{level: 'error', message: `browser: ${e.message}`}],
