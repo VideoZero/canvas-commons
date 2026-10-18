@@ -24,7 +24,22 @@ export interface SplitTextOptions {
   clipPadding?: number;
 }
 
-/** Draws the pieces with the transform the source is drawn with. */
+const DefaultClipPadding = 4;
+
+const Splits = new WeakMap<Txt, TextSplit>();
+
+function rootOf(node: Node): Node {
+  let root = node;
+  for (let parent = root.parent(); parent; parent = root.parent()) {
+    root = parent;
+  }
+  return root;
+}
+
+/**
+ * Draws the pieces with the transform the source is drawn with, and only
+ * while the source is part of the same scene.
+ */
 class SplitContainer extends Node {
   public constructor(private readonly source: Txt) {
     super({});
@@ -34,15 +49,24 @@ class SplitContainer extends Node {
     const world = this.source.localToWorld();
     return this.parent()?.worldToLocal().multiply(world) ?? world;
   }
+
+  public override render(context: CanvasRenderingContext2D) {
+    if (rootOf(this.source) === rootOf(this)) {
+      super.render(context);
+    }
+  }
 }
 
 /**
  * A {@link Txt} split into standalone pieces that are drawn in its place.
  *
  * @remarks
- * Created by {@link splitText}. While the split exists, the source is hidden
- * and the pieces are drawn where the source drew its text. Call
- * {@link TextSplit.restore} to remove the pieces and show the source again.
+ * Created by {@link splitText}, and by the text animations. While the split
+ * exists, the source is hidden (its `opacity` is `0`) and the pieces are drawn
+ * where the source drew its text, with the opacity of {@link container}.
+ * Changes made to the source meanwhile don't reach the pieces. Call
+ * {@link TextSplit.restore} to remove the pieces and show the source again;
+ * {@link getTextSplit} finds the split of a text that is still split.
  */
 export class TextSplit {
   /** The node holding the pieces, sharing the source's transform. */
@@ -63,6 +87,12 @@ export class TextSplit {
   public readonly lineBoxes: BBox[];
   /** The source's opacity before it was hidden. */
   public readonly opacity: number;
+  /** How the text was cut. */
+  public readonly by: TxtSplitGranularity;
+  /** Whether every line is masked to its own line box. */
+  public readonly clip: boolean;
+  /** How far the mask of a clipped line reaches past its line box. */
+  public readonly clipPadding: number;
 
   private readonly sourceOpacity: SignalValue<number>;
   private readonly lineOf: number[];
@@ -70,8 +100,16 @@ export class TextSplit {
 
   public constructor(
     public readonly source: Txt,
-    {by = 'grapheme', clip = false, clipPadding = 4}: SplitTextOptions = {},
+    {
+      by = 'grapheme',
+      clip = false,
+      clipPadding = DefaultClipPadding,
+    }: SplitTextOptions = {},
   ) {
+    Splits.get(source)?.restore();
+    this.by = by;
+    this.clip = clip;
+    this.clipPadding = clipPadding;
     const split = source.splitPieces(by);
     this.pieces = split.map(piece => piece.node);
     this.units = split.map(piece => piece.unit);
@@ -136,6 +174,29 @@ export class TextSplit {
     this.opacity = source.opacity();
     this.container.opacity(this.opacity);
     source.opacity(0);
+    Splits.set(source, this);
+  }
+
+  /** Whether the source is still split by this split. */
+  public isActive(): boolean {
+    return !this.restored;
+  }
+
+  /**
+   * Whether this split cuts the text the way the given options ask for.
+   *
+   * @param options - The options to compare with.
+   */
+  public matches({
+    by = 'grapheme',
+    clip = false,
+    clipPadding = DefaultClipPadding,
+  }: SplitTextOptions = {}): boolean {
+    return (
+      this.by === by &&
+      this.clip === clip &&
+      (!clip || this.clipPadding === clipPadding)
+    );
   }
 
   /**
@@ -161,12 +222,29 @@ export class TextSplit {
   /**
    * Remove the pieces and show the source again.
    *
-   * @param opacity - The opacity to give the source. Defaults to the one it
-   *                  had before the split.
+   * @remarks
+   * Calling it again does nothing.
+   *
+   * @example
+   * ```tsx
+   * yield* textFadeIn(label());
+   * // The pieces are drawn until the split is restored.
+   * getTextSplit(label())?.restore();
+   * ```
+   *
+   * @param opacity - The opacity to give the source. Defaults to the opacity
+   *                  of the {@link container}, so the text looks the same,
+   *                  or, when that hasn't changed since the split, to the
+   *                  opacity the source had before (which may be a signal).
    */
-  public restore(opacity: SignalValue<number> = this.sourceOpacity) {
+  public restore(opacity?: SignalValue<number>) {
     if (this.restored) return;
     this.restored = true;
+    if (Splits.get(this.source) === this) {
+      Splits.delete(this.source);
+    }
+    const shown = this.container.opacity();
+    opacity ??= shown === this.opacity ? this.sourceOpacity : shown;
     this.container.remove();
     this.container.dispose();
     this.source.opacity(opacity);
@@ -179,8 +257,10 @@ export class TextSplit {
  *
  * @remarks
  * The pieces are mounted right above the source, in a node that follows the
- * source's transform, and the source is hidden. In headless environments
- * without a 2D canvas, and for text on a path, there are no pieces.
+ * source's transform, and the source is hidden until
+ * {@link TextSplit.restore} is called. Splitting a text that is still split
+ * restores the earlier split first. In headless environments without a 2D
+ * canvas, and for text on a path, there are no pieces.
  *
  * @example
  * ```tsx
@@ -199,4 +279,28 @@ export class TextSplit {
  */
 export function splitText(source: Txt, options?: SplitTextOptions): TextSplit {
   return new TextSplit(source, options);
+}
+
+/**
+ * Find the split a text is drawn with, if it is split.
+ *
+ * @remarks
+ * Text entrances such as {@link textFadeIn} leave their text split, so it
+ * keeps looking exactly like the end of the entrance. Use this to reach the
+ * pieces afterwards, or to restore the source.
+ *
+ * @example
+ * ```tsx
+ * yield* textFadeIn(label());
+ * const split = getTextSplit(label());
+ * if (split) yield* split.pieces[0].fill('red', 0.3);
+ * // Draw the source itself again, for example before changing its text.
+ * split?.restore();
+ * ```
+ *
+ * @param source - The text to look up.
+ * @returns The active split of the text, or `null` when it isn't split.
+ */
+export function getTextSplit(source: Txt): TextSplit | null {
+  return Splits.get(source) ?? null;
 }
