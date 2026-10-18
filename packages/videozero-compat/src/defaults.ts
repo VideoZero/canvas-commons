@@ -37,16 +37,17 @@ export const VideoZeroAttributionParam = 'vz_attribution';
  * - `Txt.defaultTextCenter` to `'cap'`,
  * - `Txt.defaultCenterLetterSpacing` to `true`,
  * - `Txt.defaultSmooth` to `true` (sub-pixel smooth text, as in VideoZero),
- * - `Txt.warnTightLineHeight` and `Node.warnVisibleBeforeEntrance` to `true`,
+ * - `Txt.warnTightLineHeight`, `Node.warnVisibleBeforeEntrance` and
+ *   `Layout.warnIgnoredPosition` to `true`,
  * - the default `strokeFirst` of every shape to `true`,
  * - `AnimTxt.defaultLineJoin` to `'round'` (plain `Txt` keeps `'miter'`),
  * - the attribution query parameter to `vz_attribution` and its font to
  *   VideoZero's rounded font stack.
  *
  * Call it once, before the scenes create their nodes, for example at the top
- * of `project.ts`. The default font and the `Latex` fragment box padding can't
- * be changed this way; see {@link applyVideoZeroViewDefaults} and the
- * migration guide.
+ * of `project.ts`. The default font can't be changed this way; see
+ * {@link applyVideoZeroViewDefaults}. For the `Latex` fragment box padding use
+ * {@link AnimLatex}.
  *
  * @example
  * ```ts
@@ -67,6 +68,7 @@ export function applyVideoZeroDefaults(): () => void {
     smooth: Txt.defaultSmooth,
     tightLineHeight: Txt.warnTightLineHeight,
     visibleBeforeEntrance: Node.warnVisibleBeforeEntrance,
+    ignoredPosition: Layout.warnIgnoredPosition,
     strokeFirst: strokeFirst?.default,
     lineJoin: AnimTxt.defaultLineJoin,
     queryParam: attributionConfig.queryParam,
@@ -78,6 +80,7 @@ export function applyVideoZeroDefaults(): () => void {
   Txt.defaultSmooth = true;
   Txt.warnTightLineHeight = true;
   Node.warnVisibleBeforeEntrance = true;
+  Layout.warnIgnoredPosition = true;
   if (strokeFirst) strokeFirst.default = true;
   AnimTxt.defaultLineJoin = 'round';
   configureAttribution({
@@ -91,6 +94,7 @@ export function applyVideoZeroDefaults(): () => void {
     Txt.defaultSmooth = previous.smooth;
     Txt.warnTightLineHeight = previous.tightLineHeight;
     Node.warnVisibleBeforeEntrance = previous.visibleBeforeEntrance;
+    Layout.warnIgnoredPosition = previous.ignoredPosition;
     if (strokeFirst) strokeFirst.default = previous.strokeFirst;
     AnimTxt.defaultLineJoin = previous.lineJoin;
     configureAttribution({

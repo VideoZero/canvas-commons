@@ -3,9 +3,10 @@
 Private compatibility layer for scenes written for the VideoZero fork of Motion
 Canvas, running on Canvas Commons (`videozero-cc`).
 
-It contains only the VideoZero animation shorthands, as subclasses of the Canvas
-Commons nodes, plus an opt-in function that re-applies the VideoZero defaults.
-Nothing is patched: importing the package changes no behaviour.
+It contains only the VideoZero shorthands and defaults that Canvas Commons
+doesn't have, as subclasses of the Canvas Commons nodes, plus an opt-in function
+that re-applies the VideoZero defaults. Nothing is patched: importing the
+package changes no behaviour.
 
 - `AnimTxt extends Txt`: the VideoZero text helpers (`typewriter`, `fadeUp`,
   `revealUp`, `wordByWord`, `scramble`, `fadeOutUp`, `swapOut`, ...) with their
@@ -16,6 +17,10 @@ Nothing is patched: importing the package changes no behaviour.
 - `AnimLayout extends Layout`: `addAnimated`, `insertAnimated`,
   `removeAnimated`, `reorderAnimated`, `recordFlipState`, `tweenFlip`,
   `lockSize` and `releaseSize`.
+- `HStack` / `VStack extends Layout`: a `Layout` with `layout` on and
+  `direction` set to `'row'` / `'column'`.
+- `AnimLatex extends Latex`: `getFragmentBBox`, `getLocalFragmentBBox` and
+  `getAbsoluteFragmentBBox` pad the boxes by `8` by default, as in VideoZero.
 - `applyVideoZeroDefaults()` and `applyVideoZeroViewDefaults(view)`.
 
 ```tsx
