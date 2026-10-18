@@ -18,3 +18,12 @@ export function applyPosition(node: Layout, [x, y]: SavedPosition): void {
   if (y === undefined) node.y.context.reset();
   else node.y.context.setter(y);
 }
+
+/**
+ * Put back the `x` and `y` a layout animation overwrote, once the node's
+ * layout parent positions it again. A node that ends up placing itself keeps
+ * the position the animation left it at.
+ */
+export function restorePosition(node: Layout, saved: SavedPosition): void {
+  if (!node.isLayoutRoot()) applyPosition(node, saved);
+}
