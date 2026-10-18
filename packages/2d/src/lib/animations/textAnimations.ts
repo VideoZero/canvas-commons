@@ -12,7 +12,12 @@ import {
   threadable,
 } from '@canvas-commons/core';
 import {Txt, TxtSplitGranularity} from '../components/Txt';
-import {SplitTextOptions, TextSplit, splitText} from './splitText';
+import {
+  SplitTextOptions,
+  TextSplit,
+  getTextSplit,
+  splitText,
+} from './splitText';
 
 /**
  * Options shared by the text animations.
@@ -106,13 +111,22 @@ function* animate(
   prepare: (piece: Txt, index: number, split: TextSplit) => void,
   run: PieceAnimation,
 ): ThreadGenerator {
-  const visible = source.opacity() > 0 ? source.opacity() : 1;
-  const split = splitText(source, options);
+  const current = getTextSplit(source);
+  let split: TextSplit;
+  let visible = 1;
+  if (!entrance && current?.matches(options)) {
+    split = current;
+  } else {
+    current?.restore();
+    visible = source.opacity() > 0 ? source.opacity() : 1;
+    split = splitText(source, options);
+  }
   if (split.pieces.length === 0) {
     split.restore(entrance ? 0 : visible);
     yield* source.opacity(entrance ? visible : 0, duration);
     return;
   }
+  let keep = false;
   try {
     if (entrance) split.container.opacity(visible);
     split.pieces.forEach((piece, index) => prepare(piece, index, split));
@@ -120,8 +134,9 @@ function* animate(
       stagger,
       ...split.pieces.map((piece, index) => run(piece, index, split)),
     );
+    keep = entrance;
   } finally {
-    split.restore(entrance ? visible : 0);
+    if (!keep) split.restore(entrance ? visible : 0);
   }
 }
 
@@ -130,9 +145,15 @@ decorate(textTypewriter, threadable());
  * Show the pieces of a text one after another, like a typewriter.
  *
  * @remarks
- * Like every text entrance, it ends with the source shown: at its own
- * opacity, or fully when it started hidden. Create the text with
- * `opacity={0}` so it isn't visible before the entrance.
+ * Like every text entrance, it ends with the text still split, so nothing
+ * changes once the last piece is in place: the pieces stay drawn at the
+ * source's opacity (or fully when it started hidden) while the source stays
+ * hidden. A following text exit animates the same pieces; get the split with
+ * {@link getTextSplit} to animate them yourself or to
+ * {@link TextSplit.restore | restore} the source, for example before changing
+ * its text. A later entrance replaces the split, and an entrance that is cut
+ * short restores the source. Create the text with `opacity={0}` so it isn't
+ * visible before the entrance.
  *
  * @example
  * ```tsx
@@ -359,7 +380,9 @@ decorate(textFadeOut, threadable());
  *
  * @remarks
  * Like every text exit, it ends with the source hidden (`opacity` `0`) and
- * no pieces left behind, so the text can be changed and shown again.
+ * no pieces left behind, so the text can be changed and shown again. It
+ * animates the pieces of an earlier entrance when they were cut the same way,
+ * and splits the text anew otherwise.
  *
  * @example
  * ```tsx
