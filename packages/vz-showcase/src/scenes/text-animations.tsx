@@ -1,5 +1,6 @@
-import {Txt, makeScene2D} from '@canvas-commons/2d';
-import {Direction, ThreadGenerator, waitFor} from '@canvas-commons/core';
+import {Rect, Txt, makeScene2D} from '@canvas-commons/2d';
+import {Direction, ThreadGenerator, all, waitFor} from '@canvas-commons/core';
+import roboto from '../assets/roboto-400.woff2';
 import {
   Colors,
   Mono,
@@ -7,6 +8,7 @@ import {
   caption,
   from2d,
   intro,
+  loadFont,
   placeholder,
 } from '../shared/ui';
 
@@ -14,6 +16,8 @@ type TextAnimation = (
   source: Txt,
   options?: Record<string, unknown>,
 ) => ThreadGenerator;
+
+type TextSplitHandle = {restore: () => void};
 
 const Demos: [string, string, Record<string, unknown>, string][] = [
   [
@@ -88,6 +92,57 @@ export default makeScene2D(function* (view) {
     yield* waitFor(0.5);
     if (fadeOut) yield* fadeOut(txt, {duration: 0.3, stagger: 0.01});
     txt.remove();
+  }
+
+  // Ligatures (fi, fl, ffl) and kerning are shaped differently when the
+  // pieces are drawn on their own, so swapping them back to the source at
+  // the end of an entrance made the glyphs jump. Entrances now leave the
+  // text split; restoring it is an explicit step.
+  const getTextSplit =
+    from2d<(source: Txt) => TextSplitHandle | null>('getTextSplit');
+  const fadeIn = from2d<TextAnimation>('textFadeIn');
+  if (getTextSplit && fadeIn) {
+    yield loadFont('Roboto Showcase', roboto, '400');
+    const closeUp = (
+      <Txt
+        y={-10}
+        text="office flow"
+        opacity={0}
+        fontFamily="Roboto Showcase"
+        fontSize={150}
+        fill={Colors.text}
+      />
+    ) as Txt;
+    const state = (
+      <Txt y={110} fontFamily={Sans} fontSize={26} fill={Colors.green} />
+    ) as Txt;
+    const marker = (
+      <Rect
+        y={-10}
+        width={760}
+        height={190}
+        radius={16}
+        stroke={Colors.panelLight}
+        lineWidth={2}
+        opacity={0}
+      />
+    ) as Rect;
+    view.add([marker, closeUp, state]);
+    name.text('yield* textFadeIn(txt) — ligature close-up (Roboto 150px)');
+    yield* all(marker.opacity(1, 0.3), fadeIn(closeUp, {duration: 0.6}));
+    state.text('entrance ended: still split, the last frame stays as it is');
+    yield* waitFor(1.6);
+    getTextSplit(closeUp)?.restore();
+    name.text('getTextSplit(txt)?.restore()');
+    state.fill(Colors.orange);
+    state.text('restored by hand: the source draws its fi / fl ligatures');
+    yield* waitFor(1.6);
+    yield* all(
+      marker.opacity(0, 0.3),
+      state.opacity(0, 0.3),
+      // A plain fade: an exit would split the restored text again.
+      closeUp.opacity(0, 0.3),
+    );
   }
   yield* waitFor(0.3);
 });
