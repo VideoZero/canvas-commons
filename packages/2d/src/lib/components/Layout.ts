@@ -25,8 +25,10 @@ import {
   threadable,
   tween,
   unwrap,
+  useLogger,
 } from '@canvas-commons/core';
 import {
+  NODE_NAME,
   Vector2LengthSignal,
   addInitializer,
   cloneable,
@@ -82,6 +84,11 @@ import {
   type YogaNode,
 } from '../utils/yoga';
 import {ContentFloors} from './contentFloors';
+import {
+  SavedPosition,
+  restorePosition,
+  savePosition,
+} from './layout/savedPosition';
 import {transitionTo as runTransitionTo} from './layout/transitionTo';
 import {Node, NodeProps} from './Node';
 import type {LayoutSettler, SettledBox} from './settledLayout';
@@ -283,8 +290,28 @@ function isRowDirection(direction: FlexDirection): boolean {
   return direction === 'row' || direction === 'row-reverse';
 }
 
+/** Layout children already warned that their position is ignored. */
+const WarnedIgnoredPosition = new WeakSet<Layout>();
+/** The positions children had before {@link Layout.freezeLayout} pinned them. */
+const FrozenPositions = new WeakMap<Layout, SavedPosition>();
+
 @nodeName('Layout')
 export class Layout extends Node {
+  /**
+   * Warn when `x`, `y` or `position` is set on a node whose position comes
+   * from its layout parent, where the value is ignored.
+   *
+   * @remarks
+   * Off by default. Each node warns once, the first time its position is read
+   * while a layout parent places it.
+   *
+   * @example
+   * ```ts
+   * Layout.warnIgnoredPosition = true;
+   * ```
+   */
+  public static warnIgnoredPosition = false;
+
   @initial(null)
   @interpolation(boolLerp)
   @signal()
@@ -422,6 +449,7 @@ export class Layout extends Node {
       return this.x.context.getter();
     }
 
+    if (Layout.warnIgnoredPosition) this.warnIgnoredPosition();
     return this.computedPosition().x;
   }
   protected setX(value: SignalValue<number>) {
@@ -433,10 +461,30 @@ export class Layout extends Node {
       return this.y.context.getter();
     }
 
+    if (Layout.warnIgnoredPosition) this.warnIgnoredPosition();
     return this.computedPosition().y;
   }
   protected setY(value: SignalValue<number>) {
     this.y.context.setter(value);
+  }
+
+  /** Warn once when this layout child has an `x` or `y` of its own. */
+  private warnIgnoredPosition(): void {
+    if (
+      WarnedIgnoredPosition.has(this) ||
+      (this.x.context.isInitial() && this.y.context.isInitial())
+    ) {
+      return;
+    }
+    WarnedIgnoredPosition.add(this);
+    useLogger().warn({
+      message: `${this[NODE_NAME]} is positioned by its layout parent, so its x/y/position is ignored.`,
+      remarks:
+        "Use the parent's <code>alignItems</code>/<code>justifyContent</code>, " +
+        'or <code>margin</code>/<code>padding</code>, to move it. To place ' +
+        'it freely, set <code>layoutSelf={false}</code> on it.',
+      inspect: this.key,
+    });
   }
 
   /**
@@ -2057,6 +2105,9 @@ export class Layout extends Node {
       width: child.width.context.raw(),
       height: child.height.context.raw(),
     }));
+    const savedPositions = new Map(
+      flexChildren.map(child => [child, savePosition(child)]),
+    );
     const savedLayoutChildren = this.layoutChildren.context.raw();
     const savedWidth = this.width.context.raw();
     const savedHeight = this.height.context.raw();
@@ -2100,6 +2151,9 @@ export class Layout extends Node {
       restoreRaw(this.width, savedWidth);
       restoreRaw(this.height, savedHeight);
       restoreRaw(this.layoutChildren, savedLayoutChildren);
+      for (const [child, saved] of savedPositions) {
+        restorePosition(child, saved);
+      }
     }
   }
 
@@ -2109,10 +2163,15 @@ export class Layout extends Node {
    * under flex.
    */
   public freezeLayout(): void {
-    for (const child of this.applyLayout()) {
-      child.position(child.computedPosition());
-    }
+    const children = this.applyLayout();
+    const positions = children.map(child => child.computedPosition());
     this.layoutChildren(false);
+    children.forEach((child, i) => {
+      if (!FrozenPositions.has(child)) {
+        FrozenPositions.set(child, savePosition(child));
+      }
+      child.position(positions[i]);
+    });
   }
 
   /**
@@ -2129,6 +2188,13 @@ export class Layout extends Node {
     const children = this.children();
     const pre = snapshotPositions(children);
     this.layoutChildren(true);
+    for (const child of children) {
+      const saved = child instanceof Layout && FrozenPositions.get(child);
+      if (saved) {
+        FrozenPositions.delete(child);
+        restorePosition(child, saved);
+      }
+    }
     this.requestLayoutUpdate();
     const post = snapshotPositions(children);
     const inverted = invertPositions(pre, post);
