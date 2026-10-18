@@ -1721,42 +1721,27 @@ export class Layout extends Node {
       return;
     }
 
-    const slots = layoutNodes.map(userNode => {
-      const natural = userNode.size();
-      // The wrapper takes over the node's flex sizing so grown, stretched,
-      // or `basis`-sized nodes reach the same slot they settle into later.
-      const wrapper = new Layout({
-        layout: true,
-        width: slotLength(userNode.width.context.getter(), natural.x),
-        height: slotLength(userNode.height.context.getter(), natural.y),
-        grow: userNode.grow(),
-        shrink: userNode.shrink(),
-        basis: userNode.basis(),
-        alignSelf: userNode.alignSelf(),
-        scale: animate ? 1 : 0,
-      });
-      wrapper.add(userNode);
-      return {userNode, wrapper};
-    });
-
-    const oldSize = new Vector2(this.size());
     const flexChildren = this.applyLayout();
     const preState = captureFlexState(flexChildren);
+    const oldSize = new Vector2(this.size());
 
-    slots.forEach((slot, i) => {
-      const insertIndex = Number.isFinite(index) ? index + i : Infinity;
-      this.insert(slot.wrapper, insertIndex);
-    });
+    super.insert(layoutNodes, Number.isFinite(index) ? index : Infinity);
     this.requestLayoutUpdate();
-
     const newSize = new Vector2(this.size());
-    const postState = captureFlexState(flexChildren);
+    const postState = captureFlexState([...flexChildren, ...layoutNodes]);
+    const slotState = this.emptySlotState(
+      layoutNodes,
+      postState,
+      preState,
+      oldSize,
+    );
 
-    // Pin each wrapper at its flex-resolved position before freeze. Once
-    // `layoutChildren` is off, the wrappers become layout roots and `position`
-    // would otherwise fall back to the raw signal default.
+    const slots = layoutNodes.map(userNode =>
+      this.wrapInSlot(userNode, animate ? 1 : 0),
+    );
     for (const slot of slots) {
-      slot.wrapper.position.abs(slot.wrapper.position.abs());
+      preState.set(slot.wrapper, getState(slotState, slot.userNode));
+      postState.set(slot.wrapper, getState(postState, slot.userNode));
     }
 
     const animationTasks = slots.map(slot =>
@@ -1767,7 +1752,7 @@ export class Layout extends Node {
 
     try {
       yield* this.runFreezeThawTween(
-        flexChildren,
+        [...flexChildren, ...slots.map(slot => slot.wrapper)],
         preState,
         postState,
         oldSize,
@@ -1779,9 +1764,10 @@ export class Layout extends Node {
       );
     } finally {
       for (const slot of slots) {
+        slot.unwrap();
         const wrapperIndex = this.children().indexOf(slot.wrapper);
         if (wrapperIndex >= 0) {
-          this.insert(slot.userNode, wrapperIndex);
+          super.insert(slot.userNode, wrapperIndex);
           slot.wrapper.remove();
         }
       }
@@ -1796,36 +1782,29 @@ export class Layout extends Node {
     animate?: LayoutAnimateCallback,
   ): ThreadGenerator {
     const oldSize = new Vector2(this.size());
-    const flexChildren = this.applyLayout().filter(c => c !== node);
-    const preState = captureFlexState(flexChildren);
+    const laidOut = this.applyLayout();
+    const preState = captureFlexState(laidOut);
+    const flexChildren = laidOut.filter(c => c !== node);
 
-    const natural = node.size();
     const removalIndex = this.children().indexOf(node);
-    const wrapper = new Layout({
-      layout: true,
-      width: natural.x,
-      height: natural.y,
-    });
     node.remove();
-    this.insert(wrapper, removalIndex);
-    wrapper.add(node);
-
-    // Pin at the flex-resolved position before pulling out of flex; otherwise
-    // `position` falls back to the raw signal default once `layoutSelf` is off.
-    wrapper.position.abs(wrapper.position.abs());
-    wrapper.layoutSelf(false);
     this.requestLayoutUpdate();
-
     const newSize = new Vector2(this.size());
     const postState = captureFlexState(flexChildren);
 
+    super.insert(node, removalIndex);
+    const slotState = this.emptySlotState([node], preState, postState, newSize);
+    const slot = this.wrapInSlot(node, 1);
+    preState.set(slot.wrapper, getState(preState, node));
+    postState.set(slot.wrapper, getState(slotState, node));
+
     const animationTask = animate
       ? animate(node, duration, timing)
-      : wrapper.scale(0, duration, timing);
+      : slot.wrapper.scale(0, duration, timing);
 
     try {
       yield* this.runFreezeThawTween(
-        flexChildren,
+        [...flexChildren, slot.wrapper],
         preState,
         postState,
         oldSize,
@@ -1836,9 +1815,96 @@ export class Layout extends Node {
         [animationTask],
       );
     } finally {
+      slot.unwrap();
       node.remove();
-      wrapper.remove();
+      slot.wrapper.remove();
     }
+  }
+
+  /**
+   * Find where the given children's slots sit when they are empty: each one
+   * is collapsed to zero along the main axis, keeps the cross size from
+   * `crossState`, and the other children are pinned to `pinned`.
+   */
+  private emptySlotState(
+    nodes: Layout[],
+    crossState: Map<Layout, FlexState>,
+    pinned: Map<Layout, FlexState>,
+    size: Vector2,
+  ): Map<Layout, FlexState> {
+    const row = isRowDirection(this.direction());
+    const sizes = new Map<Layout, Vector2>();
+    for (const [child, state] of pinned) {
+      if (child.parent() === this) sizes.set(child, state.size);
+    }
+    for (const node of nodes) {
+      const cross = getState(crossState, node).size;
+      sizes.set(node, row ? new Vector2(0, cross.y) : new Vector2(cross.x, 0));
+    }
+
+    const saved = [this, ...sizes.keys()].map(child => ({
+      child,
+      width: child.width.context.raw(),
+      height: child.height.context.raw(),
+    }));
+    const result = new Map<Layout, FlexState>();
+    try {
+      this.lockLayout();
+      this.size(size);
+      for (const [child, childSize] of sizes) {
+        child.lockLayout();
+        child.size(childSize);
+      }
+      this.requestLayoutUpdate();
+      for (const node of nodes) {
+        result.set(node, {
+          world: node.position.abs(),
+          size: getState(sizes, node),
+        });
+      }
+    } finally {
+      for (const {child, width, height} of saved) {
+        child.releaseLayout();
+        restoreRaw(child.width, width);
+        restoreRaw(child.height, height);
+      }
+      this.requestLayoutUpdate();
+    }
+    return result;
+  }
+
+  /**
+   * Put a child into a wrapper that stands in for its slot during an
+   * animated insert or removal. The child is sized to fill the wrapper,
+   * so tweening the wrapper's size and position moves both together.
+   */
+  private wrapInSlot(userNode: Layout, scale: number) {
+    const index = this.children().indexOf(userNode);
+    const wrapper = new Layout({
+      layout: true,
+      alignItems: 'center',
+      justifyContent: 'center',
+      scale,
+    });
+    const width = userNode.width.context.raw();
+    const height = userNode.height.context.raw();
+    userNode.remove();
+    super.insert(wrapper, index);
+    wrapper.add(userNode);
+    userNode.lockLayout();
+    // The wrapper's own size is computed from its content, so the node
+    // follows the size the wrapper is driven to instead.
+    userNode.width(() => pinnedLength(wrapper.desiredSize().x));
+    userNode.height(() => pinnedLength(wrapper.desiredSize().y));
+    return {
+      userNode,
+      wrapper,
+      unwrap() {
+        userNode.releaseLayout();
+        restoreRaw(userNode.width, width);
+        restoreRaw(userNode.height, height);
+      },
+    };
   }
 
   /**
@@ -2059,11 +2125,6 @@ export class Layout extends Node {
   }
 }
 
-function slotLength(value: DesiredLength, natural: number): Length | undefined {
-  if (value === null) return undefined;
-  return typeof value === 'string' ? natural : value;
-}
-
 interface FlexState {
   world: Vector2;
   size: Vector2;
@@ -2078,6 +2139,18 @@ function captureFlexState(children: Layout[]): Map<Layout, FlexState> {
     });
   }
   return state;
+}
+
+function pinnedLength(value: DesiredLength): number {
+  return typeof value === 'number' ? value : 0;
+}
+
+function getState<T>(state: Map<Layout, T>, node: Layout): T {
+  const value = state.get(node);
+  if (value === undefined) {
+    throw new Error('Missing layout state for a node.');
+  }
+  return value;
 }
 
 function restoreRaw<T>(
