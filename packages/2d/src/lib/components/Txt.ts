@@ -264,6 +264,19 @@ export type TextUnit = {
 export type TxtSplitGranularity = SegmentGranularity | 'line';
 
 /**
+ * Options for {@link Txt.split} and {@link Txt.splitPieces}.
+ */
+export type TxtSplitOptions = {
+  /**
+   * Bind each piece's typeface and paint (`fill`, `stroke`, `lineWidth`,
+   * `strokeFirst`, the font signals, `letterSpacing` and `opacity`) to the
+   * text its run came from, instead of copying their values once. Setting
+   * one of them on a piece replaces its binding.
+   */
+  followStyle?: boolean;
+};
+
+/**
  * A piece returned by {@link Txt.splitPieces}: the standalone node and the
  * unit of the source it reproduces.
  */
@@ -3316,9 +3329,13 @@ export class Txt extends Shape {
    * @param granularity - `'grapheme'` (default), `'word'`, `'sentence'`, or
    *                      `'line'`. A hyphen a line break inserts is a piece
    *                      of its own.
+   * @param options - Whether the pieces follow the style of the source.
    */
-  public split(granularity: TxtSplitGranularity = 'grapheme'): Txt[] {
-    return this.splitPieces(granularity).map(piece => piece.node);
+  public split(
+    granularity: TxtSplitGranularity = 'grapheme',
+    options: TxtSplitOptions = {},
+  ): Txt[] {
+    return this.splitPieces(granularity, options).map(piece => piece.node);
   }
 
   /**
@@ -3334,16 +3351,19 @@ export class Txt extends Shape {
    * ```
    *
    * @param granularity - How to cut the text, see {@link split}.
+   * @param options - Whether the pieces follow the style of the source, see
+   *                  {@link TxtSplitOptions}.
    */
   public splitPieces(
     granularity: TxtSplitGranularity = 'grapheme',
+    {followStyle = false}: TxtSplitOptions = {},
   ): TxtSplitPiece[] {
     const root = this.unitsRoot();
     if (root.pathProfile() || root.positionedLines().length === 0) {
       return [];
     }
     return this.walkUnits(granularity, true).map(entry => ({
-      node: this.createPiece(entry),
+      node: this.createPiece(entry, followStyle),
       unit: entry.unit,
     }));
   }
@@ -3371,7 +3391,26 @@ export class Txt extends Shape {
     };
   }
 
-  private createPiece(entry: PlacedUnit): Txt {
+  /** A piece's typeface and paint, read from its run's owner when drawn. */
+  private followedStyle(run: TxtRunStyle): TxtProps {
+    const {node} = run;
+    const size = node.fontSize();
+    const scale = size > 0 ? run.fontComponents.size / size : 1;
+    return {
+      fontFamily: () => node.fontFamily(),
+      fontSize: () => node.fontSize() * scale,
+      fontStyle: () => node.fontStyle(),
+      fontWeight: () => node.fontWeight(),
+      letterSpacing: () => node.letterSpacing() * scale,
+      fill: () => node.fill(),
+      stroke: () => node.stroke(),
+      lineWidth: () => node.lineWidth(),
+      strokeFirst: () => node.strokeFirst(),
+      opacity: () => this.relativeOpacity(node),
+    };
+  }
+
+  private createPiece(entry: PlacedUnit, followStyle: boolean): Txt {
     // Centering via the piece's own box keeps the center anchor (for
     // rotate/scale) while the pen pins the unit where the source drew it.
     const {unit, parts} = entry;
@@ -3385,7 +3424,11 @@ export class Txt extends Shape {
       textAlign: 'left',
       lineHeight: unit.height,
     };
-    const styles = parts.map(part => this.styleOf(part.run));
+    const styles = parts.map(part =>
+      followStyle
+        ? this.followedStyle(part.run)
+        : Txt.pieceStyle(this.styleOf(part.run)),
+    );
     // A slot the text flow gave an inline child sits between two parts as a
     // gap, and an empty box of that width holds it open.
     const gapBefore = (index: number) =>
@@ -3396,17 +3439,17 @@ export class Txt extends Shape {
     const piece =
       parts.length === 1
         ? new Txt({
-            ...Txt.pieceStyle(styles[0]),
+            ...styles[0],
             ...shared,
             text: parts[0].text,
           })
         : new Txt({
-            ...Txt.pieceStyle(styles[0]),
+            ...styles[0],
             ...shared,
             opacity: 1,
             children: parts.flatMap((part, index) => {
               const own = new Txt({
-                ...Txt.pieceStyle(styles[index]),
+                ...styles[index],
                 text: part.text,
               });
               const gap = gapBefore(index);

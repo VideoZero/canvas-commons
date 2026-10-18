@@ -1,4 +1,5 @@
 import {
+  Color,
   Direction,
   ThreadGenerator,
   all,
@@ -114,6 +115,23 @@ describe('text animations', () => {
         expect(piecesOf(view).map(piece => piece.opacity())).toEqual([1, 1, 0]);
       });
       expectKeptSplit(view, txt);
+    }),
+  );
+
+  it(
+    'lets the pieces follow the style of the source when asked',
+    generatorTest(function* (view) {
+      const txt = create(view, {opacity: 0});
+      yield* all(
+        textFadeIn(txt, {followStyle: true, duration: 0.2}),
+        txt.fill('#ff0000', 0.2),
+      );
+      const split = getTextSplit(txt);
+      expect(split?.followStyle).toBe(true);
+      split?.pieces.forEach(piece =>
+        expect(piece.fill()).toEqual(new Color('#ff0000')),
+      );
+      yield* textFadeOut(txt, {duration: 0.1});
     }),
   );
 
