@@ -231,6 +231,14 @@ importing a second copy.
     }}
   />
   ```
+- **Text on your own canvas.** Surface content waits for its web fonts like any
+  `Txt`, and `TextGeometry` takes a typeface you load yourself. Text that a
+  `create` callback draws to its own canvas (a `CanvasTexture` label) is not
+  seen by the font loader, so load the font before the node is created:
+  ```tsx
+  yield document.fonts.load('600 64px Inter');
+  stage().add(<Object3D create={three => makeLabel(three, 'Inter')} />);
+  ```
 - **Escape hatches need the runtime.** `stage.sceneObject()`,
   `stage.rootGroup()`, `mesh.object3D()`, `mesh.mesh()` and friends throw until
   Three.js has loaded, which happens when the first `<Three>` renders. Inside
