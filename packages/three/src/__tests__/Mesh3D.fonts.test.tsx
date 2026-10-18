@@ -31,7 +31,14 @@ function context(): CanvasRenderingContext2D {
 
 describe('Mesh3D surface fonts', () => {
   const loaded = new Set<string>();
+  const faces = ['Surface Face', 'Nested Face'].map(family => ({
+    family,
+    style: 'normal',
+    weight: '1 1000',
+  }));
   const fonts = {
+    size: faces.length,
+    [Symbol.iterator]: () => faces[Symbol.iterator](),
     check: vi.fn((font: string) => loaded.has(font)),
     load: vi.fn(async (font: string) => {
       loaded.add(font);
@@ -66,11 +73,11 @@ describe('Mesh3D surface fonts', () => {
     view().add(stage);
 
     stage.render(context());
-    expect(requested('Surface Face')).toHaveLength(1);
     expect(DependencyContext.hasPromises()).toBe(true);
     const version = surfaceTexture(mesh)?.version ?? 0;
 
     await DependencyContext.consumePromises();
+    expect(requested('Surface Face')).toHaveLength(1);
     stage.render(context());
 
     expect(surfaceTexture(mesh)?.version).toBeGreaterThan(version);
