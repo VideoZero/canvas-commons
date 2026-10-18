@@ -99,24 +99,30 @@ export default makeScene2D(function* (view) {
 `applyVideoZeroDefaults()` returns a function restoring the previous values
 (useful in tests). Importing the package never changes a default.
 
-| VideoZero default                                                     | Canvas Commons default               | Covered by                                                                                                                                                               |
-| --------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Txt.defaultTextCenter = 'cap'`                                       | `'line'`                             | `applyVideoZeroDefaults()`                                                                                                                                               |
-| Letter-spaced text centred on its ink (trailing spacing split evenly) | ink starts at the aligned edge (CSS) | `applyVideoZeroDefaults()` sets `Txt.defaultCenterLetterSpacing = true`                                                                                                  |
-| `strokeFirst` `true` on shapes (VideoZero's renderer)                 | `false`                              | `applyVideoZeroDefaults()` (sets the `strokeFirst` metadata default of `Shape`, so every shape, `Txt` included)                                                          |
-| `lineJoin: 'round'` on `Txt`                                          | `'miter'`                            | `applyVideoZeroDefaults()` for **`AnimTxt` only** (`AnimTxt.defaultLineJoin`). A plain `Txt` stays `'miter'`: use `AnimTxt` or pass `lineJoin="round"`                   |
-| Tight line height warning on (`Layout.warnTightLineHeight`)           | off (`Txt.warnTightLineHeight`)      | `applyVideoZeroDefaults()` sets `Txt.warnTightLineHeight = true`                                                                                                         |
-| Visible-before-entrance warning on (validation runs)                  | off                                  | `applyVideoZeroDefaults()` sets `Node.warnVisibleBeforeEntrance = true`                                                                                                  |
-| Attribution query parameter `vz_attribution`                          | `attribution`                        | `applyVideoZeroDefaults()` (`configureAttribution({queryParam: 'vz_attribution'})`)                                                                                      |
-| Attribution font: rounded stack (`ui-rounded, "SF Pro Rounded", …`)   | `sans-serif`                         | `applyVideoZeroDefaults()`                                                                                                                                               |
-| Default font `Inter, system-ui, sans-serif`                           | `Roboto`                             | `applyVideoZeroViewDefaults(view)` sets `fontFamily` on the view, which every node inherits. Nodes with `layout={false}` don't inherit: set it on them                   |
-| `Latex` fragment box padding `8` (`getFragmentBBox(id)` etc.)         | `0`                                  | **not covered** (a parameter default). Pass it: `latex.getFragmentBBox(id, 8)`, `getLocalFragmentBBox(id, 8)`, `getAbsoluteFragmentBBox(id, 8)`                          |
-| `Txt.defaultSmooth = true` (sub-pixel smoothing)                      | `Txt.defaultSmooth = false`          | `applyVideoZeroDefaults()` sets `Txt.defaultSmooth = true`, so every `Txt` (not only `AnimTxt`) paints with `smooth` on                                                  |
-| Numeric `lineHeight <= 4` is a multiplier (`1.2` → `120%`)            | numbers are pixels                   | **not covered**. Write `lineHeight="120%"` (or pixels). `Txt.warnTightLineHeight` reports the forgotten ones                                                             |
-| Literal `\n` (backslash, n) in text is a line break                   | drawn as `\n`                        | **not covered**. Use a real newline: `text={'a\nb'}` or a template literal                                                                                               |
-| `Txt.fonts` / `fontRegistry` alias map (`fontFamily="warmPlayful"`)   | gone                                 | **not covered**. Keep a map in your code and resolve it: `fontFamily={Fonts.warmPlayful}`. For loading undeclared web fonts use `setFontResolver(googleFontsResolver())` |
-| `textWrap` default `false`                                            | `true` (width-bounded text wraps)    | **not covered**. Pass `textWrap={false}` where text must not wrap                                                                                                        |
-| `roundPx` utility                                                     | gone                                 | `const roundPx = (n: number) => Math.round(n * 2) / 2;`                                                                                                                  |
+`AnimTxt` is a VideoZero class, so it brings the defaults that only concern it
+by itself, without any call: round `lineJoin`, the Inter font, literal `\n` line
+breaks, numeric line heights up to `4` as multipliers and the `AnimTxt.fonts`
+aliases. Each has a static switch on `AnimTxt` to turn it off. Plain `Txt` keeps
+the Canvas Commons behaviour for all of them.
+
+| VideoZero default                                                     | Canvas Commons default               | Covered by                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Txt.defaultTextCenter = 'cap'`                                       | `'line'`                             | `applyVideoZeroDefaults()`                                                                                                                                                                                                                                                                                                                                     |
+| Letter-spaced text centred on its ink (trailing spacing split evenly) | ink starts at the aligned edge (CSS) | `applyVideoZeroDefaults()` sets `Txt.defaultCenterLetterSpacing = true`                                                                                                                                                                                                                                                                                        |
+| `strokeFirst` `true` on shapes (VideoZero's renderer)                 | `false`                              | `applyVideoZeroDefaults()` (sets the `strokeFirst` metadata default of `Shape`, so every shape, `Txt` included)                                                                                                                                                                                                                                                |
+| `lineJoin: 'round'` on `Txt`                                          | `'miter'`                            | **`AnimTxt`** (and text nested in it) by default (`AnimTxt.defaultLineJoin`, `null` turns it off). A plain `Txt` stays `'miter'`: pass `lineJoin="round"`                                                                                                                                                                                                      |
+| Tight line height warning on (`Layout.warnTightLineHeight`)           | off (`Txt.warnTightLineHeight`)      | `applyVideoZeroDefaults()` sets `Txt.warnTightLineHeight = true`                                                                                                                                                                                                                                                                                               |
+| Visible-before-entrance warning on (validation runs)                  | off                                  | `applyVideoZeroDefaults()` sets `Node.warnVisibleBeforeEntrance = true`                                                                                                                                                                                                                                                                                        |
+| Attribution query parameter `vz_attribution`                          | `attribution`                        | `applyVideoZeroDefaults()` (`configureAttribution({queryParam: 'vz_attribution'})`)                                                                                                                                                                                                                                                                            |
+| Attribution font: rounded stack (`ui-rounded, "SF Pro Rounded", …`)   | `sans-serif`                         | `applyVideoZeroDefaults()`                                                                                                                                                                                                                                                                                                                                     |
+| Default font `Inter, system-ui, sans-serif`                           | `Roboto`                             | **`AnimTxt`** by default (`AnimTxt.defaultFontFamily`): an `AnimTxt` that neither sets a font nor gets one from an ancestor uses the Inter stack, also inside `layout={false}` containers. For other nodes `applyVideoZeroViewDefaults(view)` sets `fontFamily` on the view, which every node inherits except below a `layout={false}` container: set it there |
+| `Latex` fragment box padding `8` (`getFragmentBBox(id)` etc.)         | `0`                                  | **not covered** (a parameter default). Pass it: `latex.getFragmentBBox(id, 8)`, `getLocalFragmentBBox(id, 8)`, `getAbsoluteFragmentBBox(id, 8)`                                                                                                                                                                                                                |
+| `Txt.defaultSmooth = true` (sub-pixel smoothing)                      | `Txt.defaultSmooth = false`          | `applyVideoZeroDefaults()` sets `Txt.defaultSmooth = true`, so every `Txt` (not only `AnimTxt`) paints with `smooth` on                                                                                                                                                                                                                                        |
+| Numeric `lineHeight <= 4` is a multiplier (`1.2` → `120%`)            | numbers are pixels                   | **`AnimTxt`** by default (`AnimTxt.lineHeightMultiplierLimit`, `null` turns it off): props, later sets, tweens, values inherited from a parent and plain text nested in it. A plain `Txt` reads numbers as pixels: write `lineHeight="120%"`; `Txt.warnTightLineHeight` reports the forgotten ones                                                             |
+| Literal `\n` (backslash, n) in text is a line break                   | drawn as `\n`                        | **`AnimTxt`** by default (`AnimTxt.escapedNewlines`): `text`, string children, later sets, tweens and plain text nested in it. A plain `Txt` draws it: use a real newline                                                                                                                                                                                      |
+| `Txt.fonts` / `fontRegistry` alias map (`fontFamily="warmPlayful"`)   | gone                                 | **`AnimTxt.fonts`**, with VideoZero's resolution rules and warn-once (`resolveVideoZeroFontFamily`). Applies to the `fontFamily` of `AnimTxt` and of plain text nested in it; a plain `Txt` reads `fontFamily` literally. For loading undeclared web fonts use `setFontResolver(googleFontsResolver())`                                                        |
+| `textWrap` default `false`                                            | `true` (width-bounded text wraps)    | **not covered**. Pass `textWrap={false}` where text must not wrap                                                                                                                                                                                                                                                                                              |
+| `roundPx` utility                                                     | gone                                 | `const roundPx = (n: number) => Math.round(n * 2) / 2;`                                                                                                                                                                                                                                                                                                        |
 
 ## 3. Text animations: `AnimTxt`
 
@@ -209,6 +215,21 @@ copied to split pieces): read it with `txt.smooth()` and write
   `unsplit()` to draw the text itself again (at the opacity its pieces had), for
   example before applying `filters`, `shadow*` or `cache` to it, which don't
   reach the pieces. A new entrance replaces the split.
+- **Split pieces follow the text's style**, as VideoZero's `TxtChar`s did: every
+  helper and `splitChars()` split with `followStyle`, so changing or tweening
+  `fill`, `stroke`, `lineWidth`, `fontWeight`, `fontSize`, `fontFamily`,
+  `fontStyle` or `letterSpacing` of the text (or of nested text) during a helper
+  or while it stays split reaches the pieces. A value a helper or your code sets
+  on a piece wins over the binding (`outline()` binds the fill again when it
+  ends). The pieces keep the positions the split gave them, so a font change
+  doesn't move them apart (VideoZero re-laid them out).
+- **VideoZero defaults of `AnimTxt`** (section 2): `text()` returns the text
+  with literal `\n` already turned into line breaks, `lineHeight()` returns a
+  small number as a percentage (`1.5` → `'150%'`) and `fontFamily()` returns the
+  resolved stack. A plain `Txt` nested in an `AnimTxt` gets the same reading of
+  its text, `fontFamily` and `lineHeight` as they are when it is added; values
+  set on it later are read the Canvas Commons way, so nest an `AnimTxt` for text
+  you change afterwards.
 - **The split is drawn by sibling nodes.** While split, the source has `opacity`
   `0` and the pieces are standalone `Txt` nodes mounted right after the source
   (or after its outermost `Txt` ancestor), in a container that follows the
@@ -266,9 +287,10 @@ yield * textRevealIn(txt, {by: 'line', stagger: 0.15}); // ≈ lineByLine()
 yield * textFadeOut(txt, {direction: Direction.Top}); // ≈ fadeOutUp() (0.3 h instead of 0.15 h)
 ```
 
-These entrances also leave `txt` split; `getTextSplit(txt)` returns the split
-(`pieces`, `homes`, `lines`, …) and `getTextSplit(txt)?.restore()` draws the
-text itself again.
+Pass `followStyle: true` to keep the pieces bound to the text's style, as
+`AnimTxt` does: `textFadeIn(txt, {followStyle: true})`. These entrances also
+leave `txt` split; `getTextSplit(txt)` returns the split (`pieces`, `homes`,
+`lines`, …) and `getTextSplit(txt)?.restore()` draws the text itself again.
 
 ## 4. Layout animations: `AnimLayout`
 
@@ -350,7 +372,9 @@ where the port differs from the fork.
 - `Layout.warnTightLineHeight` is `Txt.warnTightLineHeight`.
 - `Txt.textCenter` exists with the same modes; its default comes from
   `Txt.defaultTextCenter` (`'line'`; VideoZero `'cap'`, see section 2).
-- `Txt.fonts`, `fontRegistry`, `resolveFontFamily` are gone (section 2).
+- `Txt.fonts`, `fontRegistry`, `resolveFontFamily` are gone from `Txt`:
+  `AnimTxt.fonts` and `resolveVideoZeroFontFamily` replace them for `AnimTxt`
+  (section 2).
 - `textWrap: 'balance'` is available as in VideoZero.
 - `Code` waits for its web font before drawing.
 - `alignItems="baseline"` does **not** align text baselines: Yoga has no
@@ -464,11 +488,11 @@ Apply in order; each step is mechanical.
     `lockSize` or `releaseSize`: `<Layout` → `<AnimLayout`, `createRef<Layout>`
     → `createRef<AnimLayout>` (or switch to the Canvas Commons methods of
     section 4).
-13. Numeric `lineHeight` values `<= 4` → percentages (`lineHeight={1.2}` →
-    `lineHeight="120%"`).
-14. Literal `\\n` in text strings → real newlines.
-15. `Txt.fonts = {...}` / semantic `fontFamily` names → a constant map in your
-    code.
+13. On plain `Txt` (not `AnimTxt`): numeric `lineHeight` values `<= 4` →
+    percentages (`lineHeight={1.2}` → `lineHeight="120%"`).
+14. On plain `Txt`: literal `\\n` in text strings → real newlines.
+15. `Txt.fonts.x = …` / `Object.assign(Txt.fonts, …)` → `AnimTxt.fonts`; on
+    plain `Txt`, semantic `fontFamily` names → a constant map in your code.
 16. Width-bounded `Txt` that must stay on one line → `textWrap={false}`.
 17. `CodeBlock` → `Code`.
 18. `getFragmentBBox(id)` and friends on `Latex` → `getFragmentBBox(id, 8)`;

@@ -40,7 +40,7 @@ Submit the base first; the stacked branch's PR then only shows its own commits.
 | `cc/svg-rendering`            | fix+    | Unmeasurable SVGs (Safari), stylesheet paint, `<use>` styles, dash parsing, `SVG.defaultMorpher`                                                  |
 | `cc/css-gradient`             | feature | CSS gradient strings for fill/stroke; SVG gradients                                                                                               |
 | `cc/build-animation`          | feature | `build()`/`unbuild()` on curves, SVG and Latex; rough shapes clip to start/end                                                                    |
-| `cc/text-animations`          | feature | `Txt.split('line')`, `splitPieces()`, `splitText()` and text entrance/exit helpers                                                                |
+| `cc/text-animations`          | feature | `Txt.split('line')`, `splitPieces()`, `splitText()` (`followStyle`) and text entrance/exit helpers                                                |
 | `cc/text-center`              | feature | `Txt.textCenter` (`line`/`cap`/`ink`)                                                                                                             |
 | `cc/text-wrap-balance`        | feature | `textWrap="balance"`                                                                                                                              |
 | `cc/text-smoothing`           | feature | `Txt.smooth`/`Txt.defaultSmooth`: sub-pixel smooth text (Chromium snaps glyphs vertically to whole pixels)                                        |

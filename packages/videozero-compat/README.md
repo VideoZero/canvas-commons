@@ -12,11 +12,18 @@ Nothing is patched: importing the package changes no behaviour.
   VideoZero names, positional parameters and defaults, and `splitChars()` /
   `unsplit()` / `chars` / `words` / `lineChars()` for manual per-character
   animation. `enableSmooth()` / `disableSmooth()` and `AnimTxt.defaultSmooth`
-  drive the `smooth` setting of `Txt` (sub-pixel smooth text).
+  drive the `smooth` setting of `Txt` (sub-pixel smooth text). Split pieces
+  follow the text's style, as VideoZero's `TxtChar`s did. `AnimTxt` also keeps
+  the defensive VideoZero defaults for generated scenes, each with a static
+  switch: literal `\n` is a line break, a numeric `lineHeight` up to `4` is a
+  multiplier, `lineJoin` is round, the font is the Inter stack (also inside
+  `layout={false}` containers), and `fontFamily` resolves semantic names through
+  `AnimTxt.fonts`. Plain `Txt` keeps the Canvas Commons behaviour.
 - `AnimLayout extends Layout`: `addAnimated`, `insertAnimated`,
   `removeAnimated`, `reorderAnimated`, `recordFlipState`, `tweenFlip`,
   `lockSize` and `releaseSize`.
-- `applyVideoZeroDefaults()` and `applyVideoZeroViewDefaults(view)`.
+- `applyVideoZeroDefaults()` and `applyVideoZeroViewDefaults(view)` for the
+  defaults of plain Canvas Commons nodes.
 
 ```tsx
 import {makeScene2D} from '@canvas-commons/2d';
