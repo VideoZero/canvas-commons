@@ -26,6 +26,7 @@ import svgRenderingScene from '../scenes/svg-rendering?scene';
 import textAnimationsScene from '../scenes/text-animations?scene';
 import textCenterScene from '../scenes/text-center?scene';
 import textFixRegressionsScene from '../scenes/text-fix-regressions?scene';
+import textSmoothingScene from '../scenes/text-smoothing?scene';
 import textWrapBalanceScene from '../scenes/text-wrap-balance?scene';
 import threeScene from '../scenes/three?scene';
 import transform3dScene from '../scenes/transform3d?scene';
@@ -63,6 +64,7 @@ export default makeProject({
     textAnimationsScene,
     textCenterScene,
     textFixRegressionsScene,
+    textSmoothingScene,
     textWrapBalanceScene,
     threeScene,
     transform3dScene,
