@@ -390,8 +390,15 @@ type LineBreakOffset = {
 
 const LAYOUT_CACHE_SIZE = 6;
 
-/** How close, in pixels, a balanced break comes to its narrowest width. */
-const BALANCE_TOLERANCE = 0.5;
+/**
+ * How close, in pixels, a balanced break comes to its narrowest width; well
+ * below the line fit epsilon, so the search lands on the narrowest breaks.
+ */
+const BALANCE_PRECISION = 1 / 4096;
+/** Doublings of the max-content width a balanced search may try. */
+const BALANCE_GROW_STEPS = 8;
+/** Marks the break cache entry of a balanced line count. */
+const BALANCED = Symbol('balanced');
 
 /**
  * Breaks an exclusion layout may take to agree with the box height it was
@@ -2045,24 +2052,78 @@ export class Txt extends Shape {
     });
   }
 
-  /** Break at the narrowest width that takes no more lines than `maxWidth`. */
+  /**
+   * Break at the narrowest width that takes no more lines than `maxWidth`.
+   * The breaks depend on the line count alone, so they hold while the box
+   * width changes, and the lines keep the box width to align in.
+   */
   private breakBalanced(
     paragraph: OwnedParagraph,
     maxWidth: number,
   ): BrokenParagraph {
-    let best = this.breakAround(paragraph, maxWidth, [], true);
-    const count = best.lines.length;
-    if (count < 2) return best;
+    const greedy = this.breakAround(paragraph, maxWidth, [], true);
+    const count = greedy.lines.length;
+    if (count < 2) return greedy;
+
+    const key: unknown[] = [
+      BALANCED,
+      count,
+      this.wrapMode(),
+      this.overflowWrap(),
+      this.textAlign() === 'justify',
+    ];
+    let balanced = paragraph.broken.find(found =>
+      sameKey(found.key, key),
+    )?.broken;
+    if (!balanced) {
+      balanced = this.breakNarrowest(paragraph, count) ?? greedy;
+      paragraph.broken.unshift({key, broken: balanced});
+    }
+    return {
+      ...balanced,
+      lines: balanced.lines.map(line => ({
+        ...line,
+        segment: {left: line.segment.left, right: maxWidth},
+      })),
+    };
+  }
+
+  /** The breaks at the narrowest width that takes at most `count` lines. */
+  private breakNarrowest(
+    paragraph: OwnedParagraph,
+    count: number,
+  ): BrokenParagraph | null {
+    const fits = (width: number) => {
+      const broken = this.breakAround(paragraph, width, [], true);
+      return broken.lines.length <= count ? broken : null;
+    };
+    // Both bounds come from the text alone, so the search is the same for
+    // every box width that takes this many lines.
     let low = measureMinContentWidth(paragraph.items, {
       textWrap: true,
       overflowWrap: this.overflowWrap(),
       inkFit: true,
     });
-    let high = maxWidth;
-    while (high - low > BALANCE_TOLERANCE) {
+    let high = Math.max(
+      low,
+      ...this.breakAround(
+        paragraph,
+        Number.POSITIVE_INFINITY,
+        [],
+        true,
+      ).lines.map(line => line.width),
+    );
+    let best = fits(high);
+    for (let grow = 0; !best && grow < BALANCE_GROW_STEPS; grow++) {
+      low = high;
+      high = high * 2 + 1;
+      best = fits(high);
+    }
+    if (!best) return null;
+    while (high - low > BALANCE_PRECISION) {
       const width = (low + high) / 2;
-      const broken = this.breakAround(paragraph, width, [], true);
-      if (broken.lines.length <= count) {
+      const broken = fits(width);
+      if (broken) {
         high = width;
         best = broken;
       } else {
