@@ -152,7 +152,7 @@ if [ "$COMPARE" -eq 1 ]; then
   IMPROVEMENTS=(css-gradient build-animation text-animations text-center
     text-wrap-balance txt-line-overlap-warning font-resolver layout-reorder
     line-align-children view-chain transform3d attribution scene-playback
-    scenes-recalculated entrance-warning audio easings)
+    scenes-recalculated entrance-warning audio easings text-smoothing)
   PACKAGES=(three d3-geo echarts shiki rig)
   mkdir -p "$OUT/vzcc" "$OUT/compare"
   mapfile -t pending < <(todo vzcc "${FIXES[@]}" "${IMPROVEMENTS[@]}" "${PACKAGES[@]}")
