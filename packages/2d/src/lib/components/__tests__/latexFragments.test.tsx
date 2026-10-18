@@ -6,12 +6,38 @@ import {
   waitFor,
 } from '@canvas-commons/core';
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {Latex, Node, Rect, SVGDocument, SVGShapeData} from '..';
+import {
+  Latex,
+  Node,
+  Rect,
+  SVG,
+  SVGDocument,
+  SVGDocumentData,
+  SVGShapeData,
+} from '..';
 import {generatorTest} from './generatorTest';
 import {mockScene2D} from './mockScene2D';
 
 const GLYPH = new Vector2(10, 20);
 const SEPARATOR = '\u0000';
+
+// Reads the glyphs MathJax emits in order, standing in for the SVG parser that
+// jsdom cannot run, and records every SVG it is asked to parse.
+function parseMathJaxGlyphs(parsed: string[]) {
+  return (svg: string): SVGDocumentData => {
+    parsed.push(svg);
+    const root = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    const glyphs = [...root.querySelectorAll('use[data-c]')];
+    return {
+      size: new Vector2(glyphs.length * GLYPH.x, GLYPH.y),
+      nodes: glyphs.map((glyph, index) => ({
+        id: `glyph-${index}-${glyph.getAttribute('data-c')}`,
+        type: Rect,
+        props: {position: [index * GLYPH.x, 0], size: GLYPH},
+      })),
+    };
+  };
+}
 
 // jsdom cannot parse the SVG that MathJax emits, so each character of a part
 // becomes a glyph of a fixed size, grouped the way Latex groups fragments.
@@ -94,6 +120,35 @@ describe('Latex', () => {
         expect(tex.renderFragment(fragment)).not.toContain('data-mjx-error');
       },
     );
+
+    it('renders a formula whose fragments cannot render on their own', () => {
+      const parsed: string[] = [];
+      vi.spyOn(
+        SVG as unknown as {parseSVGData(svg: string): SVGDocumentData},
+        'parseSVGData',
+      ).mockImplementation(parseMathJaxGlyphs(parsed));
+      const error = vi.spyOn(useLogger(), 'error');
+      const warn = vi.spyOn(useLogger(), 'warn');
+      const tex = new Latex({
+        tex: [
+          '{{\\begin{cases}}}{{x}} & {{1}} \\\\',
+          '{{y}}{{&}}{{2}}{{\\\\}}{{\\end{cases}}}',
+        ].join(''),
+      });
+
+      expect(tex.getShapesById('\\begin{cases}')).toHaveLength(1);
+      expect(tex.getShapesById('x')).toHaveLength(1);
+      expect(tex.getShapesById('1')).toHaveLength(1);
+      expect(tex.getShapesById('y')).toHaveLength(1);
+      expect(tex.getShapesById('2')).toHaveLength(1);
+      expect(tex.getShapesById('&')).toHaveLength(0);
+      expect(tex.getShapesById('\\\\')).toHaveLength(0);
+      expect(tex.getShapesById('\\end{cases}')).toHaveLength(0);
+      expect(parsed.length).toBeGreaterThan(1);
+      expect(parsed.filter(svg => svg.includes('data-mjx-error'))).toEqual([]);
+      expect(error).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 
   describe('eagerValidation', () => {
