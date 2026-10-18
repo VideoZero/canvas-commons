@@ -162,7 +162,8 @@ export interface SlowMoOptions {
   /**
    * When true the output ramps 0 → 1 on the way in, holds 1 through the
    * middle, and returns to 0 on the way out. Useful for opacity flashes
-   * that accompany a slow-motion drive-by.
+   * that accompany a slow-motion drive-by. Like a wiggle, it ends where it
+   * started, so drive it through `tween()` rather than a signal tween.
    *
    * @defaultValue false
    */
@@ -284,11 +285,13 @@ function createRandom(seed: number): () => number {
  * the wiggle's peak amplitude, not a destination. For example
  * `rotation = map(0, 15, wiggle(t))` shakes the rotation between roughly
  * ±15° and comes back to rest at 0. Peaks are normalized so the strongest
- * swing reaches ±1.
+ * swing reaches ±1. Drive it through `tween()`: a signal tween always ends
+ * on its target value, so it would not come back to rest.
  *
  * @example
  * ```ts
- * yield* bell().rotation(15, 1, createWiggle({wiggles: 6}));
+ * const wiggle = createWiggle({wiggles: 6});
+ * yield* tween(1, t => bell().rotation(map(0, 15, wiggle(t))));
  * ```
  *
  * @param options - The number of swings and their envelope.
