@@ -1,7 +1,19 @@
 import type {RectProps} from '@canvas-commons/2d';
-import {Rect, drawImage, initial, nodeName, signal} from '@canvas-commons/2d';
+import {
+  Rect,
+  drawImage,
+  initial,
+  nodeName,
+  requestFontLoad,
+  signal,
+} from '@canvas-commons/2d';
 import type {SignalValue, SimpleSignal, Thread} from '@canvas-commons/core';
-import {BBox, Vector2, useThread} from '@canvas-commons/core';
+import {
+  BBox,
+  DependencyContext,
+  Vector2,
+  useThread,
+} from '@canvas-commons/core';
 import * as echarts from 'echarts';
 
 type EChartsOption = echarts.EChartsCoreOption;
@@ -51,6 +63,80 @@ function resolveTheme(theme: EChartTheme): string | object {
     : theme;
 }
 
+const DefaultFontFamily = 'sans-serif';
+const DefaultFontSize = 12;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function fontFamilyOf(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  return typeof value.fontFamily === 'string' ? value.fontFamily : null;
+}
+
+/**
+ * Collect the canvas fonts that the text styles in an ECharts option or theme
+ * name, such as `textStyle`, `axisLabel` or `rich` entries. A style without a
+ * family inherits the closest one above it.
+ */
+function collectFonts(
+  value: unknown,
+  family: string,
+  fonts: Set<string>,
+  seen: WeakSet<object>,
+) {
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return;
+    seen.add(value);
+    for (const item of value) collectFonts(item, family, fonts, seen);
+    return;
+  }
+  if (!isRecord(value) || seen.has(value)) return;
+  seen.add(value);
+
+  const declared = fontFamilyOf(value);
+  const own = declared ?? family;
+  const {fontStyle, fontWeight, fontSize} = value;
+  const weight =
+    typeof fontWeight === 'string' || typeof fontWeight === 'number'
+      ? fontWeight
+      : null;
+  if (declared !== null || typeof fontStyle === 'string' || weight !== null) {
+    fonts.add(
+      [
+        typeof fontStyle === 'string' ? fontStyle : 'normal',
+        weight ?? 'normal',
+        `${typeof fontSize === 'number' ? fontSize : DefaultFontSize}px`,
+        own,
+      ].join(' '),
+    );
+  }
+
+  const inherited = fontFamilyOf(value.textStyle) ?? own;
+  for (const child of Object.values(value)) {
+    collectFonts(child, inherited, fonts, seen);
+  }
+}
+
+function fontsOf(source: unknown, family = DefaultFontFamily): Set<string> {
+  const fonts = new Set<string>();
+  const root = isRecord(source) ? fontFamilyOf(source.textStyle) : null;
+  collectFonts(source, root ?? family, fonts, new WeakSet());
+  return fonts;
+}
+
+function isFontLoaded(font: string): boolean {
+  if (typeof document === 'undefined' || !('fonts' in document)) return true;
+  try {
+    return document.fonts.check(font);
+  } catch {
+    return true;
+  }
+}
+
 export interface EChartProps extends RectProps {
   /**
    * The ECharts option applied when the chart is created.
@@ -94,6 +180,11 @@ export interface EChartProps extends RectProps {
  * scene's clock, so they are deterministic and render frame by frame. Update
  * the chart imperatively with {@link EChart.setOption} and wait for the
  * resulting transition with {@link EChart.waitForAnimation}.
+ *
+ * The fonts named by the text styles of the option and of a theme object are
+ * loaded like those of other text nodes, and the scene waits for them before
+ * drawing the chart. Fonts that only a registered theme names are not known to
+ * the node.
  *
  * @example
  * ```tsx
@@ -184,11 +275,17 @@ export class EChart extends Rect {
   private lastHeight = 0;
   private lastDpr = 0;
   private lastTheme: EChartTheme | null = null;
+  private readonly options: EChartsOption[] = [];
+  private optionFonts = new Set<string>();
+  private fontTheme: EChartTheme | null = null;
+  private themeFonts = new Set<string>();
+  private themeFontFamily = DefaultFontFamily;
 
   public constructor(props: EChartProps) {
     super(props);
     this.thread = useThread();
     this.initialOption = props.initialOption;
+    this.addOptionFonts(props.initialOption);
   }
 
   /**
@@ -274,6 +371,7 @@ export class EChart extends Rect {
    * ```
    */
   public setOption(option: EChartsOption, opts?: SetOptionOpts): void {
+    this.addOptionFonts(option);
     this.getChartInstance().setOption(option, opts ?? {lazyUpdate: false});
   }
 
@@ -370,10 +468,21 @@ export class EChart extends Rect {
     super.dispose();
   }
 
+  protected override collectAsyncResources() {
+    super.collectAsyncResources();
+    this.requestFonts();
+  }
+
   protected override draw(context: CanvasRenderingContext2D) {
     this.drawShape(context);
     const alpha = this.alpha();
-    if (alpha > 0) {
+    // ECharts caches text measurements per font, so a chart laid out before
+    // its fonts load would keep the fallback metrics.
+    const waitForFonts =
+      this.requestFonts() &&
+      this.chart === null &&
+      DependencyContext.hasPromises();
+    if (alpha > 0 && !waitForFonts) {
       const chart = this.getChartInstance();
       this.flushUpdate(chart);
       chart.getZr().refreshImmediately();
@@ -396,6 +505,43 @@ export class EChart extends Rect {
     }
 
     this.drawChildren(context);
+  }
+
+  private addOptionFonts(option: EChartsOption | undefined) {
+    if (!option) return;
+    this.options.push(option);
+    for (const font of fontsOf(option, this.themeFontFamily)) {
+      this.optionFonts.add(font);
+    }
+  }
+
+  /**
+   * Request the fonts of the option and theme.
+   *
+   * @returns Whether any of them was still loading.
+   */
+  private requestFonts(): boolean {
+    const theme = this.theme();
+    if (theme !== this.fontTheme) {
+      this.fontTheme = theme;
+      this.themeFonts = fontsOf(theme);
+      const family =
+        (isRecord(theme) ? fontFamilyOf(theme.textStyle) : null) ??
+        DefaultFontFamily;
+      if (family !== this.themeFontFamily) {
+        this.themeFontFamily = family;
+        this.optionFonts = new Set(
+          this.options.flatMap(option => [...fontsOf(option, family)]),
+        );
+      }
+    }
+
+    let loading = false;
+    for (const font of [...this.themeFonts, ...this.optionFonts]) {
+      if (!isFontLoaded(font)) loading = true;
+      requestFontLoad(font);
+    }
+    return loading;
   }
 
   private applyTheme(chart: EChartsInstance) {

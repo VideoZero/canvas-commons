@@ -36,6 +36,12 @@ bumping the `echarts`/`zrender` major version.
 pixel ratio at init, so the instance is disposed and the current option is
 re-applied without animation.
 
+**Fonts come from the option and theme objects.** `EChart` walks every option it
+is given and the theme object for `fontFamily`/`fontWeight`/`fontStyle` and
+requests those fonts through 2d's `requestFontLoad`. The first draw skips the
+chart while they load, because zrender caches text widths per font string. Fonts
+that only a registered theme name declares are not seen.
+
 **Source checkouts need `useDefineForClassFields: false`.** The echarts and
 zrender sources declare fields that their prototypes define. `vite.ts` compiles
 them with oxc's `setPublicClassFields` and
