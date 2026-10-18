@@ -32,7 +32,8 @@ export const VideoZeroAttributionParam = 'vz_attribution';
  * - `Txt.defaultTextCenter` to `'cap'`,
  * - `Txt.defaultCenterLetterSpacing` to `true`,
  * - `Txt.defaultSmooth` to `true` (sub-pixel smooth text, as in VideoZero),
- * - `Txt.warnTightLineHeight` and `Node.warnVisibleBeforeEntrance` to `true`,
+ * - `Txt.warnTightLineHeight`, `Node.warnVisibleBeforeEntrance` and
+ *   `Layout.warnIgnoredPosition` to `true`,
  * - the default `strokeFirst` of every shape to `true`,
  * - the attribution query parameter to `vz_attribution` and its font to
  *   VideoZero's rounded font stack.
@@ -42,9 +43,10 @@ export const VideoZeroAttributionParam = 'vz_attribution';
  * heights, `AnimTxt.fonts`) by itself.
  *
  * Call it once, before the scenes create their nodes, for example at the top
- * of `project.ts`. The default font of other nodes and the `Latex` fragment
- * box padding can't be changed this way; see
- * {@link applyVideoZeroViewDefaults} and the migration guide.
+ * of `project.ts`. The default font of other
+ * nodes can't be changed this way; see
+ * {@link applyVideoZeroViewDefaults}. For the `Latex` fragment box padding use
+ * {@link AnimLatex}.
  *
  * @example
  * ```ts
@@ -65,6 +67,7 @@ export function applyVideoZeroDefaults(): () => void {
     smooth: Txt.defaultSmooth,
     tightLineHeight: Txt.warnTightLineHeight,
     visibleBeforeEntrance: Node.warnVisibleBeforeEntrance,
+    ignoredPosition: Layout.warnIgnoredPosition,
     strokeFirst: strokeFirst?.default,
     queryParam: attributionConfig.queryParam,
     attributionFont: attributionConfig.render.fontFamily,
@@ -75,6 +78,7 @@ export function applyVideoZeroDefaults(): () => void {
   Txt.defaultSmooth = true;
   Txt.warnTightLineHeight = true;
   Node.warnVisibleBeforeEntrance = true;
+  Layout.warnIgnoredPosition = true;
   if (strokeFirst) strokeFirst.default = true;
   configureAttribution({
     queryParam: VideoZeroAttributionParam,
@@ -87,6 +91,7 @@ export function applyVideoZeroDefaults(): () => void {
     Txt.defaultSmooth = previous.smooth;
     Txt.warnTightLineHeight = previous.tightLineHeight;
     Node.warnVisibleBeforeEntrance = previous.visibleBeforeEntrance;
+    Layout.warnIgnoredPosition = previous.ignoredPosition;
     if (strokeFirst) strokeFirst.default = previous.strokeFirst;
     configureAttribution({
       queryParam: previous.queryParam,

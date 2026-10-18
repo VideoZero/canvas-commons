@@ -4,7 +4,9 @@ slug: /layouts
 ---
 
 import Fiddle from '@site/src/components/Fiddle';
+import layoutAnimationsSource from '!!raw-loader!@canvas-commons/examples/src/scenes/layout-animations';
 import layoutGroupSource from '!!raw-loader!@canvas-commons/examples/src/scenes/layout-group';
+import layoutReorderSource from '!!raw-loader!@canvas-commons/examples/src/scenes/layout-reorder';
 import layoutSource from '!!raw-loader!@canvas-commons/examples/src/scenes/layout';
 import ApiSnippet from '@site/src/components/Api/ApiSnippet';
 import Tabs from '@theme/Tabs';
@@ -308,5 +310,152 @@ const layout = new Layout({
 <Fiddle mode="preview" ratio={'2.2'} width={'1920'}>
   {layoutGroupSource}
 </Fiddle>
+
+## Animated layouts
+
+Changing the children of a layout makes its siblings jump to their new slots.
+The methods below take an optional `duration` instead: the layout then reflows
+smoothly and the call returns a generator to `yield*`. Without a duration they
+behave like their [`Node`](/api/2d/components/Node) counterparts.
+
+<Fiddle mode="preview" ratio={'1'} width={'1920'}>
+  {layoutAnimationsSource}
+</Fiddle>
+
+### Adding and removing children
+
+[`add`](/api/2d/components/Layout#add) and
+[`insert`](/api/2d/components/Layout#insert) scale the new child into its slot
+while its siblings make room. [`remove`](/api/2d/components/Layout#remove),
+called on the child, scales it out while its siblings close the gap:
+
+```tsx editor
+import {Layout, Rect, makeScene2D} from '@canvas-commons/2d';
+import {createRef, easeOutCubic} from '@canvas-commons/core';
+
+export default makeScene2D(function* (view) {
+  const row = createRef<Layout>();
+  const card = createRef<Rect>();
+  view.add(
+    <Layout ref={row} layout direction="row" gap={20}>
+      <Rect size={100} radius={12} fill={'#ff6470'} />
+      <Rect size={100} radius={12} fill={'#ffc66d'} />
+    </Layout>,
+  );
+
+  // Append at the end.
+  yield* row().add(<Rect size={100} radius={12} fill={'#99c47a'} />, 0.6);
+  // Insert at index 1.
+  yield* row().insert(
+    <Rect ref={card} size={100} radius={12} fill={'#68abdf'} />,
+    1,
+    0.6,
+  );
+  // Remove it again.
+  yield* card().remove(0.6);
+
+  // Replace the default scale animation with a fade.
+  yield* row().add(
+    <Rect size={100} radius={12} fill={'#b58fc2'} />,
+    0.6,
+    easeOutCubic,
+    (node, duration, timing) => node.opacity(0).opacity(1, duration, timing),
+  );
+});
+```
+
+All three accept a timing function after the duration. The last argument
+replaces the default scale animation: it receives the child, the duration and
+the timing function, and returns the animation to play.
+
+### Reordering children
+
+[`reorder`](/api/2d/components/Layout#reorder) takes every current child in its
+new order and slides each one from its old slot to the new one:
+
+<Fiddle ratio={'3'} width={'1920'}>
+  {layoutReorderSource}
+</Fiddle>
+
+### Changing layout properties
+
+[`editLayout`](/api/2d/components/Layout#editLayout) animates a batch of layout
+property changes, such as `direction`, `wrap`, `gap` or `alignItems`. The
+callback receives the layout to change, and the children glide from their old
+positions to the new ones:
+
+```tsx editor
+import {Layout, Rect, makeScene2D} from '@canvas-commons/2d';
+import {createRef} from '@canvas-commons/core';
+
+export default makeScene2D(function* (view) {
+  const list = createRef<Layout>();
+  view.add(
+    <Layout ref={list} layout direction="row" gap={20} alignItems="start">
+      <Rect size={100} radius={12} fill={'#ff6470'} />
+      <Rect size={140} radius={12} fill={'#ffc66d'} />
+      <Rect size={80} radius={12} fill={'#99c47a'} />
+    </Layout>,
+  );
+
+  yield* list().editLayout(0.6, layout => {
+    layout.direction('column');
+    layout.alignItems('end');
+  });
+  yield* list().editLayout(0.6, layout => {
+    layout.direction('row');
+    layout.alignItems('center');
+  });
+});
+```
+
+### Moving children between layouts
+
+[`transitionTo`](/api/2d/components/Layout#transitionTo) moves a node into
+another parent. The node travels to its new slot while the old slot closes and
+the new one opens. Pass an index before the duration to choose the slot,
+otherwise the node goes last.
+
+### Taking children out of the layout
+
+[`freezeLayout`](/api/2d/components/Layout#freezeLayout) pins each child at its
+current position and stops the layout from placing them, so you can animate them
+freely. [`thawLayout`](/api/2d/components/Layout#thawLayout) hands them back,
+gliding each one to the slot the layout gives it:
+
+```tsx editor
+import {Layout, Rect, makeScene2D} from '@canvas-commons/2d';
+import {all, createRef} from '@canvas-commons/core';
+
+export default makeScene2D(function* (view) {
+  const top = createRef<Layout>();
+  const bottom = createRef<Layout>();
+  const item = createRef<Rect>();
+  view.add(
+    <Layout layout direction="column" gap={60} alignItems="center">
+      <Layout ref={top} layout gap={20} height={100}>
+        <Rect ref={item} size={100} radius={12} fill={'#ff6470'} />
+        <Rect size={100} radius={12} fill={'#ffc66d'} />
+      </Layout>
+      <Layout ref={bottom} layout gap={20} height={100}>
+        <Rect size={100} radius={12} fill={'#99c47a'} />
+        <Rect size={100} radius={12} fill={'#68abdf'} />
+      </Layout>
+    </Layout>,
+  );
+
+  // Move the red square to the start of the bottom row.
+  yield* item().transitionTo(bottom(), 0, 0.6);
+
+  // Scatter the bottom row, then let the layout gather it again.
+  bottom().freezeLayout();
+  yield* all(
+    ...bottom()
+      .children()
+      .map((child, i) => child.position.y((i - 1) * 80, 0.6)),
+  );
+  yield* bottom().thawLayout(0.6);
+});
+```
 
 [flexbox]: https://css-tricks.com/snippets/css/a-guide-to-flexbox/
