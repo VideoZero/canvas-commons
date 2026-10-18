@@ -31,6 +31,7 @@ module.exports = {
         'rig',
         'three',
         'videozero',
+        'vz-showcase',
         'vite-plugin',
         'webcodecs',
       ],

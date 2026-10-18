@@ -153,6 +153,7 @@ Available scopes are:
 - `rig`
 - `three`
 - `videozero`
+- `vz-showcase`
 - `vite-plugin`
 
 Commit subjects should be in the imperative mood, and should be no more than 50
